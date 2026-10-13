@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.41.5](https://github.com/longsizhuo/openInvest/compare/v0.41.4...v0.41.5) (2026-10-13)
+
+
+### Bug Fixes
+
+* **deps:** upper-bound the backend dependencies ([#384](https://github.com/longsizhuo/openInvest/issues/384)) ([004f9b3](https://github.com/longsizhuo/openInvest/commit/004f9b37a21a6b56d78ab81349c21a9dace27eae))
+
 ## [0.41.4](https://github.com/longsizhuo/openInvest/compare/v0.41.3...v0.41.4) (2026-10-13)
 
 
