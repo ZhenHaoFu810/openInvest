@@ -125,3 +125,21 @@ def test_fetch_all_returns_when_a_source_hangs(monkeypatch):
         assert len(out) == 2, "已经到手的源结果应照常返回"
     finally:
         release.set()
+
+
+def test_yfinance_news_uses_search_and_keeps_only_related():
+    from openinvest.services.news_sources.yfinance_news import fetch_yfinance_news
+
+    def _n(title, related):
+        return {"title": title, "link": f"https://y.example/{title}", "publisher": "P",
+                "providerPublishTime": 1760000000, "relatedTickers": related}
+
+    search = MagicMock()
+    search.return_value.news = [_n("hit", ["SKP.V", "gc=f"]), _n("noise", ["LVS"]), _n("bare", [])]
+    with patch("yfinance.Search", search):
+        items = fetch_yfinance_news("GC=F", max_items=5)
+
+    search.assert_called_once_with("GC=F", news_count=5)
+    assert [i.title for i in items] == ["hit"]
+    assert items[0].src_name == "yfinance:P"
+    assert items[0].published_at.startswith("2025-10-09")
