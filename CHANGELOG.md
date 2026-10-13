@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.41.7](https://github.com/longsizhuo/openInvest/compare/v0.41.6...v0.41.7) (2026-10-13)
+
+
+### Bug Fixes
+
+* **deps:** allow yfinance 1.x; lock 1.7.0 ([#392](https://github.com/longsizhuo/openInvest/issues/392)) ([abb76e4](https://github.com/longsizhuo/openInvest/commit/abb76e479ee6acbaebfea48de65cbd77adab3174))
+* **deps:** drop the unused direct websockets dependency ([2ef7e1a](https://github.com/longsizhuo/openInvest/commit/2ef7e1a1c7d06deca4bcd9abb0e3ece9aa3eb313))
+
+
+### Docs
+
+* onboarding is 3 questions; keys go in .env, not the chat ([238e8e8](https://github.com/longsizhuo/openInvest/commit/238e8e81b14dd903c7ba23b9db0c532b5dbd1911))
+
 ## [0.41.6](https://github.com/longsizhuo/openInvest/compare/v0.41.5...v0.41.6) (2026-10-13)
 
 
