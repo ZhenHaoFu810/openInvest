@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/longsizhuo/openInvest/compare/invest-setup-skill-v0.5.2...invest-setup-skill-v0.5.3) (2026-10-13)
+
+
+### Bug Fixes
+
+* **skill:** keys never go through the chat; skill-relative run.sh paths ([accc7d9](https://github.com/longsizhuo/openInvest/commit/accc7d9155388debce51be810a0e581455dfa28c))
+
 ## [0.5.2](https://github.com/longsizhuo/openInvest/compare/invest-setup-skill-v0.5.1...invest-setup-skill-v0.5.2) (2026-10-13)
 
 
