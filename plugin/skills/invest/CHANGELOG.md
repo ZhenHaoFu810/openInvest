@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.2](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.24.1...invest-skill-v0.24.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* **plugin:** Hermes installs from plugin/, backend version pinned in run.sh; Codex/Hermes install docs ([#369](https://github.com/longsizhuo/openInvest/issues/369)) ([6153827](https://github.com/longsizhuo/openInvest/commit/61538273971a8b682761a8124e201aa2aaefc786))
+
 ## [0.24.1](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.24.0...invest-skill-v0.24.1) (2026-10-11)
 
 
