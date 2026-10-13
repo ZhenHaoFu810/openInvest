@@ -33,7 +33,7 @@ documents:
 | **invest skill** | agent 怎么编排委员会（Coordinator 协议、决策纪律） |
 | **invest-setup skill** | 首次 5 问 onboarding |
 
-后端从 PyPI 分发（[`openinvest`](https://pypi.org/project/openinvest/)）：首次调用时 `uvx` 自动拉包（只需要 `uv`），数据放 `~/openInvest`（memory/ db/ .env）。更新跑 `run.sh update`。
+后端从 PyPI 分发（[`openinvest`](https://pypi.org/project/openinvest/)）：首次调用时 `uvx` 自动拉包（只需要 `uv`），数据放 `~/openInvest`（memory/ db/ .env）。后端版本固定在 `run.sh` 里、随插件发版更新，更新插件即更新后端。
 **首次 MCP 连接可能超时**（在等 PyPI 下载）——重试一次即可，之后 uvx 走缓存秒连。
 
 不用 plugin 也可以只挂 MCP：
@@ -93,7 +93,7 @@ agent → record_execution("2026-07-02/AAPL", rejected, reason="现金留给房�
 > 接入原则见 [#133](https://github.com/longsizhuo/openInvest/issues/133)：openInvest
 > 是 agent 的投资 runtime，MCP 是第一接口；对话/记忆/通知渠道由宿主 agent 自己负责。
 
-- **Codex**：`codex plugin marketplace add longsizhuo/openInvest`（同一套 skill）
+- **Codex**：`codex plugin marketplace add longsizhuo/openInvest` 后 `codex plugin add invest@openinvest`（同一套 skill；MCP 工具再跑 `codex mcp add openinvest --env INVEST_HOME=$HOME/openInvest -- uvx openinvest-mcp`，见 [plugin/README](../../plugin/README.md)）
 - **Gemini / Cursor / 任意脚本**：CLI Direct 路径——`run.sh run_committee SYM` 一键
   拿 verdict（需 DEEPSEEK_API_KEY）；全部子命令见 [SKILL.md](../../skills/invest/SKILL.md)
 - **任意 MCP client**：stdio server 是标准 MCP，不挑 client
@@ -114,12 +114,16 @@ mcp_servers:
 Hermes 自动发现全部 MCP 工具并与内置工具并列注册。skills 一条命令装：
 
 ```bash
-hermes plugins install longsizhuo/openInvest --enable
+hermes plugins install longsizhuo/openInvest/plugin --enable
 ```
 
 装完以 `openinvest:invest` / `openinvest:invest-setup` 命名空间加载（Hermes plugin
 skill 是显式加载制，不进自动索引）。注意 `hermes skills install` 路线会被其社区源
 安全扫描拦截（金融写操作 skill 必触发 dangerous verdict）——走 plugin 路线。
+plugin 路线要装 `plugin/` 子目录：Hermes 0.21 起安装也会扫描整棵目录，从仓库根装会扫到
+docs/tests 并判 dangerous 直接拦下（2026-10-13 在 0.21.7 实测），`plugin/` 子目录扫描结果为 safe。
+以前从仓库根装过的：0.21 起 `hermes plugins update` 不再接管旧安装（报 no owned Git checkout），
+重装一次即可：`hermes plugins install longsizhuo/openInvest/plugin --enable --force`。
 
 **信息联动**：若装有 [Longbridge](https://github.com/longbridge/skills) 等行情/新闻
 skill，看到与持仓相关的新闻时用 `ingest_event` 喂进事件账本——券商级信息源
