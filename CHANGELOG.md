@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.41.8](https://github.com/longsizhuo/openInvest/compare/v0.41.7...v0.41.8) (2026-10-13)
+
+
+### Bug Fixes
+
+* **news:** fetch yfinance news via Search; Ticker.news endpoint 404s ([#393](https://github.com/longsizhuo/openInvest/issues/393)) ([c18fce5](https://github.com/longsizhuo/openInvest/commit/c18fce5c70b96bb94eb00d7ea19fe15cdc19da53))
+
 ## [0.41.7](https://github.com/longsizhuo/openInvest/compare/v0.41.6...v0.41.7) (2026-10-13)
 
 
