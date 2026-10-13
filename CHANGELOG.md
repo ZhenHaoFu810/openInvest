@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.41.6](https://github.com/longsizhuo/openInvest/compare/v0.41.5...v0.41.6) (2026-10-13)
+
+
+### Bug Fixes
+
+* **deps:** upper-bound the eight dependencies [#384](https://github.com/longsizhuo/openInvest/issues/384) missed ([#387](https://github.com/longsizhuo/openInvest/issues/387)) ([de8b802](https://github.com/longsizhuo/openInvest/commit/de8b80203b0c60faad1c1d576ef3ca2e49e45df7))
+
 ## [0.41.5](https://github.com/longsizhuo/openInvest/compare/v0.41.4...v0.41.5) (2026-10-13)
 
 
