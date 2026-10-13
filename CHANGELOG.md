@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.0](https://github.com/longsizhuo/openInvest/compare/v0.41.8...v0.42.0) (2026-10-13)
+
+
+### Features
+
+* **watchdog:** alert when a single news source goes silent for 24h ([#398](https://github.com/longsizhuo/openInvest/issues/398)) ([a793d3d](https://github.com/longsizhuo/openInvest/commit/a793d3ddf49a3ef6164442fc8063d13c9cd3524e))
+
 ## [0.41.8](https://github.com/longsizhuo/openInvest/compare/v0.41.7...v0.41.8) (2026-10-13)
 
 
