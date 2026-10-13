@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.4](https://github.com/longsizhuo/openInvest/compare/invest-setup-skill-v0.5.3...invest-setup-skill-v0.5.4) (2026-10-13)
+
+
+### Bug Fixes
+
+* **skill:** onboarding asks 3 questions; drop answers nothing reads ([a0a03dc](https://github.com/longsizhuo/openInvest/commit/a0a03dc4d62a59c99a5c57c47ba3bc494f5c8e7b))
+
 ## [0.5.3](https://github.com/longsizhuo/openInvest/compare/invest-setup-skill-v0.5.2...invest-setup-skill-v0.5.3) (2026-10-13)
 
 
