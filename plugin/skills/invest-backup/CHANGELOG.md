@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/longsizhuo/openInvest/compare/invest-backup-skill-v0.2.2...invest-backup-skill-v0.2.3) (2026-10-13)
+
+
+### Bug Fixes
+
+* **skill:** keys never go through the chat; skill-relative run.sh paths ([accc7d9](https://github.com/longsizhuo/openInvest/commit/accc7d9155388debce51be810a0e581455dfa28c))
+
 ## [0.2.2](https://github.com/longsizhuo/openInvest/compare/invest-backup-skill-v0.2.1...invest-backup-skill-v0.2.2) (2026-10-13)
 
 
