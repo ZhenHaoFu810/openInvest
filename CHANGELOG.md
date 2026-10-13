@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.41.4](https://github.com/longsizhuo/openInvest/compare/v0.41.3...v0.41.4) (2026-10-13)
+
+
+### Bug Fixes
+
+* **hermes:** MCP server via the plugin's pinned run.sh, trust untrusted ([3e1a9d7](https://github.com/longsizhuo/openInvest/commit/3e1a9d73d44aa38bc1a637f124e766ad70adcb2a))
+* **init:** use the LLM key already in .env; doctor hints keep keys out of the chat ([8f151ba](https://github.com/longsizhuo/openInvest/commit/8f151ba9ffcd33553f726afee9c6b613ed401b79))
+
 ## [0.41.3](https://github.com/longsizhuo/openInvest/compare/v0.41.2...v0.41.3) (2026-10-13)
 
 
