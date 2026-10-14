@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.2](https://github.com/longsizhuo/openInvest/compare/v0.42.1...v0.42.2) (2026-10-14)
+
+
+### Bug Fixes
+
+* **multi-currency:** quote-currency reentry, same-currency buys, no made-up FX ([#402](https://github.com/longsizhuo/openInvest/issues/402)) ([2d7d327](https://github.com/longsizhuo/openInvest/commit/2d7d327bd15ae93b554ad2b39fac12a922452b44))
+
 ## [0.42.1](https://github.com/longsizhuo/openInvest/compare/v0.42.0...v0.42.1) (2026-10-14)
 
 
