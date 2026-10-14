@@ -64,6 +64,7 @@ Returns JSON containing all the fields you need:
 | `asset` | Referenced by all 4 workers |
 | `portfolio_summary` | Risk Officer prompt |
 | `macro_data` | Macro Strategist prompt |
+| `event_brief` | Macro Strategist prompt (news/event layer recalled from `events.db`; empty string when there is none — e.g. no cron feeding events — then skip that section). Same input the Direct path gives Macro; the CIO sees it via Macro's report + the `EVENT_STANCE` lines inside `sentiment_brief` |
 | `market_data` | Quant prompt |
 | `regime_brief` | **Critical** — must go into both the Quant Round 1 + Round 2 prompts (see warning) |
 | `prior_insights` | Risk Officer prompt (empty if Dreaming has never run) |
@@ -87,7 +88,7 @@ run in parallel. Each worker gets its own context window; information is physica
 Agent({
   description: "Macro analysis",
   subagent_type: "general-purpose",
-  prompt: "<paste prompts.macro_strategist verbatim>\n\n# Current macro data:\n<paste macro_data verbatim>"
+  prompt: "<paste prompts.macro_strategist verbatim>\n\n# Current macro data:\n<paste macro_data verbatim>\n\n## Current event context (sorted by time, latest first; may include supersedes markers):\n<paste event_brief verbatim — omit this section if it is an empty string>"
 })
 
 Agent({

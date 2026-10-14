@@ -74,7 +74,7 @@ complete before returning; separate calls actually lose the parallelism:
 ```
 delegate_task(tasks=[
   {
-    "goal": "<paste prompts.macro_strategist verbatim>\n\n# Current macro data:\n<paste macro_data verbatim>\n\nYour entire final reply must be, and be nothing but, the structured format the committee requires (SIGNAL/STRENGTH/etc. fields — see the format notes in the prompt above). Do not output a 'what I did / which tools I used' style summary — that is not what this task wants; hand over the structured result as-is."
+    "goal": "<paste prompts.macro_strategist verbatim>\n\n# Current macro data:\n<paste macro_data verbatim>\n\n## Current event context (sorted by time, latest first; may include supersedes markers):\n<paste event_brief verbatim — omit this section if it is an empty string>\n\nYour entire final reply must be, and be nothing but, the structured format the committee requires (SIGNAL/STRENGTH/etc. fields — see the format notes in the prompt above). Do not output a 'what I did / which tools I used' style summary — that is not what this task wants; hand over the structured result as-is."
   },
   {
     "goal": "<paste prompts.quant_round1 verbatim>\n\n# Market Regime (deterministically computed, must be followed):\n<paste regime_brief verbatim>\n\n# Market data:\n<paste market_data verbatim>\n\n(Same as above: the entire reply must be the structured format only; do not summarize what you did.)"
