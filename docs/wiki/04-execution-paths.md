@@ -57,7 +57,7 @@ documents:
 
 `skills/invest/scripts/run.sh prepare_committee` 做的事：
 
-1. 拉 NDQ.AX 行情 + REGIME 算好
+1. 拉 NDQ.AX 行情 + REGIME 算好；事件层召回 `event_brief`（与 Direct 同源 `resolve_event_brief_multi`，进 Macro + sentiment 的 EVENT_STANCE 行；events.db 空则为空串）
 2. 把 4 个角色的 system prompt + 输入数据写到 `/tmp/.committee/<task_id>/{macro,quant,risk,cio}.md`
 3. 输出一段 instruction 给用户的 Claude，**告诉它去 spawn 4 个 subagent 跑**
 

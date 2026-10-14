@@ -61,6 +61,8 @@ def _mock_world(monkeypatch):
     monkeypatch.setattr(cr, "load_sentiment_brief", lambda *a, **k: SENT)
     monkeypatch.setattr(cr, "load_valuation_brief", lambda *a, **k: VAL)
     monkeypatch.setattr(cr, "load_prior_insights", lambda *a, **k: "")
+    # 事件层默认空（不碰真实 events.db / embedding）；SENTINEL 测试自己覆写
+    monkeypatch.setattr(cr, "resolve_event_brief_multi", lambda syms: "")
 
     import openinvest.core.regime_probability as rp
     monkeypatch.setattr(rp, "get_regime_forward_summary", lambda *a, **k: None)
@@ -145,3 +147,55 @@ def test_prepare_committee_values_fund_holding_with_eastmoney_nav(_mock_world, m
     prepare_committee_brief("TEST.AX")
     assert seen["FUND:123456"] == 2.0
     assert seen["TEST.AX"] == 299.0   # 非基金仍走 yfinance close（fake_df 末值）
+
+
+EVENT = (
+    "[2026-10-14T01:00:00+00:00] [risk/high] [TEST.AX] (sources: reuters)\n"
+    "EVENT_BRIEF_PREP_SENTINEL fed hike shock\n"
+)
+
+
+def test_prepare_committee_carries_event_brief(_mock_world, monkeypatch):
+    """SENTINEL（2026-10-14 漂移修复）：Coordinator brief 必须带事件层，与 Direct 同源。
+
+    0/1：prepare 没调 resolve_event_brief_multi / 没传给 load_sentiment_brief /
+    没附 per-asset EVENT_STANCE 行 / 没暴露给 Macro → 对应断言红。
+    """
+    import openinvest.core.runner.coordinator as cr
+    from openinvest.core.runner.coordinator import prepare_committee_brief
+
+    seen = {}
+    monkeypatch.setattr(cr, "resolve_event_brief_multi",
+                        lambda syms: seen.setdefault("syms", syms) and EVENT)
+    monkeypatch.setattr(cr, "load_sentiment_brief",
+                        lambda eb="": seen.setdefault("sent_eb", eb) and SENT)
+
+    out = prepare_committee_brief("TEST.AX")
+
+    assert seen["syms"] == ["TEST.AX"], "召回口径须与 Direct run_committee SYM 一致"
+    assert out["event_brief"] == EVENT, "event_brief 没暴露给 Macro"
+    assert seen["sent_eb"] == EVENT, "event_brief 没传进 load_sentiment_brief（市场级 EVENT_STANCE 丢）"
+    assert out["sentiment_brief"].startswith(SENT)
+    assert "EVENT_STANCE(TEST.AX)" in out["sentiment_brief"], "per-asset EVENT_STANCE 行没附上"
+    ins = out["instructions"]
+    assert "<paste event_brief>" in ins and "prompts.macro_strategist" in ins, (
+        "instructions 没指导把 event_brief 粘进 Macro prompt"
+    )
+
+
+def test_prepare_committee_event_brief_empty_store_graceful(_mock_world, monkeypatch, tmp_path):
+    """插件/无 cron 场景：events.db 空 → event_brief == ""，sentiment 不附 stance 行。
+    走真实 resolve_event_brief_multi，只把 store 换成 tmp 空库、embedding 断网。"""
+    import openinvest.core.runner.coordinator as cr
+    import openinvest.core.runner.event_brief as eb
+    import openinvest.services.embeddings as emb
+    from openinvest.db.event_store import EventStore
+
+    monkeypatch.setattr(cr, "resolve_event_brief_multi", eb.resolve_event_brief_multi)
+    store = EventStore(db_path=str(tmp_path / "events.db"), embedding_dim=emb.DEFAULT_DIM)
+    monkeypatch.setattr(eb, "_get_event_store", lambda: store)
+    monkeypatch.setattr(emb, "embed_query", lambda *a, **k: None)
+
+    out = cr.prepare_committee_brief("TEST.AX")
+    assert out["event_brief"] == ""
+    assert out["sentiment_brief"] == SENT
