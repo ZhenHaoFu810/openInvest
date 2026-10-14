@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.1](https://github.com/longsizhuo/openInvest/compare/v0.42.0...v0.42.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **strategy:** default a new tracked asset's cap from the strategy instead of a raw schema error ([#363](https://github.com/longsizhuo/openInvest/issues/363)) ([b3d3da1](https://github.com/longsizhuo/openInvest/commit/b3d3da15586ba71b4718688dadd2daeebd5d5c03))
+
 ## [0.42.0](https://github.com/longsizhuo/openInvest/compare/v0.41.8...v0.42.0) (2026-10-13)
 
 
