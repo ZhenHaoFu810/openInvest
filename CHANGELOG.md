@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.4](https://github.com/longsizhuo/openInvest/compare/v0.42.3...v0.42.4) (2026-10-15)
+
+
+### Bug Fixes
+
+* **committee:** load event brief in Coordinator prepare_committee_brief ([#404](https://github.com/longsizhuo/openInvest/issues/404)) ([e745ab5](https://github.com/longsizhuo/openInvest/commit/e745ab584f0a36a3dc7d10169f4d73f2fe713d13))
+
 ## [0.42.3](https://github.com/longsizhuo/openInvest/compare/v0.42.2...v0.42.3) (2026-10-15)
 
 
