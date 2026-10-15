@@ -122,6 +122,15 @@ def _request(
             "error": f"hub 内部错误 HTTP {r.status_code}: {_detail(r) or r.text[:200]}",
             "hint": "看 hub 日志：journalctl -u invest-web -n 100",
         })
+    # 400 留给调用方（业务错误，CLI 同款 error JSON）；其余 4xx（403 Cloudflare Access 拦截、
+    # 404 端点不存在、422 请求体不合法……）原先落到 raise_for_status 抛 traceback（#414 评审）
+    if r.status_code >= 400 and r.status_code != 400:
+        _die({
+            "status": "error",
+            "error": f"hub 拒绝了请求 HTTP {r.status_code}: {_detail(r) or r.text[:200]}",
+            "hint": "403 多半是 Cloudflare Access 凭据不对（CF_ACCESS_CLIENT_ID/SECRET）；"
+                    "404 / 422 多半是 hub 版本比本机旧，先升级 hub",
+        })
     return r
 
 
@@ -263,6 +272,34 @@ def _h_event_check(args: argparse.Namespace) -> None:
     # 注意：hub 端点返回的是 EventCheckResponse 摘要（fetched/new_events/triggered），
     # 比本地 dry-run 的完整 dump 精简——agent 要细节可以追问 /api/events/recent
     _print_response_or_die(_request("POST", "/api/events/check", timeout=180))
+
+
+def _h_explain_decision(args: argparse.Namespace) -> None:
+    """转发 hub 现有的单条决议端点，拼成本地 explain_decision 同形状。
+    该端点不带 path snapshot（web API 不再新增端点）→ path_snapshot 恒为 None；
+    要 snapshot 用 hub 的 remote MCP explain_decision。"""
+    from openinvest.core.decision_ledger import parse_committee_text, parse_decision_id
+    try:
+        date, symbol = parse_decision_id(args.decision_id)
+    except ValueError as e:
+        _die({"status": "error", "error": str(e)})
+    r = _request("GET", f"/api/committee_sessions/{date}/{safe_symbol(symbol)}",
+                 timeout=15, ok_404=True)
+    if r.status_code == 404:
+        _die({"status": "error", "error": f"decision {args.decision_id} not found on hub"})
+    r.raise_for_status()
+    body = r.json()
+    md = body.get("content") or ""
+    parsed = parse_committee_text(md)
+    if not parsed:
+        _die({"status": "error", "error": f"decision {args.decision_id} has no verdict on hub"})
+    _print_json({
+        "decision_id": args.decision_id,
+        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny")},
+        "confidence_lookup": body.get("confidence_lookup"),   # 旧 hub 没这个字段 → None
+        "transcript_markdown": md,
+        "path_snapshot": None,
+    })
 
 
 def _hub_today(symbol_tz_fallback: bool = True) -> str:
@@ -417,6 +454,7 @@ _HANDLERS: Dict[str, Callable[[argparse.Namespace], None]] = {
     "save_committee": _h_save_committee,
     "run_committee": _h_run_committee,
     "event_check": _h_event_check,
+    "explain_decision": _h_explain_decision,
 }
 
 

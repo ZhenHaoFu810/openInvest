@@ -98,6 +98,29 @@ def main() -> None:
     # _print_json 用 sys.__stdout__ 写真正的 JSON。
     sys.stdout = sys.stderr
 
+    args = build_parser().parse_args()
+
+    # 远端模式（hub-and-spoke）：INVEST_API_BASE 设置时子命令转发给远端 hub。
+    # 必须在 args.func（任何 MemoryStore()/PortfolioManager() 实例化）之前分发——
+    # MemoryStore.__init__ 会 mkdir memory/，客户端机器不应产生这个目录。
+    import os
+    if os.getenv("INVEST_API_BASE", "").strip():
+        from openinvest.remote_dispatch import maybe_dispatch_remote
+        if maybe_dispatch_remote(args):
+            return
+
+    from openinvest.core.portfolio_manager import MemoryNotInitialized
+    try:
+        args.func(args)
+    except MemoryNotInitialized as e:
+        # 没 init 的数据目录：给 agent 一句结构化原因，别让它看着 traceback 去重装依赖
+        _print_json({"status": "error", "error": str(e),
+                     "hint": "先跑 `run.sh doctor` 看缺什么，再用 invest-setup 初始化"})
+        sys.exit(1)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """全部子命令的 argparse 定义（tests/test_mcp_server.py 的 CLI↔MCP 对等测试也读它）。"""
     parser = _JsonArgumentParser(prog="skill")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -114,6 +137,11 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=20,
                    help="最多列出最近 N 条（summary 仍按全部匹配算），0 = 全部，默认 20")
     p.set_defaults(func=cmd_decisions)
+
+    p = sub.add_parser("explain_decision",
+        help="单条决议完整回放：4 角色辩论全文 + CIO memo + path snapshot（等价 MCP explain_decision）")
+    p.add_argument("decision_id", help='形如 "2026-07-03/GC=F"（decisions 输出里的 decision_id）')
+    p.set_defaults(func=cmd_explain_decision)
 
     p = sub.add_parser("record_execution",
         help="记录你对某条决议的执行/拒绝 + 原因（等价 POST /api/decisions/execution）")
@@ -308,26 +336,7 @@ def main() -> None:
                    help="设一条 override，如 --set verdict.concentration_lens_enabled false")
     p.add_argument("--clear", metavar="KEY", help="删一条 override，回退 env/yaml/默认")
     p.set_defaults(func=cmd_config)
-
-    args = parser.parse_args()
-
-    # 远端模式（hub-and-spoke）：INVEST_API_BASE 设置时子命令转发给远端 hub。
-    # 必须在 args.func（任何 MemoryStore()/PortfolioManager() 实例化）之前分发——
-    # MemoryStore.__init__ 会 mkdir memory/，客户端机器不应产生这个目录。
-    import os
-    if os.getenv("INVEST_API_BASE", "").strip():
-        from openinvest.remote_dispatch import maybe_dispatch_remote
-        if maybe_dispatch_remote(args):
-            return
-
-    from openinvest.core.portfolio_manager import MemoryNotInitialized
-    try:
-        args.func(args)
-    except MemoryNotInitialized as e:
-        # 没 init 的数据目录：给 agent 一句结构化原因，别让它看着 traceback 去重装依赖
-        _print_json({"status": "error", "error": str(e),
-                     "hint": "先跑 `run.sh doctor` 看缺什么，再用 invest-setup 初始化"})
-        sys.exit(1)
+    return parser
 
 
 if __name__ == "__main__":

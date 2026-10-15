@@ -42,7 +42,11 @@ def parse_committee_file(path: Path) -> Optional[Dict[str, Any]]:
     """从 committee md 抽 verdict + macro snapshot（单一可信源，原 jobs/verdict_review 私有）。"""
     if not path.exists():
         return None
-    text = path.read_text(encoding="utf-8")
+    return parse_committee_text(path.read_text(encoding="utf-8"))
+
+
+def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
+    """parse_committee_file 的文本版——远端模式拿到的是 hub 回传的 md 正文。"""
     verdict_m = re.search(r"\*\*Verdict\*\*:\s*(\w+)\s*\(confidence\s+([\d.]+)\)", text)
     if not verdict_m:
         return None
@@ -67,6 +71,54 @@ def parse_committee_file(path: Path) -> Optional[Dict[str, Any]]:
         "macro_at_decision": macro,
         "symbol": sym_m.group(1) if sym_m else None,
         "alloc_cny": alloc,
+    }
+
+
+def parse_decision_id(decision_id: str) -> tuple[str, str]:
+    """"<date>/<symbol>" → (date, symbol)，不合法抛 ValueError。
+    date 段必须是日期字面量——否则 "../.." 之类会拼进路径逃出 .committee/。"""
+    if "/" not in decision_id:
+        raise ValueError(f'decision_id must be "<date>/<symbol>", got {decision_id!r}')
+    date, symbol = decision_id.split("/", 1)
+    if not _DATE_DIR.fullmatch(date):
+        raise ValueError(f"invalid date segment in decision_id: {date!r}")
+    return date, symbol
+
+
+def explain_decision(decision_id: str) -> Dict[str, Any]:
+    """单条决议完整回放：辩论全文 + CIO memo + 决策时点 path snapshot。
+
+    MCP `explain_decision` / CLI `explain_decision` 共用（同 record_execution 模式）。
+    错误返回 {"status": "error", "error": ...}，不抛。
+    """
+    from openinvest.core.memory_store import MemoryStore
+    from openinvest.jobs.review_calc import confidence_display
+    from openinvest.jobs.verdict_review import load_confidence_lookup
+
+    try:
+        date, symbol = parse_decision_id(decision_id)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    safe = safe_symbol(symbol)
+    base = MemoryStore().root / ".committee" / date
+    md = base / f"{safe}.md"
+    parsed = parse_committee_file(md)
+    if not parsed:
+        return {"status": "error",
+                "error": f"decision {decision_id} not found ({md} missing or has no verdict)"}
+    path_json = base / f"{safe}_path.json"
+    path_snapshot = None
+    if path_json.exists():
+        try:
+            path_snapshot = json.loads(path_json.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+    return {
+        "decision_id": decision_id,
+        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny")},
+        "confidence_lookup": confidence_display(parsed, load_confidence_lookup(), with_raw=False),
+        "transcript_markdown": md.read_text(encoding="utf-8"),
+        "path_snapshot": path_snapshot,
     }
 
 
