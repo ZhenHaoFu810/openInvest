@@ -783,3 +783,12 @@ class TestTranslator:
         )
         assert "一句话" in report
         assert "继续持有，不买也不卖" in report
+
+
+def test_daily_report_value_warnings_cover_each_status():
+    """日报总资产走 fx.total_portfolio_value 后，status → 告警文案的映射（#417 评审）"""
+    from openinvest.jobs.daily_report import _value_warnings
+    w = _value_warnings({"CNY": "ok", "SGD": "missing_fx", "X": "missing_price",
+                         "FUND:1": "cost_fallback", "Y": "excluded", "Z": "tracking_only"})
+    assert len(w) == 3
+    assert "SGD 折算 CNY 失败" in w[0] and "X 实时价不可用且无成本价" in w[1] and "按成本价计入" in w[2]

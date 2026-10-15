@@ -17,7 +17,7 @@ import os
 import shutil
 import subprocess
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -215,6 +215,21 @@ def _run_gemini_cli_review(prompt: str) -> str:
 
 # ----------------------------------------------------------------------
 
+def _value_warnings(value_status: Dict[str, str]) -> List[str]:
+    """fx.total_portfolio_value 的 status → 日报"数据可信度告警"行（缺汇率 / 缺价 / 按成本价计入）"""
+    out: List[str] = []
+    for key, st in value_status.items():
+        if st == "missing_fx":
+            out.append(f"\n⚠️ **{key} 折算 CNY 失败**（汇率拉不到），total_assets_cny 漏算这部分，"
+                       f"集中度会偏高，请勿做大额操作。")
+        elif st == "missing_price":
+            out.append(f"\n⚠️ **{key} 实时价不可用且无成本价**，已从总资产排除，"
+                       f"集中度会偏高，请勿据此做大额操作。")
+        elif st == "cost_fallback":
+            out.append(f"\n⚠️ **{key} 实时价不可用**，总资产里按成本价计入，市值和集中度是估算。")
+    return out
+
+
 def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]:
     """send_email=False: 跳过邮件（宿主 agent 侧 cron 自己投递）；
     include_report=True: 返回值带 full_report（邮件正文原文）——默认不带，
@@ -408,21 +423,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
     from openinvest.utils.fx import total_portfolio_value
     total_assets_cny, value_status = total_portfolio_value(
         pm, current_prices, "CNY", exclude=tuple(skipped_assets))
-    for key, st in value_status.items():
-        if st == "missing_fx":
-            data_warnings.append(
-                f"\n⚠️ **{key} 折算 CNY 失败**（汇率拉不到），total_assets_cny 漏算这部分，"
-                f"集中度会偏高，请勿做大额操作。"
-            )
-        elif st == "missing_price":
-            data_warnings.append(
-                f"\n⚠️ **{key} 实时价不可用且无成本价**，已从总资产排除，"
-                f"集中度会偏高，请勿据此做大额操作。"
-            )
-        elif st == "cost_fallback":
-            data_warnings.append(
-                f"\n⚠️ **{key} 实时价不可用**，总资产里按成本价计入，市值和集中度是估算。"
-            )
+    data_warnings.extend(_value_warnings(value_status))
 
     portfolio_summary = _portfolio_summary(pm, total_assets_cny, current_prices)
     if data_warnings:
