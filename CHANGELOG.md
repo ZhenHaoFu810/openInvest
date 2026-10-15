@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.44.0](https://github.com/longsizhuo/openInvest/compare/v0.43.0...v0.44.0) (2026-10-15)
+
+
+### Features
+
+* **portfolio:** count foreign cash in dry powder; one total-asset implementation ([#417](https://github.com/longsizhuo/openInvest/issues/417)) ([7802b71](https://github.com/longsizhuo/openInvest/commit/7802b7141e91a13b90b90d9a67f6c573c09a3190))
+
+
+### Bug Fixes
+
+* **experiments:** don't cache fund-lookup misses in the demo ([#418](https://github.com/longsizhuo/openInvest/issues/418)) ([1b601b4](https://github.com/longsizhuo/openInvest/commit/1b601b458e1b38c2c9eec2b5acb2da779bec3f9b))
+
 ## [0.43.0](https://github.com/longsizhuo/openInvest/compare/v0.42.4...v0.43.0) (2026-10-15)
 
 
