@@ -1107,7 +1107,7 @@ wheels = [
 
 [[package]]
 name = "openinvest"
-version = "0.43.0"
+version = "0.44.0"
 source = { editable = "." }
 dependencies = [
     { name = "akshare" },
