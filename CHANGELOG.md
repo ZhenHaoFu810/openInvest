@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.42.3](https://github.com/longsizhuo/openInvest/compare/v0.42.2...v0.42.3) (2026-10-15)
+
+
+### Bug Fixes
+
+* **prices:** skip half-formed NaN bars where we read yfinance directly ([#406](https://github.com/longsizhuo/openInvest/issues/406)) ([55863a9](https://github.com/longsizhuo/openInvest/commit/55863a9a57d0fa1413275e1c48fa93a42e0c6879))
+* **web-api:** accept a missing buy currency, so remote buy works again ([#407](https://github.com/longsizhuo/openInvest/issues/407)) ([a7e9e38](https://github.com/longsizhuo/openInvest/commit/a7e9e38ad9ad4b1e3b2ec1f71d58a39f7cb2d00a))
+
 ## [0.42.2](https://github.com/longsizhuo/openInvest/compare/v0.42.1...v0.42.2) (2026-10-14)
 
 
