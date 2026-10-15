@@ -31,7 +31,7 @@ class UserStatus:
     """get_user_status() 返回值（用于 daily_report 等场景）"""
     cash_cny: float                     # CNY 现金（兼容字段：v2 内部从 cash["CNY"] 取）
     cash_aud: float                     # AUD 现金
-    disposable_for_invest: float        # 本期可投 CNY = max(0, cash_cny)；有正 cap 时封顶
+    disposable_for_invest: float        # 本期可投 CNY = 所有币种现金折算成 CNY（不小于 0）；有正 cap 时封顶
     risk_level: str
     portfolio_value: float              # 总市值（CNY 折算粗算）
     target_asset: str                   # 主资产 symbol（target_assets[0]）
@@ -243,7 +243,10 @@ class PortfolioManager:
                 portfolio_value += value_cny
             # 拉不到汇率的 holding 静默跳过（缺口告警在 daily_report 那层做）
 
-        available = max(0.0, cash_cny)
+        # 可投 = 所有币种现金折算成 CNY（基准币种方案 A，2026-10）；只有 CNY 现金时与旧口径相同。
+        # 与 fx.dry_powder 同口径，这里走 _ccy_to_cny 以沿用 exchange_rate 覆盖（确定性测试）
+        cash_values = (_ccy_to_cny(float(a or 0), str(c).upper()) for c, a in self.cash.items())
+        available = max(0.0, sum(v for v in cash_values if v is not None))
         disposable = min(available, max_single) if max_single > 0 else available
 
         return UserStatus(

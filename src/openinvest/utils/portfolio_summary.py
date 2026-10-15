@@ -49,7 +49,11 @@ def portfolio_summary_text(
     cash_cny = pm.cash_amount("CNY")
     aud_cash = pm.cash_amount("AUD")
     risk_level = str(pm.user.get("risk_tolerance", "Balanced"))
-    dry_powder = max(0.0, cash_cny)
+    # 可投子弹 = 所有币种现金折算成人民币（基准币种方案 A，2026-10）；只有人民币现金时与旧口径相同
+    from openinvest.utils.fx import dry_powder as _dry_powder
+    dry_powder, dp_missing = _dry_powder(pm, "CNY")
+    foreign_cash = {str(c).upper(): float(a or 0) for c, a in pm.cash.items()
+                    if str(c).upper() != "CNY" and float(a or 0) > 0}
 
     # 总资产是否可用：NaN / 非有限（上游某腿不可解析污染了 total）时显式降级，
     # 绝不渲染 ¥nan 或据假值算集中度。
@@ -67,10 +71,15 @@ def portfolio_summary_text(
         f"用户风险偏好: {risk_level}",
         f"总资产估算: {total_str}",
         f"  - CNY 现金: ¥{cash_cny:,.0f}",
-        f"  - 可投子弹 (dry_powder): ¥{dry_powder:,.0f}",
+        f"  - 可投子弹 (dry_powder): ¥{dry_powder:,.0f}"
+        + ("（含外币现金按汇率折算）" if set(foreign_cash) - set(dp_missing) else "")
+        + (f"（未计入 {'、'.join(dp_missing)} 现金：拉不到汇率）" if dp_missing else ""),
     ]
     if aud_cash > 0:
         lines.append(f"  - AUD 现金: ${aud_cash:,.0f}")
+    for ccy, amt in sorted(foreign_cash.items()):
+        if ccy != "AUD":
+            lines.append(f"  - {ccy} 现金: {amt:,.0f} {ccy}")
 
     # 持仓部分：遍历实际 holdings，按 unit_label / cost_currency 通用化展示
     real_holdings = [

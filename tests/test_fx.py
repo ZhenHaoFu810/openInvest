@@ -222,3 +222,29 @@ def test_fx_unavailable_and_nan_pairs_return_none(monkeypatch):
 def test_unvalued_lists_entries_left_out_of_total():
     status = {"CNY": "ok", "AAPL": "missing_fx", "X": "missing_price", "T": "tracking_only"}
     assert fx.unvalued(status) == ["AAPL", "X"]
+
+
+# ---------- 基准币种第 1 步：可投现金方案 A + 总资产单一实现 ----------
+
+class _CashPM:
+    def __init__(self, cash, holdings=()):
+        self.cash = cash
+        self.holdings = list(holdings)
+
+
+def test_dry_powder_converts_every_currency_and_names_the_missing(monkeypatch):
+    _pairs(monkeypatch, {"AUDCNY=X": 4.7})
+    assert fx.dry_powder(_CashPM({"CNY": 50589.0, "AUD": 2599.0})) == (pytest.approx(62804.3), [])
+    total, missing = fx.dry_powder(_CashPM({"CNY": 1000.0, "ZZZ": 5.0}))
+    assert total == 1000.0 and missing == ["ZZZ"]
+    assert fx.dry_powder(_CashPM({"CNY": -300.0})) == (0.0, [])
+
+
+def test_total_value_excludes_listed_symbols_and_flags_cost_fallback(monkeypatch):
+    _pairs(monkeypatch, {})
+    h = lambda s: {"symbol": s, "units": 10, "avg_cost": 2.0, "cost_currency": "CNY"}
+    pm = _CashPM({"CNY": 100.0}, [h("A"), h("B"), h("C")])
+    total, status = fx.total_portfolio_value(pm, {"A": 3.0, "B": None}, "CNY", exclude=("C",))
+    assert total == 100.0 + 30.0 + 20.0       # A 现价、B 成本价兜底、C 被排除
+    assert status["A"] == "ok" and status["B"] == "cost_fallback" and status["C"] == "excluded"
+    assert fx.total_portfolio_value_cny is fx.total_portfolio_value

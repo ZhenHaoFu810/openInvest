@@ -136,14 +136,18 @@ def cash_total_in_base(
     return round(total, 2), rates
 
 
-def total_portfolio_value_cny(
+def total_portfolio_value(
     pm,  # PortfolioManager（避免循环 import 不写类型）
     current_prices: dict,
     base: str = "CNY",
     *,
     as_of_date: Optional[str] = None,
+    exclude: tuple = (),
 ) -> tuple[float, dict]:
     """通用化总资产估算：所有 cash 多币种 + 所有 holdings × current_prices × FX 折算到 base
+
+    全仓库总资产的唯一实现（2026-10 基准币种第 1 步：status / 委员会两条路径 / 日报 /
+    PortfolioManager.get_user_status 原先各算一份，口径已漂移）。
 
     替代 7 处 `if ccy == "AUD"` 风格硬编码。fork 用户持 USD/EUR/JPY/HKD 等任意币种
     都能正确折算；缺价 / 缺汇率单独标 status 不计入 total（避免 0 兜底误导 Risk）。
@@ -154,12 +158,15 @@ def total_portfolio_value_cny(
             为 None 或缺 key 都视为"价拉不到"，不计入 total
         base: 目标币种（默认 CNY）
         as_of_date: backtest / paper trading 用，按当天 close 拉 FX；None=实盘
+        exclude: 不计入的 holding symbol（日报的行情过期熔断：这些资产本轮整个跳过），
+            status 记 "excluded"
 
     Returns:
         (total_in_base, status_dict)
             total_in_base: float, 折算后总额（拉不到价/汇率的 entry 不计入）
-            status_dict: {key: "ok" | "missing_price" | "missing_fx" | "tracking_only" |
-                              "zero_units"}
+            status_dict: {key: "ok" | "cost_fallback" | "missing_price" | "missing_fx" |
+                              "tracking_only" | "zero_units" | "excluded"}
+                cost_fallback = 拉不到现价、按成本价计入（计入了，但不是现价）
                 key 是 holding symbol 或 cash currency；调用方可以 grep
                 "missing_*" 给 LLM 兜底告警
     """
@@ -189,6 +196,9 @@ def total_portfolio_value_cny(
         if h.get("is_tracking_only"):
             status[sym] = "tracking_only"
             continue
+        if sym in exclude:
+            status[sym] = "excluded"
+            continue
         units = float(h.get("units", 0) or 0)
         if units <= 0:
             status[sym] = "zero_units"
@@ -207,6 +217,7 @@ def total_portfolio_value_cny(
                 status[sym] = "missing_price"
                 continue
             price = avg
+            status[sym] = "cost_fallback"
         # cost 兜底后仍非有限（理论上 avg 已 >0 finite，这里 belt-and-suspenders）
         if not math.isfinite(price):
             status[sym] = "missing_price"
@@ -218,6 +229,21 @@ def total_portfolio_value_cny(
             status[sym] = "missing_fx" if math.isfinite(local_value) else "missing_price"
             continue
         total += value_in_base
-        status[sym] = "ok"
+        status.setdefault(sym, "ok")
 
     return round(total, 2), status
+
+
+# 旧名保留：外部调用方 / 测试零改动（base 参数本来就有）
+total_portfolio_value_cny = total_portfolio_value
+
+
+def dry_powder(pm, base: str = "CNY") -> tuple[float, List[str]]:
+    """可投现金（基准币种方案 A，2026-10 用户签字）：所有币种现金折算到 base 的总和，不小于 0。
+
+    之前只算 CNY 现金——持 AUD/USD 现金的用户可投额被低估。拉不到汇率的币种不计入、
+    列进第二个返回值，调用方要说出来。
+    """
+    total, rates = cash_total_in_base(dict(pm.cash), base)
+    missing = sorted(c for c, r in rates.items() if r is None and float(pm.cash.get(c) or 0))
+    return max(0.0, total), missing

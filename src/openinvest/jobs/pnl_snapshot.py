@@ -137,7 +137,12 @@ def _compute_snapshot(store: MemoryStore) -> Optional[Snapshot]:
         gold_grams = float(portfolio.get("gold_grams", 0) or 0)
         gold_avg = float(portfolio.get("gold_avg_cost_cny_per_gram", 0) or 0)
 
-    audcny = _safe_close("AUDCNY=X") or 4.7
+    # 拉不到就不编一个（原先兜底写死 4.7）：有澳元持仓却没汇率时这次不记快照
+    from openinvest.utils.fx import get_fx_rate
+    audcny = _safe_close("AUDCNY=X") or get_fx_rate("AUD", "CNY")
+    if not audcny and ndq_shares > 0:
+        return None
+    audcny = audcny or 0.0
     ndq_price = _safe_close("NDQ.AX")
     # 用 strategy.target_assets[gold].price_offset_pct 让 gold_now（"现在按浙商克价
     # 算的估值价"）与用户实际买入价同口径，避免 spot vs bank 不一致导致系统性
