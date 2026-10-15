@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.43.0](https://github.com/longsizhuo/openInvest/compare/v0.42.4...v0.43.0) (2026-10-15)
+
+
+### Features
+
+* **cli:** add explain_decision subcommand for MCP parity ([#414](https://github.com/longsizhuo/openInvest/issues/414)) ([fea2c64](https://github.com/longsizhuo/openInvest/commit/fea2c64ad53ddc1270cfbd3f65d940a4185b66d2))
+
+
+### Bug Fixes
+
+* run.sh hints only on silent failures; JSON error for an uninitialized data dir ([#413](https://github.com/longsizhuo/openInvest/issues/413)) ([eb71140](https://github.com/longsizhuo/openInvest/commit/eb71140d0a2655f44d613dacd1fa75c6d446dd73))
+
+
+### Docs
+
+* install the Hermes plugin from the official catalog ([#415](https://github.com/longsizhuo/openInvest/issues/415)) ([694493b](https://github.com/longsizhuo/openInvest/commit/694493bca02904d3cb3549b27a15acb9d8fff445))
+
 ## [0.42.4](https://github.com/longsizhuo/openInvest/compare/v0.42.3...v0.42.4) (2026-10-15)
 
 
