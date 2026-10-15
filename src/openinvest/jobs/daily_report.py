@@ -13,12 +13,11 @@ LLM 调用次数: 1 (macro) + 3 * N (asset committee)
 from __future__ import annotations
 
 import logging
-import math
 import os
 import shutil
 import subprocess
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -216,6 +215,21 @@ def _run_gemini_cli_review(prompt: str) -> str:
 
 # ----------------------------------------------------------------------
 
+def _value_warnings(value_status: Dict[str, str]) -> List[str]:
+    """fx.total_portfolio_value 的 status → 日报"数据可信度告警"行（缺汇率 / 缺价 / 按成本价计入）"""
+    out: List[str] = []
+    for key, st in value_status.items():
+        if st == "missing_fx":
+            out.append(f"\n⚠️ **{key} 折算 CNY 失败**（汇率拉不到），total_assets_cny 漏算这部分，"
+                       f"集中度会偏高，请勿做大额操作。")
+        elif st == "missing_price":
+            out.append(f"\n⚠️ **{key} 实时价不可用且无成本价**，已从总资产排除，"
+                       f"集中度会偏高，请勿据此做大额操作。")
+        elif st == "cost_fallback":
+            out.append(f"\n⚠️ **{key} 实时价不可用**，总资产里按成本价计入，市值和集中度是估算。")
+    return out
+
+
 def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]:
     """send_email=False: 跳过邮件（宿主 agent 侧 cron 自己投递）；
     include_report=True: 返回值带 full_report（邮件正文原文）——默认不带，
@@ -403,57 +417,13 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         if quote is not None:
             current_prices[sym] = quote.price
 
-    # 2026-05-19: 用 utils.fx.to_base 替代硬编码 AUD 折算。支持任意币种持仓
-    # (USD/EUR/JPY/HKD 等)。之前 USD/EUR 持仓被漏算导致 total_assets_cny 偏低 →
-    # Risk Officer 算集中度虚高。
-    # 2026-05-19 (A3 续修): cash 也通用化遍历，之前只加 AUD，fork 用户的 USD/EUR
-    # 现金被漏算。注意这里不能直接用 utils.fx.total_portfolio_value_cny，因为这一段
-    # 需要按 skipped_assets 精确剔除（cron 路径的 staleness 兜底语义）。
-    from openinvest.utils.fx import to_base
-    total_assets_cny = user_status.cash_cny
-    for ccy, amt in pm.cash.items():
-        if str(ccy).upper() == "CNY" or not amt:
-            continue  # CNY 已计入；空余额不算
-        # live valuation: as_of_date intentionally not threaded (no historical caller).
-        # For backtest/historical use, thread as_of_date like utils.fx.to_base (see PR#53 fix(fx)).
-        ccy_in_cny = to_base(str(ccy).upper(), float(amt), "CNY")
-        if ccy_in_cny is not None and math.isfinite(ccy_in_cny):
-            total_assets_cny += ccy_in_cny
-        else:
-            data_warnings.append(
-                f"\n⚠️ **{ccy} 现金折算 CNY 失败**（汇率拉不到），"
-                f"total_assets_cny 漏算这部分。"
-            )
-    for h in pm.holdings:
-        if h.get("is_tracking_only"):
-            continue
-        sym = str(h.get("symbol", ""))
-        if sym in skipped_assets:
-            continue
-        units = float(h.get("units", 0) or 0)
-        if units <= 0:
-            continue
-        ccy = str(h.get("cost_currency", "CNY"))
-        cur = current_prices.get(sym)
-        # NaN 价（当日 close=NULL 被读成 float('nan')）等同缺价：排除并告警，
-        # 绝不 total_assets_cny += NaN（否则总资产 NaN 污染整个集中度风控）。
-        if cur is None or not math.isfinite(cur):
-            data_warnings.append(
-                f"\n⚠️ **{sym} 实时价不可用**（NaN/缺），已从总资产排除，"
-                f"集中度会偏高，请勿据此做大额操作。"
-            )
-            continue
-        local_value = units * cur
-        # live valuation: as_of_date intentionally not threaded (no historical caller).
-        # For backtest/historical use, thread as_of_date like utils.fx.to_base (see PR#53 fix(fx)).
-        value_cny = to_base(ccy, local_value, "CNY")
-        if value_cny is None or not math.isfinite(value_cny):
-            data_warnings.append(
-                f"\n⚠️ **{sym} 持仓折算 CNY 失败**（{ccy}→CNY 汇率拉不到），"
-                f"total_assets_cny 漏算这部分，集中度会偏高，请勿做大额操作。"
-            )
-            continue
-        total_assets_cny += value_cny
+    # 总资产走全仓库唯一实现 fx.total_portfolio_value（2026-10 基准币种第 1 步：这里原先自己算一份，
+    # 缺价的持仓直接剔出分母，和 status / 委员会路径的"按成本价计入"不一致，集中度偏高）。
+    # skipped_assets（行情过期熔断）照旧整个不计入。
+    from openinvest.utils.fx import total_portfolio_value
+    total_assets_cny, value_status = total_portfolio_value(
+        pm, current_prices, "CNY", exclude=tuple(skipped_assets))
+    data_warnings.extend(_value_warnings(value_status))
 
     portfolio_summary = _portfolio_summary(pm, total_assets_cny, current_prices)
     if data_warnings:
@@ -463,8 +433,11 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
 
     # 摩擦成本（NDQ 才有，黄金没有）
     if has_non_cny:
+        # 换汇摩擦只针对要换出去的人民币：可投额现在含外币现金（方案 A），外币部分不用换汇
+        _cny_avail = max(0.0, user_status.cash_cny)
+        _cap = user_status.max_single_invest_cny
         friction_report = get_cost_report(
-            invest_cny=user_status.disposable_for_invest,
+            invest_cny=min(_cny_avail, _cap) if _cap > 0 else _cny_avail,
             spot_rate=current_rate,
         )
     else:

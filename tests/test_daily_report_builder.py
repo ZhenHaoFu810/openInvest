@@ -30,6 +30,14 @@ from openinvest.jobs.daily_report_builder import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _offline_fx(monkeypatch):
+    """持仓摘要会按汇率折算外币现金（可投子弹方案 A）：固定汇率，别让测试去拉 yfinance / 写行情库"""
+    from openinvest.utils import fx
+    monkeypatch.setattr(fx, "get_fx_rate",
+                        lambda q, b="CNY", as_of_date=None: 1.0 if q == b else {"AUD": 4.7}.get(q))
+
+
 # ============ Fixture 辅助 ============
 
 def _make_pm(tmp_path, cash=None, holdings=None) -> PortfolioManager:
@@ -131,6 +139,17 @@ class TestPortfolioSummaryText:
         assert "总资产估算: ¥20,000（未计入 AAPL：拉不到汇率或价格，实际总资产更高）" in text
         plain = portfolio_summary_text(pm, total_assets_cny=20000.0, current_prices={})
         assert "总资产估算: ¥20,000\n" in plain   # 都算进去时文本不变
+
+    def test_dry_powder_counts_foreign_cash(self, tmp_path, monkeypatch):
+        """可投子弹 = 所有币种现金折算成人民币（方案 A）；只有人民币时与旧口径逐字相同"""
+        from openinvest.utils import fx
+        monkeypatch.setattr(fx, "get_fx_rate", lambda q, b="CNY", as_of_date=None: {"AUD": 4.7}.get(q, 1.0 if q == b else None))
+        only = portfolio_summary_text(_make_pm(tmp_path, cash={"CNY": 20000.0}, holdings=[]),
+                                      total_assets_cny=20000.0, current_prices={})
+        assert "  - 可投子弹 (dry_powder): ¥20,000\n" in only
+        mixed = portfolio_summary_text(_make_pm(tmp_path / "m", cash={"CNY": 20000.0, "AUD": 1000.0}, holdings=[]),
+                                       total_assets_cny=24700.0, current_prices={})
+        assert "可投子弹 (dry_powder): ¥24,700（含外币现金按汇率折算）" in mixed
 
     def test_aud_cash_shown_when_positive(self, tmp_path):
         """AUD 余额 > 0 时显示"""
@@ -764,3 +783,12 @@ class TestTranslator:
         )
         assert "一句话" in report
         assert "继续持有，不买也不卖" in report
+
+
+def test_daily_report_value_warnings_cover_each_status():
+    """日报总资产走 fx.total_portfolio_value 后，status → 告警文案的映射（#417 评审）"""
+    from openinvest.jobs.daily_report import _value_warnings
+    w = _value_warnings({"CNY": "ok", "SGD": "missing_fx", "X": "missing_price",
+                         "FUND:1": "cost_fallback", "Y": "excluded", "Z": "tracking_only"})
+    assert len(w) == 3
+    assert "SGD 折算 CNY 失败" in w[0] and "X 实时价不可用且无成本价" in w[1] and "按成本价计入" in w[2]

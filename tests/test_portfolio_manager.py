@@ -707,3 +707,12 @@ class TestBuyCurrencyMatchesHolding:
     def test_new_position_defaults_to_cny(self, tmp_path):
         pm2 = self._pm(tmp_path)
         assert pm2.buy("510300.SS", units=100.0, price=4.0)["currency"] == "CNY"
+
+
+
+def test_disposable_counts_foreign_cash(tmp_path):
+    """可投 = 所有币种现金折算成 CNY（方案 A）；exchange_rate 覆盖照旧生效"""
+    s = _make_store(tmp_path)
+    _seed_docs(s, cash={"CNY": 10000.0, "AUD": 1000.0}, holdings=[], max_single_invest_cny=0)
+    status = PortfolioManager(s).get_user_status(current_prices={}, exchange_rate=4.7)
+    assert status.disposable_for_invest == pytest.approx(14700.0)
