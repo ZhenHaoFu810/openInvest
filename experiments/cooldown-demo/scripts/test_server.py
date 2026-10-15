@@ -24,6 +24,7 @@ def client(monkeypatch):
     monkeypatch.setattr(server, "_used", server.Counter())
     monkeypatch.setattr(server, "_lookups", server.Counter())
     monkeypatch.setattr(server, "_facts_cache", {})
+    monkeypatch.setattr(server, "_misses", {})
     monkeypatch.setattr(server, "_sample", {"d": None, "job": None, "tries": 0})
     monkeypatch.setattr(server, "fund_facts", lambda code: None if code.startswith("9") else FACTS)
     monkeypatch.setattr(server.cooldown, "debate_summary", lambda sym, metrics: SCRIBE)
@@ -54,7 +55,9 @@ def test_lookups_are_limited_before_downloading_and_cached(client, monkeypatch):
     assert client.post("/api/debate", json={"code": "110011"}).status_code == 200
     assert client.post("/api/debate", json={"code": "110011"}).status_code == 200   # 缓存命中，不再下载
     assert client.post("/api/debate", json={"code": "900001"}).status_code == 404
-    assert client.post("/api/debate", json={"code": "900001"}).status_code == 404   # 不缓存：重查
+    assert client.post("/api/debate", json={"code": "900001"}).status_code == 404   # 2 分钟内：不重下、不扣额度
+    monkeypatch.setattr(server, "MISS_TTL", 0)
+    assert client.post("/api/debate", json={"code": "900001"}).status_code == 404   # 过期：重查
     assert client.post("/api/debate", json={"code": "900002"}).status_code == 429
     assert calls == ["110011", "900001", "900001"]
 
@@ -149,6 +152,7 @@ def test_lookup_miss_is_not_cached_so_a_flaky_source_recovers(client, monkeypatc
     """东方财富一次超时 = 返回 None；不能缓存成"当天这只基金对所有人都没找到"。"""
     answers = iter([None, FACTS])
     monkeypatch.setattr(server, "fund_facts", lambda code: next(answers))
+    monkeypatch.setattr(server, "MISS_TTL", 0)
     assert client.post("/api/debate", json={"code": "510300"}).status_code == 404
     r = client.post("/api/debate", json={"code": "510300"})
     assert r.status_code == 200 and r.json()["job_id"]
