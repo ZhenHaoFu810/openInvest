@@ -119,7 +119,7 @@ Hermes 自动发现全部 MCP 工具并与内置工具并列注册。skills 一�
 hermes plugins install openinvest --enable
 ```
 
-官方目录装的是 Nous 审核过、固定到某个提交的版本，不弹安全扫描确认；版本随我们提交的目录更新 PR
+官方目录装的是 Nous 审核过、固定到某个提交的版本，不弹安全扫描确认；`run.sh` 固定的后端版本也跟着这个提交走，所以 skills 和 MCP 工具都可能比 `main` 旧。版本随我们提交的目录更新 PR
 前进，可能比 `main` 晚。要 `main` 上的最新提交就按仓库路径装：
 `hermes plugins install longsizhuo/openInvest/plugin --enable`。
 
@@ -129,7 +129,7 @@ skill 是显式加载制，不进自动索引）。注意 `hermes skills install
 plugin 路线要装 `plugin/` 子目录：Hermes 0.21 起安装也会扫描整棵目录，从仓库根装会扫到
 docs/tests 并判 dangerous 直接拦下（2026-10-13 在 0.21.7 实测），`plugin/` 子目录扫描结果为 safe。
 以前从仓库根装过的：0.21 起 `hermes plugins update` 不再接管旧安装（报 no owned Git checkout），
-重装一次即可：`hermes plugins install openinvest --enable --force`（换成官方目录版；2026-10-15 实测，原来的启用状态保留）。
+重装一次即可，二选一：`hermes plugins install openinvest --enable --force` 换成官方目录版（2026-10-15 实测，原来的启用状态保留）；想继续跟 `main` 就用 `hermes plugins install longsizhuo/openInvest/plugin --enable --force`。
 
 **信息联动**：若装有 [Longbridge](https://github.com/longbridge/skills) 等行情/新闻
 skill，看到与持仓相关的新闻时用 `ingest_event` 喂进事件账本——券商级信息源

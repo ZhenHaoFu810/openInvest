@@ -1,5 +1,5 @@
 # Hermes Agent plugin manifest — the only copy; the repo-root plugin.yaml is a symlink to this file.
-# Install: hermes plugins install longsizhuo/openInvest/plugin --enable
+# Install: hermes plugins install openinvest --enable   (official catalog; newest main: longsizhuo/openInvest/plugin)
 # Registers the skills under ./skills. The MCP tools are a separate Hermes surface (config.yaml), see description.
 name: openinvest
 version: "0.24.3" # x-release-please-version
