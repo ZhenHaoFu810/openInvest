@@ -180,7 +180,11 @@ CLI_ALIASES = {
 
 def test_every_mcp_tool_has_cli_equivalent():
     """CLI 必须拥有全部功能（CLAUDE.md 产品哲学 #1）：新加 MCP 工具漏了 CLI 子命令 → 红。
-    曾漏过 explain_decision（只有 MCP 能回放决议，CLI/REST agent 拿不到）。"""
+    曾漏过 explain_decision（只有 MCP 能回放决议，CLI/REST agent 拿不到）。
+
+    注意：读 argparse 的 _actions / _option_string_actions（私有属性，多年稳定）；
+    Python 升级若改了它们，这个测试会先红，届时换成 parse_args 探测。
+    """
     import argparse
 
     from openinvest import cli

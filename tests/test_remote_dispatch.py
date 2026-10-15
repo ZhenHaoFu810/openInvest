@@ -328,3 +328,13 @@ def test_doctor_appends_remote_section(recorder, monkeypatch, capfd):
     assert out["remote"]["auth"] == "bearer_token"
     # 输出绝不回显 token
     assert "sekret-do-not-echo" not in json.dumps(out)
+
+
+def test_other_4xx_dies_with_json_not_traceback(recorder, capfd):
+    """403（Cloudflare Access 拦截）等 4xx 给结构化错误，不再落到 raise_for_status（#414 评审）"""
+    recorder["routes"][f"GET {BASE}/api/skill/status"] = FakeResponse(403, {"detail": "forbidden"})
+    with pytest.raises(SystemExit) as exc:
+        rd.maybe_dispatch_remote(Namespace(cmd="status"))
+    assert exc.value.code == 1
+    out = _out_json(capfd)
+    assert out["status"] == "error" and "403" in out["error"]

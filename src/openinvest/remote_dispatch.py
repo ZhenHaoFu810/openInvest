@@ -122,6 +122,15 @@ def _request(
             "error": f"hub 内部错误 HTTP {r.status_code}: {_detail(r) or r.text[:200]}",
             "hint": "看 hub 日志：journalctl -u invest-web -n 100",
         })
+    # 400 留给调用方（业务错误，CLI 同款 error JSON）；其余 4xx（403 Cloudflare Access 拦截、
+    # 404 端点不存在、422 请求体不合法……）原先落到 raise_for_status 抛 traceback（#414 评审）
+    if r.status_code >= 400 and r.status_code != 400:
+        _die({
+            "status": "error",
+            "error": f"hub 拒绝了请求 HTTP {r.status_code}: {_detail(r) or r.text[:200]}",
+            "hint": "403 多半是 Cloudflare Access 凭据不对（CF_ACCESS_CLIENT_ID/SECRET）；"
+                    "404 / 422 多半是 hub 版本比本机旧，先升级 hub",
+        })
     return r
 
 
