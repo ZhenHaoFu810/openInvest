@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.44.1](https://github.com/longsizhuo/openInvest/compare/v0.44.0...v0.44.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **experiments:** demo chart labels and install commands on narrow screens ([#422](https://github.com/longsizhuo/openInvest/issues/422)) ([c26ebb5](https://github.com/longsizhuo/openInvest/commit/c26ebb5168f694541a0242791d7c57d5c4d56e51))
+
+
+### Performance
+
+* **valuation:** skip the yfinance lookup for off-exchange fund symbols ([#420](https://github.com/longsizhuo/openInvest/issues/420)) ([f0e7711](https://github.com/longsizhuo/openInvest/commit/f0e77110464d5dc4a9cae0e949541b035480ebaf))
+
 ## [0.44.0](https://github.com/longsizhuo/openInvest/compare/v0.43.0...v0.44.0) (2026-10-15)
 
 
