@@ -52,7 +52,7 @@ _state_lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}
 _used: Counter = Counter()          # 辩论次数：ip / "*"
 _lookups: Counter = Counter()       # 查基金次数：ip / "*"
-_facts_cache: Dict[str, Any] = {}   # code → 当天的 fund_facts 结果（含 None），跨日清空
+_facts_cache: Dict[str, Any] = {}   # code → 当天查到的 fund_facts 结果，跨日清空（查不到的不缓存）
 _day = {"d": date.today()}
 _sample_lock = threading.Lock()
 _sample: Dict[str, Any] = {"d": None, "job": None, "tries": 0}
@@ -295,14 +295,17 @@ def start(body: DebateIn, request: Request) -> Dict[str, Any]:
     if not re.fullmatch(r"\d{6}", code):
         raise HTTPException(400, "请输入 6 位基金代码")
     ip = _client_ip(request)
-    if code not in _facts_cache:      # 同一只基金当天只下载一次
+    facts = _facts_cache.get(code)    # 同一只基金当天只下载一次
+    if facts is None:
         reason = _take(_lookups, ip, LOOKUP_PER_IP_DAILY, LOOKUP_GLOBAL_DAILY, "查询")
         if reason:
             raise HTTPException(429, reason)
-        _facts_cache[code] = fund_facts(code)
-    facts = _facts_cache[code]        # 先确认基金存在，再扣辩论次数、再花 LLM
-    if facts is None:
-        raise HTTPException(404, "没找到这只基金，确认一下代码")
+        facts = fund_facts(code)
+        # 查不到不缓存：东方财富一次超时会和"代码不存在"一样返回空，缓存下来就让这只基金
+        # 当天对所有人都"没找到"（10-12/13 的 510300、159819 等）。重查受上面的查询额度约束。
+        if facts is None:
+            raise HTTPException(404, "没找到这只基金：确认代码，或数据源暂时没响应，过一会再试")
+        _facts_cache[code] = facts       # 先确认基金存在，再扣辩论次数、再花 LLM
     reason = _take(_used, ip, PER_IP_DAILY, GLOBAL_DAILY, "辩论")
     if reason:
         raise HTTPException(429, reason)
