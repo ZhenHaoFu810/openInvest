@@ -265,6 +265,34 @@ def _h_event_check(args: argparse.Namespace) -> None:
     _print_response_or_die(_request("POST", "/api/events/check", timeout=180))
 
 
+def _h_explain_decision(args: argparse.Namespace) -> None:
+    """转发 hub 现有的单条决议端点，拼成本地 explain_decision 同形状。
+    该端点不带 path snapshot（web API 不再新增端点）→ path_snapshot 恒为 None；
+    要 snapshot 用 hub 的 remote MCP explain_decision。"""
+    from openinvest.core.decision_ledger import parse_committee_text, parse_decision_id
+    try:
+        date, symbol = parse_decision_id(args.decision_id)
+    except ValueError as e:
+        _die({"status": "error", "error": str(e)})
+    r = _request("GET", f"/api/committee_sessions/{date}/{safe_symbol(symbol)}",
+                 timeout=15, ok_404=True)
+    if r.status_code == 404:
+        _die({"status": "error", "error": f"decision {args.decision_id} not found on hub"})
+    r.raise_for_status()
+    body = r.json()
+    md = body.get("content") or ""
+    parsed = parse_committee_text(md)
+    if not parsed:
+        _die({"status": "error", "error": f"decision {args.decision_id} has no verdict on hub"})
+    _print_json({
+        "decision_id": args.decision_id,
+        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny")},
+        "confidence_lookup": body.get("confidence_lookup"),   # 旧 hub 没这个字段 → None
+        "transcript_markdown": md,
+        "path_snapshot": None,
+    })
+
+
 def _hub_today(symbol_tz_fallback: bool = True) -> str:
     """用 hub 的 /api/health 时间戳推"今天"——避免客户端/hub 时区错位导致同日 cache 失效"""
     r = _request("GET", "/api/health", timeout=15)
@@ -417,6 +445,7 @@ _HANDLERS: Dict[str, Callable[[argparse.Namespace], None]] = {
     "save_committee": _h_save_committee,
     "run_committee": _h_run_committee,
     "event_check": _h_event_check,
+    "explain_decision": _h_explain_decision,
 }
 
 

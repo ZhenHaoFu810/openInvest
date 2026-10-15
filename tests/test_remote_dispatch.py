@@ -292,6 +292,31 @@ def test_run_committee_same_day_cache(recorder, capfd):
     assert not any(c["url"].endswith("/api/committee/run") for c in recorder["calls"])
 
 
+def test_explain_decision_forwards_to_committee_session(recorder, capfd):
+    """真实 symbol → safe_symbol 路径；输出与本地 explain_decision 同形状（hub 无 snapshot → None）"""
+    md = "# Committee\n**Symbol**: GC=F\n**Verdict**: HOLD (confidence 0.65)\n" \
+         "**Suggested allocation CNY**: -5,000\n"
+    recorder["routes"][f"GET {BASE}/api/committee_sessions/2026-07-03/GC_F"] = FakeResponse(
+        200, {"content": md, "confidence_lookup": "LOOKUP-TEXT"})
+    rd.maybe_dispatch_remote(Namespace(cmd="explain_decision", decision_id="2026-07-03/GC=F"))
+    assert _out_json(capfd) == {
+        "decision_id": "2026-07-03/GC=F", "verdict": "HOLD", "confidence": 0.65,
+        "alloc_cny": -5000.0, "confidence_lookup": "LOOKUP-TEXT",
+        "transcript_markdown": md, "path_snapshot": None,
+    }
+
+
+def test_explain_decision_bad_id_and_404(recorder, capfd):
+    with pytest.raises(SystemExit):   # date 段防逃逸：本地就拒，不发请求
+        rd.maybe_dispatch_remote(Namespace(cmd="explain_decision", decision_id="../skill/X"))
+    assert not recorder["calls"]
+    assert "error" in _out_json(capfd)
+    recorder["routes"][f"GET {BASE}/api/committee_sessions/2026-07-03/NOPE"] = FakeResponse(404)
+    with pytest.raises(SystemExit) as exc:
+        rd.maybe_dispatch_remote(Namespace(cmd="explain_decision", decision_id="2026-07-03/NOPE"))
+    assert exc.value.code == 1 and "not found" in _out_json(capfd)["error"]
+
+
 def test_doctor_appends_remote_section(recorder, monkeypatch, capfd):
     monkeypatch.setenv("INVEST_API_TOKEN", "sekret-do-not-echo")
     recorder["routes"][f"GET {BASE}/api/doctor"] = FakeResponse(

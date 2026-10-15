@@ -170,6 +170,33 @@ def test_cli_mcp_subcommand_strips_argv(monkeypatch):
     assert seen["argv"] == ["openinvest"]
 
 
+# MCP 工具名 → (CLI 子命令, 必须存在的 flag)：只收"改名映射"，同名的不用登记
+CLI_ALIASES = {
+    "record_existing_position": ("buy", "--existing-position"),
+    "add_news_source": ("news_sources", "--add"),
+    "remove_news_source": ("news_sources", "--remove"),
+}
+
+
+def test_every_mcp_tool_has_cli_equivalent():
+    """CLI 必须拥有全部功能（CLAUDE.md 产品哲学 #1）：新加 MCP 工具漏了 CLI 子命令 → 红。
+    曾漏过 explain_decision（只有 MCP 能回放决议，CLI/REST agent 拿不到）。"""
+    import argparse
+
+    from openinvest import cli
+    from openinvest.connectors.mcp_server import mcp
+
+    sub = next(a for a in cli.build_parser()._actions
+               if isinstance(a, argparse._SubParsersAction))
+    missing = []
+    for t in asyncio.run(mcp.list_tools()):
+        cmd, flag = CLI_ALIASES.get(t.name, (t.name, None))
+        p = sub.choices.get(cmd)
+        if p is None or (flag and flag not in p._option_string_actions):
+            missing.append(t.name)
+    assert missing == [], f"这些 MCP 工具没有 CLI 等价物: {missing}"
+
+
 # ============================================================================
 # issue #133 merge 后差距 #2 / #3
 # ============================================================================
