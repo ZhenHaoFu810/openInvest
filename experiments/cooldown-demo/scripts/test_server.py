@@ -24,6 +24,7 @@ def client(monkeypatch):
     monkeypatch.setattr(server, "_used", server.Counter())
     monkeypatch.setattr(server, "_lookups", server.Counter())
     monkeypatch.setattr(server, "_facts_cache", {})
+    monkeypatch.setattr(server, "_misses", {})
     monkeypatch.setattr(server, "_sample", {"d": None, "job": None, "tries": 0})
     monkeypatch.setattr(server, "fund_facts", lambda code: None if code.startswith("9") else FACTS)
     monkeypatch.setattr(server.cooldown, "debate_summary", lambda sym, metrics: SCRIBE)
@@ -46,15 +47,19 @@ def test_rejects_bad_and_unknown_codes_without_using_debate_quota(client):
 
 
 def test_lookups_are_limited_before_downloading_and_cached(client, monkeypatch):
-    """查基金要下载东方财富净值：额度在下载之前扣，查不到的代码也算；同一只当天只下载一次。"""
+    """查基金要下载东方财富净值：额度在下载之前扣，查不到的代码也算（且不缓存、重查再扣）；
+    查到的同一只当天只下载一次。"""
     calls = []
-    monkeypatch.setattr(server, "fund_facts", lambda code: calls.append(code))
-    monkeypatch.setattr(server, "LOOKUP_PER_IP_DAILY", 2)
+    monkeypatch.setattr(server, "fund_facts", lambda code: calls.append(code) or (FACTS if code == "110011" else None))
+    monkeypatch.setattr(server, "LOOKUP_PER_IP_DAILY", 3)
+    assert client.post("/api/debate", json={"code": "110011"}).status_code == 200
+    assert client.post("/api/debate", json={"code": "110011"}).status_code == 200   # 缓存命中，不再下载
     assert client.post("/api/debate", json={"code": "900001"}).status_code == 404
-    assert client.post("/api/debate", json={"code": "900001"}).status_code == 404   # 缓存命中
-    assert client.post("/api/debate", json={"code": "900002"}).status_code == 404
-    assert client.post("/api/debate", json={"code": "900003"}).status_code == 429
-    assert calls == ["900001", "900002"]
+    assert client.post("/api/debate", json={"code": "900001"}).status_code == 404   # 2 分钟内：不重下、不扣额度
+    monkeypatch.setattr(server, "MISS_TTL", 0)
+    assert client.post("/api/debate", json={"code": "900001"}).status_code == 404   # 过期：重查
+    assert client.post("/api/debate", json={"code": "900002"}).status_code == 429
+    assert calls == ["110011", "900001", "900001"]
 
 
 def test_facts_go_out_without_internal_metrics_table(client):
@@ -141,3 +146,13 @@ def test_home_redirects_to_registered_mirror_unless_disabled(client, monkeypatch
     monkeypatch.setattr(server, "HOME_REDIRECT", "")
     page = client.get("/")
     assert page.status_code == 200 and "<html" in page.text.lower()
+
+
+def test_lookup_miss_is_not_cached_so_a_flaky_source_recovers(client, monkeypatch):
+    """东方财富一次超时 = 返回 None；不能缓存成"当天这只基金对所有人都没找到"。"""
+    answers = iter([None, FACTS])
+    monkeypatch.setattr(server, "fund_facts", lambda code: next(answers))
+    monkeypatch.setattr(server, "MISS_TTL", 0)
+    assert client.post("/api/debate", json={"code": "510300"}).status_code == 404
+    r = client.post("/api/debate", json={"code": "510300"})
+    assert r.status_code == 200 and r.json()["job_id"]
