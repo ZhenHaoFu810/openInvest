@@ -117,6 +117,7 @@ codex plugin add invest@openinvest
 
 # Hermes Agent（官方插件目录）
 hermes plugins install openinvest --enable
+# 老版本 Hermes 没有插件目录时：hermes plugins install longsizhuo/openInvest/plugin --enable
 
 # OpenClaw
 openclaw plugins install clawhub:openinvest
