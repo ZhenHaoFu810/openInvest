@@ -212,6 +212,8 @@ class PortfolioManager:
             # For backtest/historical use, thread as_of_date like utils.fx.to_base (see PR#53 fix(fx)).
             return to_base(ccy, amount, "CNY")
 
+        # ponytail: portfolio_value 没有调用方（只有测试读），保留自己的粗算而不并进
+        # fx.total_portfolio_value；有人要用它时先换成那个唯一实现。
         portfolio_value = cash_cny
         # 多币种 cash 全部折算（不只 CNY/AUD）
         for ccy, amt in self.cash.items():
@@ -243,10 +245,10 @@ class PortfolioManager:
                 portfolio_value += value_cny
             # 拉不到汇率的 holding 静默跳过（缺口告警在 daily_report 那层做）
 
-        # 可投 = 所有币种现金折算成 CNY（基准币种方案 A，2026-10）；只有 CNY 现金时与旧口径相同。
-        # 与 fx.dry_powder 同口径，这里走 _ccy_to_cny 以沿用 exchange_rate 覆盖（确定性测试）
-        cash_values = (_ccy_to_cny(float(a or 0), str(c).upper()) for c, a in self.cash.items())
-        available = max(0.0, sum(v for v in cash_values if v is not None))
+        # 可投 = 所有币种现金折算成 CNY（基准币种方案 A，2026-10）；与持仓摘要同一实现 fx.dry_powder
+        from openinvest.utils.fx import dry_powder
+        available, _missing = dry_powder(
+            self, "CNY", rate_override={"AUD": float(exchange_rate)} if exchange_rate is not None else None)
         disposable = min(available, max_single) if max_single > 0 else available
 
         return UserStatus(

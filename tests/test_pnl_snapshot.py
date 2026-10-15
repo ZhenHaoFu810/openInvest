@@ -520,3 +520,15 @@ def test_persist_outperform_never_touches_readme(monkeypatch, tmp_path):
     pnl_snapshot._persist_outperform([{"ts": "2026-10-10T10:00:00", "label": "x", "benchmark": "b"}])
     assert readme.read_text(encoding="utf-8") == "<!-- OUTPERFORM_FEED_START -->\n<!-- OUTPERFORM_FEED_END -->\n"
     assert len((tmp_path / "docs" / "outperform_events.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_missing_aud_rate_skips_with_its_own_reason(monkeypatch):
+    """有澳元持仓却拉不到汇率：不编汇率、跳过，并说清是汇率问题（不是 no_portfolio）"""
+    from openinvest.jobs import pnl_snapshot as ps
+
+    def boom(store):
+        raise ps._FxUnavailable("AUDCNY")
+    monkeypatch.setattr(ps, "_compute_snapshot", boom)
+    monkeypatch.setattr(ps, "_is_trading_window", lambda *a, **k: True)
+    out = ps.run()
+    assert out == {"status": "skipped", "reason": "missing_fx", "pair": "AUDCNY"}

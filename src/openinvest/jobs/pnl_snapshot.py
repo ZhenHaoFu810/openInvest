@@ -107,6 +107,10 @@ def _safe_close(symbol: str) -> Optional[float]:
     return float(df["Close"].iloc[-1])
 
 
+class _FxUnavailable(Exception):
+    """有外币持仓却拉不到汇率：这次不记快照（不再编一个汇率）"""
+
+
 def _compute_snapshot(store: MemoryStore) -> Optional[Snapshot]:
     """v2 通用化：读 holdings 数组而不是写死字段"""
     portfolio = store.read("portfolio")
@@ -141,7 +145,7 @@ def _compute_snapshot(store: MemoryStore) -> Optional[Snapshot]:
     from openinvest.utils.fx import get_fx_rate
     audcny = _safe_close("AUDCNY=X") or get_fx_rate("AUD", "CNY")
     if not audcny and ndq_shares > 0:
-        return None
+        raise _FxUnavailable("AUDCNY")
     audcny = audcny or 0.0
     ndq_price = _safe_close("NDQ.AX")
     # 用 strategy.target_assets[gold].price_offset_pct 让 gold_now（"现在按浙商克价
@@ -472,7 +476,10 @@ def run() -> Dict[str, Any]:
                 "now": datetime.now().isoformat(timespec="seconds")}
 
     store = MemoryStore()
-    snap = _compute_snapshot(store)
+    try:
+        snap = _compute_snapshot(store)
+    except _FxUnavailable as e:
+        return {"status": "skipped", "reason": "missing_fx", "pair": str(e)}
     if snap is None:
         return {"status": "skipped", "reason": "no_portfolio"}
 

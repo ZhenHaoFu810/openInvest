@@ -146,8 +146,9 @@ def total_portfolio_value(
 ) -> tuple[float, dict]:
     """通用化总资产估算：所有 cash 多币种 + 所有 holdings × current_prices × FX 折算到 base
 
-    全仓库总资产的唯一实现（2026-10 基准币种第 1 步：status / 委员会两条路径 / 日报 /
-    PortfolioManager.get_user_status 原先各算一份，口径已漂移）。
+    status / 委员会两条路径 / 日报共用的总资产实现（2026-10 基准币种第 1 步：日报原先自己算一份，
+    缺价持仓直接剔出分母，和其他路径口径不一）。PortfolioManager.get_user_status 的
+    portfolio_value 没有调用方，未并入。
 
     替代 7 处 `if ccy == "AUD"` 风格硬编码。fork 用户持 USD/EUR/JPY/HKD 等任意币种
     都能正确折算；缺价 / 缺汇率单独标 status 不计入 total（避免 0 兜底误导 Risk）。
@@ -210,6 +211,7 @@ def total_portfolio_value(
         # price <= 0 同样是缺价信号：多处 _safe_close（skill_views/_helpers/coordinator）
         # 拉取失败返回 0.0 哨兵，当有效价会把整个持仓估值成 0、total 静默缩水且 status
         # 仍报 "ok"（CR 三个 agent 同时命中的 0.0 污染类）——一并按缺价走 cost 兜底。
+        used_cost = False
         if price is None or not math.isfinite(price) or price <= 0:
             # 缺价：用 cost 兜底（与 portfolio_manager.get_user_status 同口径）
             avg = float(h.get("avg_cost", 0) or 0)
@@ -217,7 +219,7 @@ def total_portfolio_value(
                 status[sym] = "missing_price"
                 continue
             price = avg
-            status[sym] = "cost_fallback"
+            used_cost = True
         # cost 兜底后仍非有限（理论上 avg 已 >0 finite，这里 belt-and-suspenders）
         if not math.isfinite(price):
             status[sym] = "missing_price"
@@ -229,7 +231,7 @@ def total_portfolio_value(
             status[sym] = "missing_fx" if math.isfinite(local_value) else "missing_price"
             continue
         total += value_in_base
-        status.setdefault(sym, "ok")
+        status[sym] = "cost_fallback" if used_cost else "ok"
 
     return round(total, 2), status
 
@@ -238,12 +240,22 @@ def total_portfolio_value(
 total_portfolio_value_cny = total_portfolio_value
 
 
-def dry_powder(pm, base: str = "CNY") -> tuple[float, List[str]]:
+def dry_powder(pm, base: str = "CNY", *,
+               rate_override: Optional[dict] = None) -> tuple[float, List[str]]:
     """可投现金（基准币种方案 A，2026-10 用户签字）：所有币种现金折算到 base 的总和，不小于 0。
 
     之前只算 CNY 现金——持 AUD/USD 现金的用户可投额被低估。拉不到汇率的币种不计入、
-    列进第二个返回值，调用方要说出来。
+    列进第二个返回值（大写币种码），调用方要说出来。余额为 0 的币种不查汇率。
+    rate_override: {币种: 汇率} 覆盖实时汇率（get_user_status 的 exchange_rate 确定性测试）。
     """
-    total, rates = cash_total_in_base(dict(pm.cash), base)
-    missing = sorted(c for c, r in rates.items() if r is None and float(pm.cash.get(c) or 0))
-    return max(0.0, total), missing
+    total, missing = 0.0, []
+    for ccy, amt in pm.cash.items():
+        ccy, amt = str(ccy).upper(), float(amt or 0)
+        if not amt:
+            continue
+        rate = (rate_override or {}).get(ccy) or get_fx_rate(ccy, base)
+        if rate is None:
+            missing.append(ccy)
+        else:
+            total += amt * rate
+    return max(0.0, round(total, 2)), sorted(missing)

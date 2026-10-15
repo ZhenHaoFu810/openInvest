@@ -248,3 +248,21 @@ def test_total_value_excludes_listed_symbols_and_flags_cost_fallback(monkeypatch
     assert total == 100.0 + 30.0 + 20.0       # A 现价、B 成本价兜底、C 被排除
     assert status["A"] == "ok" and status["B"] == "cost_fallback" and status["C"] == "excluded"
     assert fx.total_portfolio_value_cny is fx.total_portfolio_value
+
+
+def test_dry_powder_upper_cases_skips_zero_and_honors_override(monkeypatch):
+    asked = []
+    monkeypatch.setattr(fx, "get_fx_rate",
+                        lambda q, b="CNY", as_of_date=None: asked.append(q) or (1.0 if q == b else None))
+    total, missing = fx.dry_powder(_CashPM({"cny": 100.0, "aud": 10.0, "usd": 0}))
+    assert (total, missing) == (100.0, ["AUD"])          # 键统一大写；余额 0 的 USD 不查汇率
+    assert "USD" not in asked
+    assert fx.dry_powder(_CashPM({"CNY": 100.0, "AUD": 10.0}), rate_override={"AUD": 5.0}) == (150.0, [])
+
+
+def test_duplicate_symbol_rows_status_follows_last_row(monkeypatch):
+    _pairs(monkeypatch, {})
+    rows = [{"symbol": "A", "units": 1, "avg_cost": 2.0, "cost_currency": "CNY"},
+            {"symbol": "A", "units": 1, "avg_cost": 2.0, "cost_currency": "CNY"}]
+    _, status = fx.total_portfolio_value(_CashPM({}, rows), {"A": 3.0}, "CNY")
+    assert status["A"] == "ok"
