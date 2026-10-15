@@ -30,8 +30,13 @@ codex mcp add openinvest --env INVEST_HOME=$HOME/openInvest -- uvx openinvest-mc
 
 **Hermes Agent:**
 ```
-hermes plugins install longsizhuo/openInvest/plugin --enable
+hermes plugins install openinvest --enable
 ```
+That installs the version listed in Hermes's official plugin catalog (a reviewed,
+pinned commit), and the backend version that `run.sh` pins comes with it — so a
+catalog install can lag `main` in both skills and MCP tools. For the newest commit
+on `main` instead, install by repo path:
+`hermes plugins install longsizhuo/openInvest/plugin --enable`.
 For the MCP tools, add this to `~/.hermes/config.yaml`. It runs the plugin's own
 `run.sh`, which pins the backend to the version this plugin release was built with
 (the plugin is installed in `$HERMES_HOME/plugins/openinvest`; replace `YOU`, and

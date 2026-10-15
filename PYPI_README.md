@@ -50,8 +50,9 @@ Skills (committee orchestration protocol) + MCP server, bundled:
 codex plugin marketplace add longsizhuo/openInvest
 codex plugin add invest@openinvest
 
-# Hermes Agent
-hermes plugins install longsizhuo/openInvest/plugin --enable
+# Hermes Agent (official plugin catalog)
+hermes plugins install openinvest --enable
+# older Hermes without the catalog: hermes plugins install longsizhuo/openInvest/plugin --enable
 ```
 
 ## What it does

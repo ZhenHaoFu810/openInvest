@@ -115,8 +115,9 @@ OpenInvest 刻意避免“占有”用户。大多数 AI 产品都试图占有�
 codex plugin marketplace add longsizhuo/openInvest
 codex plugin add invest@openinvest
 
-# Hermes Agent
-hermes plugins install longsizhuo/openInvest/plugin --enable
+# Hermes Agent（官方插件目录）
+hermes plugins install openinvest --enable
+# 老版本 Hermes 没有插件目录时：hermes plugins install longsizhuo/openInvest/plugin --enable
 
 # OpenClaw
 openclaw plugins install clawhub:openinvest
