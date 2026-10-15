@@ -91,6 +91,7 @@ openInvest 有三个调用层，每层服务不同对象：
 | 2026-05-15 | wealth_context_view 三个月没进 production | entry 各自 prep, 漏一处 | import-linter + contract test 上线 |
 | 2026-05-16 | daily_report cron 路径 event_brief 全漏（4 处）：run_macro_view / run_committee for-loop / Gemini prompt 均未注入 event_brief；Gemini prompt 也未注入 wealth_view | daily_report 直调原语，Gemini prompt 是硬编码 f-string，resolve_event_brief_multi 虽已存在但 cron 路径没调用 | resolve_event_brief_multi 调用注入 macro + committee；Gemini prompt 抽 build_gemini_prompt() 纯函数接 wealth_view/event_brief；4 处 SENTINEL 契约测试上线 |
 | 2026-05-16 | 三路径（Skill/Web/Cron）各自手搓 multi-asset orchestrator，3 个月连续 4 次跨 entry 参数漂移事故。**根治**: 抽 `run_committee_session` 作为三路径单一可信源；service layer `run_committee_for_symbol` 同时漏接 prior_insights（Web/GUI 永远看不到 Dreaming） | 缺少统一 orchestrator，每个 entry 自己重建 macro 共享 / event multi 召回 / wealth view 注入 | run_committee_session(symbols=, ...) 主入口；run_committee_for_symbol 加 portfolio_summary_override + prior_insights_override + wealth_context_view override kwargs；3 个 entry 全部改走 session；旧 entry-specific contract test 删除，统一 session 契约守 |
+| 2026-10-14 | Coordinator 路径（`prepare_committee_brief`）事件层全漏：`load_sentiment_brief()` 不传 event_brief（无 EVENT_STANCE 行）、brief 里没有 event_brief 给 Macro；同标的 cron/Direct 的最强论据来自事件层，Coordinator 永远看不到 | Coordinator 不走 session，`prepare_committee_brief` 自己 prep，event 召回只在 session 里 | 改调同源 `resolve_event_brief_multi([SYM])` + `loaders.append_event_stance_line`（session 也改用它），brief 暴露 `event_brief`，protocol 指导粘进 Macro；`tests/test_prepare_committee.py` SENTINEL 守 |
 
 新增漂移事故 → 在这表加一行 + 加新 contract test。
 

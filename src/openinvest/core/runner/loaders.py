@@ -65,6 +65,25 @@ def load_sentiment_brief(event_brief: str = "") -> str:
         return ""
 
 
+def append_event_stance_line(
+    sentiment_brief: str, event_brief: str, symbol: str, *, tracks: Optional[Any] = None,
+) -> str:
+    """per-asset 净情绪行：从该资产视角过滤 event_brief（头行 [syms] 含本 symbol）附到
+    sentiment_brief 末尾，返回新串（市场级共享 brief 不被改）。
+
+    Direct（run_committee_for_symbol）与 Coordinator（prepare_committee_brief）共用。
+    仅基座非空才附加（守"VIX 拿不到整块降级"红线）；无命中 / 失败 → 原样返回。
+    tracks = strategy 资产的可选 `tracks` 字段（issue #26 用户声明追踪的指数）。
+    """
+    try:
+        from openinvest.utils.sentiment import event_stance_line_for_symbol
+        line = event_stance_line_for_symbol(event_brief, symbol, tracks=tracks)
+    except Exception as e:  # noqa: BLE001  聚合行失败不阻断委员会
+        log.warning(f"per-asset EVENT_STANCE 行构建失败 graceful 跳过: {e}")
+        return sentiment_brief
+    return sentiment_brief + "\n" + line if (line and sentiment_brief) else sentiment_brief
+
+
 def load_valuation_brief(
     symbol: str, price_quantile_2y: Optional[float] = None,
 ) -> str:
@@ -171,6 +190,7 @@ def _build_default_portfolio_summary(pm: PortfolioManager) -> str:
         )
 
 __all__ = [
+    "append_event_stance_line",
     "load_prior_insights",
     "load_sentiment_brief",
     "load_valuation_brief",

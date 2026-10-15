@@ -134,8 +134,9 @@ Read `references/committee-protocol.md` and follow it strictly. Full 6 stages:
 - Stage 6: `save_committee` to persist
 
 **Critical warning**: the `regime_brief` / `sentiment_brief` /
-`valuation_brief` / `reentry_reference` emitted by `prepare_committee` **must** be pasted
-verbatim into the corresponding workers' prompts per the instructions: regime + valuation +
+`valuation_brief` / `reentry_reference` / `event_brief` emitted by `prepare_committee` **must** be pasted
+verbatim into the corresponding workers' prompts per the instructions: `event_brief` (news/event
+layer, may be empty) goes into Macro; regime + valuation +
 sentiment go into Quant; all three blocks + the path reference go into the CIO. Consequences
 of omission: Quant loses the probability framing and the defensive-sentinel background; the
 CIO's EXPECTED_PATH is made up out of thin air; INDEP_DEFENSE_FLAG

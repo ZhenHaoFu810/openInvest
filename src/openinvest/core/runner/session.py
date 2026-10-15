@@ -25,7 +25,7 @@ from openinvest.utils.market_metrics import METRICS_PERIOD, compute_metrics
 log = logging.getLogger(__name__)
 
 from openinvest.core.runner.event_brief import _get_event_store, _resolve_event_brief, format_event_brief, resolve_event_brief_multi
-from openinvest.core.runner.loaders import _build_default_portfolio_summary, load_prior_insights, load_sentiment_brief, load_valuation_brief
+from openinvest.core.runner.loaders import _build_default_portfolio_summary, append_event_stance_line, load_prior_insights, load_sentiment_brief, load_valuation_brief
 from openinvest.core.runner.intervention import _extract_regime_label, _save_path_snapshot, gold_defense_dca_plan, record_intervention
 
 def run_committee_for_symbol(
@@ -212,17 +212,11 @@ def run_committee_for_symbol(
     # 只改本地副本——session 共享的市场级 sentiment_brief 不变（与 valuation 的
     # 市场级/资产级分工同构）。仅基座非空才附加（守"VIX 拿不到整块降级"红线）。
     # 标的来自本函数 symbol 参数（← strategy.target_assets 动态解析），无硬编码。
-    try:
-        from openinvest.utils.sentiment import event_stance_line_for_symbol
-        _per_asset_stance = event_stance_line_for_symbol(
-            effective_event_brief, symbol,
-            tracks=target.get("tracks"),  # issue #26: 用户可选声明追踪的指数
-        )
-    except Exception as e:  # noqa: BLE001  聚合行失败不阻断委员会
-        log.warning(f"per-asset EVENT_STANCE 行构建失败 graceful 跳过: {e}")
-        _per_asset_stance = None
-    if _per_asset_stance and effective_sentiment_brief:
-        effective_sentiment_brief = effective_sentiment_brief + "\n" + _per_asset_stance
+    # 与 Coordinator（prepare_committee_brief）共用 loaders.append_event_stance_line。
+    effective_sentiment_brief = append_event_stance_line(
+        effective_sentiment_brief, effective_event_brief, symbol,
+        tracks=target.get("tracks"),  # issue #26: 用户可选声明追踪的指数
+    )
     if effective_sentiment_brief:
         emit("sentiment_brief_loaded", preview=effective_sentiment_brief[:240])
     # 估值：per-asset，仅权益类出（黄金/商品走 Macro 货币因素返 ""）

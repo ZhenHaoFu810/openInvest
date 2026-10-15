@@ -18,7 +18,10 @@ from openinvest.utils.market_metrics import METRICS_PERIOD, compute_metrics
 
 log = logging.getLogger(__name__)
 
-from openinvest.core.runner.loaders import load_prior_insights, load_sentiment_brief, load_valuation_brief
+from openinvest.core.runner.event_brief import resolve_event_brief_multi
+from openinvest.core.runner.loaders import (
+    append_event_stance_line, load_prior_insights, load_sentiment_brief, load_valuation_brief,
+)
 
 # ============================================================================
 # Coordinator 路径 service functions — prepare / save（CLI 与 Web API 共享）
@@ -143,7 +146,17 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
     # MARKET SENTIMENT（INDEP_DEFENSE_FLAG 不进 transcript → save_committee 的
     # 确定性防御降级永不触发）、EXPECTED_PATH 没有路径参考可引用。
     # 与 run_committee_for_symbol step 5.8 同源 loader（graceful 退化空串）。
-    sentiment_brief = load_sentiment_brief()
+    #
+    # 2026-10-14 漂移修复（coordinator 事件层对齐）: 此前这里 load_sentiment_brief()
+    # 不传 event_brief、Macro 只拿 get_macro_data 数字——Coordinator 看不到事件层
+    # （EVENT_STANCE 行 + Macro 的盘中事件上下文），同标的 Direct/cron 却看得到。
+    # 召回与 Direct `run_committee SYM`（session symbols=[SYM] → multi recall）同源；
+    # events.db 空 / RAG 关 / 任何失败 → ""（插件无 cron 场景），各段自动跳过。
+    event_brief = resolve_event_brief_multi([target["symbol"]])
+    sentiment_brief = append_event_stance_line(
+        load_sentiment_brief(event_brief), event_brief, target["symbol"],
+        tracks=target.get("tracks"),
+    )
     valuation_brief = load_valuation_brief(
         target["symbol"], metrics.get("price_quantile_2y"),
     )
@@ -170,6 +183,8 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
         "asset": target,
         "portfolio_summary": portfolio_summary,
         "macro_data": macro_data,
+        # 事件层 RAG 召回（Macro 专用，与 Direct run_macro_view(event_brief=) 同口径）
+        "event_brief": event_brief,
         "market_data": market,
         "regime_brief": regime_brief,  # Claude worker 必须把这个塞进 Quant Round 1/2 prompt
         # 确定性事实块（2026-06）: sentiment 进 Quant+CIO（INDEP_DEFENSE_FLAG 必须
@@ -198,6 +213,11 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
             "  Round 1 - 独立陈述: Macro (跨资产共享) + Quant + Risk Officer 各自看自己的数据\n"
             "  Round 2 - 横向交流: Quant 看到 Risk 报告后调整 + Risk 看到 Quant 报告后调整\n"
             "  Round 3 - CIO 综合 4 份输出 + portfolio_summary，输出完整 memo\n"
+            "**Macro 必须塞 event_brief**（与 Direct 路径 run_macro_view 同口径）: prompt 模板:\n"
+            '  "<paste prompts.macro_strategist>\\n\\n# 当前宏观数据参考:\\n<paste macro_data>'
+            '\\n\\n## 当前事件上下文（按时间排序，最新在前；可能含 supersedes 标记）\\n<paste event_brief>"\n'
+            "  event_brief 为空串=事件层无数据（无 cron / events.db 空），该段跳过。\n"
+            "  事件层只进 Macro；CIO 经 Macro 报告 + sentiment_brief 的 EVENT_STANCE 行看到它。\n"
             "**Quant 必须塞 regime_brief + 确定性事实块**: 召唤 Quant Round 1/2 worker 时，prompt 模板:\n"
             '  "<paste prompts.quant_round1>\\n\\n# 市场 Regime:\\n<paste regime_brief>'
             '\\n\\n# 估值 (确定性事实):\\n<paste valuation_brief>'
