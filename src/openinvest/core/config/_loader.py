@@ -22,6 +22,7 @@ from .tunable import (
     OracleAccuracyConfig,
     RegimeConfig,
     PathConfig,
+    PortfolioConfig,
     RewardConfig,
     SentimentConfig,
     StalenessConfig,
@@ -75,7 +76,7 @@ def _read_env_overrides() -> dict[str, Any]:
 
     # 已知的多词 section 名（按长度降序排列，确保最长前缀优先匹配）
     _KNOWN_SECTIONS = sorted(
-        ["oracle_accuracy", "macro_buckets", "staleness", "language",
+        ["oracle_accuracy", "macro_buckets", "staleness", "language", "portfolio",
          "regime", "verdict", "dreaming", "reward", "sentiment", "valuation", "path", "dca", "event"],
         key=len,
         reverse=True,
@@ -160,6 +161,7 @@ def _build_tunable_from_dict(data: dict[str, Any]) -> TunableConfig:
 
     # 构建各子 config
     language = LanguageConfig(**{k: v for k, v in data.get("language", {}).items() if k in {f.name for f in fields(LanguageConfig)}})
+    portfolio = PortfolioConfig(**{k: v for k, v in data.get("portfolio", {}).items() if k in {f.name for f in fields(PortfolioConfig)}})
     regime = RegimeConfig(**{k: v for k, v in regime_data.items() if k in {f.name for f in fields(RegimeConfig)}})
     verdict = VerdictConfig(**{k: v for k, v in data.get("verdict", {}).items() if k in {f.name for f in fields(VerdictConfig)}})
 
@@ -199,6 +201,7 @@ def _build_tunable_from_dict(data: dict[str, Any]) -> TunableConfig:
 
     return TunableConfig(
         language=language,
+        portfolio=portfolio,
         regime=regime,
         verdict=verdict,
         dreaming=dreaming,

@@ -23,9 +23,10 @@ def build_output_language_directive(*, artifact: str, keep_verbatim_headers: boo
         }.get(artifact, artifact)
         directive = f"请使用中文输出你的{zh_artifact}。"
     if keep_verbatim_headers:
+        from openinvest.utils.base_currency import base_currency
         directive += (
             " Keep all required section headers, field names, enum values, and parser-facing markers verbatim in English "
-            "(for example: VERDICT, CONFIDENCE, DOMINANT_VIEW, SUGGESTED_ALLOC_CNY, TRIM_REASON, REENTRY_PRICE, REENTRY_CONDITION, EXPECTED_PATH)."
+            f"(for example: VERDICT, CONFIDENCE, DOMINANT_VIEW, SUGGESTED_ALLOC_{base_currency()}, TRIM_REASON, REENTRY_PRICE, REENTRY_CONDITION, EXPECTED_PATH)."
         )
     return directive
 

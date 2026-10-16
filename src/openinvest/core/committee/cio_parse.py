@@ -26,7 +26,9 @@ log = logging.getLogger(__name__)
 VERDICT_RE = re.compile(r"VERDICT:\s*(BUY|ACCUMULATE|HOLD|TRIM|SELL)", re.I)
 CONFIDENCE_RE = re.compile(r"CONFIDENCE:\s*([\d.]+)")
 DOMINANT_RE = re.compile(r"DOMINANT_VIEW:\s*(quant|macro|risk)", re.I)
-ALLOC_RE = re.compile(r"SUGGESTED_ALLOC_CNY:\s*(-?\d+)")
+# 金额字段名带基准币种（SUGGESTED_ALLOC_CNY / _AUD …）；接受任意三字母，老存档照常解析
+ALLOC_RE = re.compile(r"SUGGESTED_ALLOC_[A-Z]{3}:\s*(-?\d+)")
+_ALLOC_KEY_RE = re.compile(r"suggested_alloc_[a-z]{3}")
 TRIM_REASON_RE = re.compile(r"TRIM_REASON:\s*(concentration|stop_loss|bearish)", re.I)
 # TRIM 路径化：买回点 + 预期路径（EXECUTION_PLAN/RISK_PLAN 仍丢弃，只解析这三个）
 REENTRY_PRICE_RE = re.compile(r"REENTRY_PRICE:\s*[¥$]?\s*(-?[\d,]+(?:\.\d+)?)", re.I)
@@ -128,7 +130,8 @@ def _fields_to_out(out: Dict[str, Any], fields: Dict[str, Any]) -> None:
     dv = str(fields.get("dominant_view") or "").strip().lower()
     out["dominant_view"] = dv if dv in ("quant", "macro", "risk") else "tie"
     try:
-        out["alloc_cny"] = int(float(fields.get("suggested_alloc_cny") or 0))
+        alloc = next((v for k, v in fields.items() if _ALLOC_KEY_RE.fullmatch(str(k))), None)
+        out["alloc_cny"] = int(float(alloc or 0))
     except (TypeError, ValueError):
         out["alloc_cny"] = 0
     tr = fields.get("trim_reason")
@@ -156,6 +159,7 @@ def parse_cio_memo(
     regime: Optional[str] = None,
     defense_flag_on: bool = False,
     defense_dca: Optional[Dict[str, Any]] = None,
+    alloc_ceiling: Optional[int] = None,
 ) -> Dict[str, Any]:
     """fields（DeepSeek JSON Output 解析后的 dict）非 None 时走结构化抽取，否则 regex（旧路径）。
     worker_brief（CIO 输入的 worker 简报）非 None 时额外参与 [WORKER_UNAVAILABLE] backstop——
@@ -165,6 +169,9 @@ def parse_cio_memo(
     启用，防御触发的买侧不再全拦，改"放行一批 or 按 spacing/quota 拦"。service 层算好传：
         {"allow": bool, "fraction": float, "reason": str, "tranche_idx": int}
     None = 非黄金/未启用 → 走旧"全拦"行为。两条腿已 OR 成单 defense_flag_on，单一计划。
+
+    alloc_ceiling：单笔建议金额上限（基准币种）。调用方用 utils.base_currency.alloc_ceiling()
+    算好传入（本模块是纯计算层，不碰汇率）；None = 配置值原数（人民币）。
     """
     out: Dict[str, Any] = {"raw": text}
     if fields is not None:
@@ -222,11 +229,14 @@ def parse_cio_memo(
     # INVEST_ALLOC_AGGRESSIVENESS（Optuna 训练参数，0.05~0.30）会按 baseline ¥100k
     # 收紧 ceiling 到 100_000 × agg。例如 agg=0.10 → 单笔 ≤ ¥10k，避免 LLM 给
     # ¥50k alloc 导致 simulator 大量 SKIP。
-    alloc_ceiling = _verdict_cfg.alloc_cny_ceiling
+    if alloc_ceiling is None:
+        alloc_ceiling = _verdict_cfg.alloc_cny_ceiling
     agg_env = os.getenv("INVEST_ALLOC_AGGRESSIVENESS")
     if agg_env:
         try:
-            alloc_ceiling = min(alloc_ceiling, int(100_000 * float(agg_env)))
+            # 100_000 是人民币基线；ceiling 已按基准币种换算，同比例换算基线（CNY 时比例为 1，逐位不变）
+            _scale = alloc_ceiling / (_verdict_cfg.alloc_cny_ceiling or 1)
+            alloc_ceiling = min(alloc_ceiling, int(100_000 * _scale * float(agg_env)))
         except ValueError:
             pass
     if abs(out["alloc_cny"]) > alloc_ceiling:

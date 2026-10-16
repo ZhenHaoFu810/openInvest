@@ -257,7 +257,8 @@ def send_committee_verdict_email(
         if v.get("dominant_view"):
             bits.append(f"主导视角 {v['dominant_view']}")
         if v.get("alloc_cny") is not None:
-            bits.append(f"建议金额 {v['alloc_cny']:+d} CNY")
+            from openinvest.utils.base_currency import base_currency
+            bits.append(f"建议金额 {v['alloc_cny']:+d} {v.get('alloc_currency') or base_currency()}")
         if bits:
             lines.append("- " + " · ".join(bits))
         # decision_id 是唯一不需要任何网络配置就能拿到详情的方式——GUI 已退役，

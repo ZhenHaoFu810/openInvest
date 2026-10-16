@@ -32,6 +32,7 @@ from openinvest.core.committee.cio_parse import (
     regime_label_from_text,
 )
 from openinvest.core.committee.persist import _persist
+from openinvest.utils.base_currency import alloc_ceiling, base_currency
 
 log = logging.getLogger(__name__)
 
@@ -350,7 +351,9 @@ def run_committee(
         ),
         # 黄金分批 DCA 闸（service 层算好的本批放行/暂拦；非黄金/未启用为 None=旧全拦）
         defense_dca=defense_dca,
+        alloc_ceiling=alloc_ceiling(),
     )
+    cio_parsed["alloc_currency"] = base_currency()
 
     debate_meta = {
         "max_rounds": max_debate_rounds,

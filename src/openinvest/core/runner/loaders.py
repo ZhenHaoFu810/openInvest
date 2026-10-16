@@ -171,8 +171,9 @@ def _build_default_portfolio_summary(pm: PortfolioManager) -> str:
                     f"{type(e).__name__}: {e}"
                 )
 
-        total_cny, _status = total_portfolio_value_cny(pm, current_prices, base="CNY")
-        return portfolio_summary_text(pm, total_cny, current_prices, excluded=unvalued(_status))
+        from openinvest.utils.base_currency import base_currency
+        total, _status = total_portfolio_value_cny(pm, current_prices, base=base_currency())
+        return portfolio_summary_text(pm, total, current_prices, excluded=unvalued(_status))
     except Exception as e:  # noqa: BLE001
         # 兜底：拉价/折算彻底失败 → 用历史简化版，至少 Risk Officer 还有点上下文
         log.warning(

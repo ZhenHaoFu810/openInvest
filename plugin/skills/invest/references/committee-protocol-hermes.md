@@ -134,7 +134,7 @@ synthesize directly.
 
 After reading Macro + Quant R1/R2 + Risk R1/R2 + `portfolio_summary`, write the full
 CIO memo in the `prompts.cio` format, including the required fields (`VERDICT`/`CONFIDENCE`/
-`DOMINANT_VIEW`/`SUGGESTED_ALLOC_CNY`/`EXECUTION_PLAN`/`RISK_PLAN`/
+`DOMINANT_VIEW`/`SUGGESTED_ALLOC_<BASE>`/`EXECUTION_PLAN`/`RISK_PLAN`/
 `PERSONAL_NOTE`) + the sanity self-check (full rules in committee-protocol.md Stage 5 —
 this step is identical across the two paths: confidence ≥ 0.95 lowered to 0.85,
 alloc > 100k clamped, crash regime forces HOLD/TRIM, and if workers seriously diverge

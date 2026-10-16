@@ -2,6 +2,11 @@
 # 注入优先级: default(dataclass) → this file → CLI → env
 # locked 参数不进这个文件 — 它们在 locked.py 里，改需要 ADR。
 
+portfolio:
+  # 基准币种（ISO 三字母）：总资产、可投子弹、委员会金额字段按它算；金额阈值按人民币标定、运行时换算。
+  # env: INVEST_PORTFOLIO_BASE_CURRENCY=AUD
+  base_currency: CNY
+
 regime:
   # #113 尺度无关阈值：任意资产零配置自动适配，per_asset 表已删
   crash_atr_spike_ratio_min: 2.0     # 波动较自身 1 年常态翻倍

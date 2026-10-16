@@ -301,7 +301,7 @@ def test_explain_decision_forwards_to_committee_session(recorder, capfd):
     rd.maybe_dispatch_remote(Namespace(cmd="explain_decision", decision_id="2026-07-03/GC=F"))
     assert _out_json(capfd) == {
         "decision_id": "2026-07-03/GC=F", "verdict": "HOLD", "confidence": 0.65,
-        "alloc_cny": -5000.0, "confidence_lookup": "LOOKUP-TEXT",
+        "alloc_cny": -5000.0, "alloc_currency": "CNY", "confidence_lookup": "LOOKUP-TEXT",
         "transcript_markdown": md, "path_snapshot": None,
     }
 

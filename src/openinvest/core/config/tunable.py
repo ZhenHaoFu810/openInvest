@@ -15,6 +15,13 @@ class LanguageConfig:
 
 
 @dataclass(frozen=True)
+class PortfolioConfig:
+    """基准币种：总资产 / 可投子弹 / 委员会金额字段与阈值都按它算（2026-10 第 1 步）。
+    阈值仍按人民币标定、运行时换算（utils/base_currency）。ISO 三字母码；改它=迁移，历史记录不跟着变。"""
+    base_currency: str = "CNY"
+
+
+@dataclass(frozen=True)
 class RegimeConfig:
     """Regime 分类阈值 — 簇 1-4
 
@@ -273,6 +280,7 @@ class StalenessConfig:
 class TunableConfig:
     """所有可调参数的顶层容器"""
     language: LanguageConfig = field(default_factory=LanguageConfig)
+    portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
     regime: RegimeConfig = field(default_factory=RegimeConfig)
     verdict: VerdictConfig = field(default_factory=VerdictConfig)
     dreaming: DreamingTunableConfig = field(default_factory=DreamingTunableConfig)

@@ -94,7 +94,7 @@ def _parse_committee_header(content: str) -> tuple:
     m2 = _re.search(r"\*\*Dominant view\*\*:\s*(\w+)", content)
     if m2:
         dominant = m2.group(1)
-    m3 = _re.search(r"\*\*Suggested allocation CNY\*\*:\s*(-?[\d.]+)", content)
+    m3 = _re.search(r"\*\*Suggested allocation [A-Z]{3}\*\*:\s*(-?[\d.]+)", content)  # 标签带基准币种
     if m3:
         try:
             alloc = float(m3.group(1))

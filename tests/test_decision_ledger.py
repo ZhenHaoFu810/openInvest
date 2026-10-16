@@ -37,6 +37,7 @@ def test_parse_committee_file(tmp_path):
         "macro_at_decision": {"vix": 15.81},
         "symbol": "GC=F",
         "alloc_cny": -5000.0,
+        "alloc_currency": "CNY",
     }
     assert parse_committee_file(tmp_path / "missing.md") is None
 

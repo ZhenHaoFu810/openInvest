@@ -295,7 +295,7 @@ def _h_explain_decision(args: argparse.Namespace) -> None:
         _die({"status": "error", "error": f"decision {args.decision_id} has no verdict on hub"})
     _print_json({
         "decision_id": args.decision_id,
-        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny")},
+        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny", "alloc_currency")},
         "confidence_lookup": body.get("confidence_lookup"),   # 旧 hub 没这个字段 → None
         "transcript_markdown": md,
         "path_snapshot": None,
@@ -409,7 +409,7 @@ def _h_run_committee(args: argparse.Namespace) -> None:
             "A verdict has been generated. If the user agrees, guide them through these steps:\n"
             f"1) Record the trade in openInvest first (easiest path: open {gui_url} in a browser and use the holdings page; "
             "or run remote-mode `run.sh buy/sell ...`, which writes to the hub automatically)\n"
-            "2) Open the real broker or banking app and place the order using the alloc_cny amount from the verdict "
+            "2) Open the real broker or banking app and place the order using the alloc_cny amount from the verdict (currency in alloc_currency, CNY if absent) "
             "(openInvest does not connect to exchanges; it only produces decisions)\n"
             "3) Return to openInvest and mark the execution outcome\n\n"
             "**Do not write to memory/ directly.** In remote mode the local machine does not even own the memory/ directory; "
@@ -422,7 +422,7 @@ def _h_run_committee(args: argparse.Namespace) -> None:
             "已生成 verdict。如果用户同意，告诉他按下面三步走：\n"
             f"1) 在 openInvest 里登记这笔（最方便：浏览器开 {gui_url} → 持仓页；"
             "或远端模式直接 `run.sh buy/sell ...`，写入自动落 hub）\n"
-            "2) 打开自己的证券 App / 银行 App，按 verdict 里的 alloc_cny 金额真实下单"
+            "2) 打开自己的证券 App / 银行 App，按 verdict 里的 alloc_cny 金额（币种见 alloc_currency，缺省 CNY）真实下单"
             "（openInvest 不接交易所，只做决策）\n"
             "3) 回 openInvest 标记成交\n\n"
             "**不要直接写 memory/**——远端模式下本机根本没有 memory/，"

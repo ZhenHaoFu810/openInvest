@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 # 三路径统一架构（2026-05-16）：daily_report 不再直接 import core.committee 原语,
 # 全部走 core.committee_runner 的 service layer (run_committee_session)
 # 防漂移契约: tests/test_committee_contract.py:test_run_committee_session_*
+from openinvest.utils.base_currency import cur_prefix
 from openinvest.core.portfolio_manager import PortfolioManager
 from openinvest.db.market_store import MarketStore
 from openinvest.jobs.daily_report_builder import (
@@ -106,11 +107,11 @@ def _format_staleness(label: str, age_days: Optional[int]) -> str:
 
 def _portfolio_summary(
     pm: PortfolioManager,
-    total_assets_cny: float,
+    total_assets: float,
     current_prices: Dict[str, float],
 ) -> str:
-    """用户上下文文本，委托给 daily_report_builder（见 ADR-005）"""
-    return portfolio_summary_text(pm, total_assets_cny, current_prices)
+    """用户上下文文本（基准币种），委托给 daily_report_builder（见 ADR-005）"""
+    return portfolio_summary_text(pm, total_assets, current_prices)
 
 
 # 独立 challenge 用的第二意见 CLI，按优先级探测（agy 优先——各家 CLI 更替快，
@@ -420,12 +421,17 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
     # 总资产走全仓库唯一实现 fx.total_portfolio_value（2026-10 基准币种第 1 步：这里原先自己算一份，
     # 缺价的持仓直接剔出分母，和 status / 委员会路径的"按成本价计入"不一致，集中度偏高）。
     # skipped_assets（行情过期熔断）照旧整个不计入。
+    from openinvest.utils.base_currency import base_currency
     from openinvest.utils.fx import total_portfolio_value
-    total_assets_cny, value_status = total_portfolio_value(
-        pm, current_prices, "CNY", exclude=tuple(skipped_assets))
+    _base = base_currency()
+    total_assets, value_status = total_portfolio_value(
+        pm, current_prices, _base, exclude=tuple(skipped_assets))
     data_warnings.extend(_value_warnings(value_status))
 
-    portfolio_summary = _portfolio_summary(pm, total_assets_cny, current_prices)
+    portfolio_summary = _portfolio_summary(pm, total_assets, current_prices)
+    # 邮件正文的总资产仍按人民币展示，基准币种化在第 2 步（展示层）
+    total_assets_cny = total_assets if _base == "CNY" else total_portfolio_value(
+        pm, current_prices, "CNY", exclude=tuple(skipped_assets))[0]
     if data_warnings:
         portfolio_summary += "\n\n=== 数据可信度告警 ===" + "".join(data_warnings)
 
@@ -485,8 +491,8 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
                 continue
             v = result["verdict"]
             log.info(
-                "  %s: %s (conf %.2f, dom %s, alloc ¥%s)",
-                sym, v["verdict"], v["confidence"], v["dominant_view"], v["alloc_cny"],
+                "  %s: %s (conf %.2f, dom %s, alloc %s%s)",
+                sym, v["verdict"], v["confidence"], v["dominant_view"], cur_prefix(), v["alloc_cny"],
             )
 
     # 3) Gemini 第二意见（综合所有资产 verdicts）
@@ -546,7 +552,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
                           and "集中度 lens 已按 config 关闭，不因超配减仓") or \
                          (v.get("_sanity5_reason") and "TRIM 没给合格买回点被否") or "防御规则"
             defense_note = (f"CIO 原始结论 {v['_original_verdict']}"
-                            f"（建议金额 ¥{v.get('_original_alloc', v['alloc_cny'])}），"
+                            f"（建议金额 {cur_prefix()}{v.get('_original_alloc', v['alloc_cny'])}），"
                             f"{reason}，最终改为 {v['verdict']}")
         path_lines = [ln for ln in (r.get("path_reference") or "").splitlines()
                       if ln.startswith("- ")]
@@ -556,7 +562,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
             # 翻译官只拿查表（不给自报数，免得它把自报复述成"把握"）
             "verdict_line": (f"{v['verdict']}，"
                              f"{confidence_display(v, confidence_lookup, with_raw=False)}，"
-                             f"建议金额 ¥{v['alloc_cny']}"),
+                             f"建议金额 {cur_prefix()}{v['alloc_cny']}"),
             "defense_note": defense_note,
             "path_lines": path_lines,
             "cio_memo": r["report"].cio_memo,
@@ -616,7 +622,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         v = asset_committees[sym]["verdict"]
         daily_block += (
             f"\n- {a.get('display_name', sym)} ({sym}): "
-            f"{v['verdict']} (conf {v['confidence']:.2f}, alloc ¥{v['alloc_cny']})"
+            f"{v['verdict']} (conf {v['confidence']:.2f}, alloc {cur_prefix()}{v['alloc_cny']})"
         )
     store.append_daily("committee_report", daily_block, date=today)
     store.append_daily(

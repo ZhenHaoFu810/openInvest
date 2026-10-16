@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openinvest.core.memory_store import MemoryStore
+from openinvest.utils.base_currency import base_currency
 
 if TYPE_CHECKING:
     from openinvest.core.committee.debate import CommitteeReport
@@ -87,7 +88,7 @@ def _persist(report: "CommitteeReport", verdict: Dict[str, Any],
         f"**Symbol**: {report.asset.get('symbol', '')}",
         f"**Verdict**: {verdict['verdict']} (confidence {verdict['confidence']:.2f})",
         f"**Dominant view**: {verdict['dominant_view']}",
-        f"**Suggested allocation CNY**: {verdict['alloc_cny']}",
+        f"**Suggested allocation {base_currency()}**: {verdict['alloc_cny']}",
     ]
 
     # v3: 多轮辩论元信息
