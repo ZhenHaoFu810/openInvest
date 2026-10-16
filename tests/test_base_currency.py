@@ -119,3 +119,37 @@ def test_ledger_reads_allocation_label_currency():
     assert (aud["alloc_cny"], aud["alloc_currency"]) == (1200.0, "AUD")
     old = parse_committee_text(head + "**Suggested allocation CNY**: -3,000\n")
     assert (old["alloc_cny"], old["alloc_currency"]) == (-3000.0, "CNY")
+
+
+def test_display_sites_label_base_currency_and_cny_is_unchanged():
+    from openinvest.jobs.daily_report_builder import plain_verdict_summary
+    v = {"verdict": "ACCUMULATE", "alloc_cny": 1200}
+    assert "¥1,200" in plain_verdict_summary(v, None)
+    _aud()
+    out = plain_verdict_summary(v, None)
+    assert "AUD 1,200" in out and "¥" not in out
+
+
+def test_aggressiveness_scales_with_converted_ceiling(monkeypatch):
+    from openinvest.core.committee.cio_parse import parse_cio_memo
+    monkeypatch.setenv("INVEST_ALLOC_AGGRESSIVENESS", "0.1")
+    cny = parse_cio_memo("VERDICT: ACCUMULATE\nCONFIDENCE: 0.6\nSUGGESTED_ALLOC_CNY: 99999\n")
+    aud = parse_cio_memo("VERDICT: ACCUMULATE\nCONFIDENCE: 0.6\nSUGGESTED_ALLOC_AUD: 99999\n",
+                         alloc_ceiling=21000)                  # 21000/100000 的比例
+    assert cny["alloc_cny"] == 10000 and aud["alloc_cny"] == 2100
+
+
+def test_label_roundtrip_through_session_list_parser():
+    from openinvest.connectors.web_api.routers.committee_sessions import _parse_committee_header
+    text = ("**Verdict**: HOLD (confidence 0.50)\n**Dominant view**: quant\n"
+            "**Suggested allocation AUD**: 1200\n")
+    assert _parse_committee_header(text)[3] == 1200
+
+
+def test_load_skill_skips_fx_lookup_when_no_placeholder(monkeypatch):
+    import openinvest.utils.base_currency as bc
+    calls = []
+    monkeypatch.setattr(bc, "prompt_vars", lambda: calls.append(1) or {})
+    from openinvest.capabilities.loader import load_skill
+    load_skill("macro_strategist")          # 模板里没有 {{ 占位符 -> 不该算币种变量
+    assert calls == []

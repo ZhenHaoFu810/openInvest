@@ -158,7 +158,8 @@ write the full CIO memo in the `prompts.cio` format.
 - `VERDICT`: one of `BUY` / `ACCUMULATE` / `HOLD` / `TRIM` / `SELL`
 - `CONFIDENCE`: 0.0–1.0
 - `DOMINANT_VIEW`: which side persuaded you (`macro` / `quant` / `risk`)
-- `SUGGESTED_ALLOC_CNY`: integer (positive = buy more, negative = reduce position)
+- `SUGGESTED_ALLOC_<BASE>`: integer (positive = buy more, negative = reduce position)
+  (`<BASE>` is the base currency code from the `DRY_POWDER_<BASE>` line in the portfolio summary — `CNY` by default; amounts are in that currency)
 - `EXECUTION_PLAN`: how to actually execute (lump-sum / DCA / grid)
 - `RISK_PLAN`: stop-loss trigger conditions + worst-case PnL estimate
 - `PERSONAL_NOTE`: bullet-point message to the user

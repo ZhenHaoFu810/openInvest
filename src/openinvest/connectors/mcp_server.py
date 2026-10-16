@@ -748,7 +748,7 @@ async def run_committee(
         parsed = parse_committee_file(cached)
         if parsed:
             return {"cached": True, "decision_id": f"{today}/{symbol}",
-                    **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny")},
+                    **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny", "alloc_currency")},
                     "confidence_lookup": confidence_display(parsed, load_confidence_lookup(),
                                                             with_raw=False)}
 

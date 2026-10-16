@@ -234,7 +234,9 @@ def parse_cio_memo(
     agg_env = os.getenv("INVEST_ALLOC_AGGRESSIVENESS")
     if agg_env:
         try:
-            alloc_ceiling = min(alloc_ceiling, int(100_000 * float(agg_env)))
+            # 100_000 是人民币基线；ceiling 已按基准币种换算，同比例换算基线（CNY 时比例为 1，逐位不变）
+            _scale = alloc_ceiling / (_verdict_cfg.alloc_cny_ceiling or 1)
+            alloc_ceiling = min(alloc_ceiling, int(100_000 * _scale * float(agg_env)))
         except ValueError:
             pass
     if abs(out["alloc_cny"]) > alloc_ceiling:

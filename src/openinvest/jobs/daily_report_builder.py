@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional
 # （保留旧 import path 的向后兼容）
 from openinvest.utils.portfolio_summary import portfolio_summary_text  # noqa: F401
 from openinvest.jobs.review_calc import confidence_display
+from openinvest.utils.base_currency import cur_prefix
 from openinvest.calc.regime_probability import quote_currency_prefix
 
 # ============ 常量（可被 daily_report.py 的 env 读取覆盖后传入，无默认值依赖） ============
@@ -195,7 +196,7 @@ def build_tldr_block(
         lines.append(
             f"{emoji} **{a.get('display_name', sym)}** ({sym}): "
             f"{v['verdict']} · {confidence_display(v, confidence_lookup)} · "
-            f"建议 ¥{v['alloc_cny']:,.0f}"
+            f"建议 {cur_prefix()}{v['alloc_cny']:,.0f}"
         )
     return "\n".join(lines) + "\n"
 
@@ -211,7 +212,7 @@ def plain_verdict_summary(verdict: Dict[str, Any],
     act = _VERDICT_PLAIN.get(vd, vd)
     alloc = verdict.get("alloc_cny", 0) or 0
     if vd in ("ACCUMULATE", "BUY") and alloc:
-        act += f" ¥{alloc:,.0f}"
+        act += f" {cur_prefix()}{alloc:,.0f}"
     st = ((path_profile or {}).get("windows") or {}).get("30d")
     tail = ""
     if st and all(k in st for k in ("p_below", "downside_pct", "median_pct")):
@@ -379,7 +380,7 @@ def assemble_full_report(
         lines = [
             f"## {idx+2}. {a.get('display_name', sym)} ({sym})\n\n",
             f"**裁决**: {v['verdict']} | {confidence_display(v, confidence_lookup)} | "
-            f"主导方 {v['dominant_view']} | 建议金额 ¥{v['alloc_cny']}\n\n",
+            f"主导方 {v['dominant_view']} | 建议金额 {cur_prefix()}{v['alloc_cny']}\n\n",
             plain_block,
         ]
         # TRIM 路径化：展示买回点 + 预期路径（让用户能判断"卖出是赚是亏"）
@@ -408,7 +409,7 @@ def assemble_full_report(
             _orig_alloc = v.get("_original_alloc", v.get("alloc_cny", 0))
             lines.append(
                 f"**减仓未执行（集中度 lens 已关）**: CIO 想因集中度减仓（建议金额 "
-                f"¥{_orig_alloc}），但你已关闭集中度 lens（本池视为刻意集中 / 全可投资金）"
+                f"{cur_prefix()}{_orig_alloc}），但你已关闭集中度 lens（本池视为刻意集中 / 全可投资金）"
                 "→ 系统维持 HOLD。"
                 + (f"系统对未来路径的预期仍供对照：{_path}"
                    "（系统预期偏空，你若有不同判断自行权衡）" if _path else "")
@@ -424,19 +425,19 @@ def assemble_full_report(
             _fa = v.get("alloc_cny", 0) or 0
             if v.get("_defense_dca") == "tranche":
                 lines.append(
-                    f"**防御分批**: CIO 想 {v['_original_verdict']}（¥{_oa:,.0f}），高 VIX/ATR "
+                    f"**防御分批**: CIO 想 {v['_original_verdict']}（{cur_prefix()}{_oa:,.0f}），高 VIX/ATR "
                     f"防御期黄金买入改强制分批 DCA，本次只放行约 1/3（第 "
-                    f"{v.get('_defense_dca_tranche_idx', 1)} 批）→ {v['verdict']} ¥{_fa:,.0f}\n\n"
+                    f"{v.get('_defense_dca_tranche_idx', 1)} 批）→ {v['verdict']} {cur_prefix()}{_fa:,.0f}\n\n"
                 )
             elif str(v.get("_defense_dca") or "").startswith("blocked"):
                 lines.append(
-                    f"**防御分批**: CIO 想 {v['_original_verdict']}（¥{_oa:,.0f}），高 VIX/ATR "
+                    f"**防御分批**: CIO 想 {v['_original_verdict']}（{cur_prefix()}{_oa:,.0f}），高 VIX/ATR "
                     "防御期黄金买入分批、本批未满间隔/配额 → 暂缓持有（等下一批）\n\n"
                 )
             else:
                 lines.append(
-                    f"**防御降级**: CIO 想 {v['_original_verdict']}（¥{_oa:,.0f}），VIX/ATR "
-                    f"快崩哨兵触发 → 降级 {v['verdict']} ¥{_fa:,.0f}\n\n"
+                    f"**防御降级**: CIO 想 {v['_original_verdict']}（{cur_prefix()}{_oa:,.0f}），VIX/ATR "
+                    f"快崩哨兵触发 → 降级 {v['verdict']} {cur_prefix()}{_fa:,.0f}\n\n"
                 )
 
         # D17：近 7 天资产专属事件。只展示，这张列表不额外喂委员会（委员会照旧经 event_brief 召回看事件流）

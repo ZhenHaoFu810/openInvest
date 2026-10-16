@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 # 三路径统一架构（2026-05-16）：daily_report 不再直接 import core.committee 原语,
 # 全部走 core.committee_runner 的 service layer (run_committee_session)
 # 防漂移契约: tests/test_committee_contract.py:test_run_committee_session_*
+from openinvest.utils.base_currency import cur_prefix
 from openinvest.core.portfolio_manager import PortfolioManager
 from openinvest.db.market_store import MarketStore
 from openinvest.jobs.daily_report_builder import (
@@ -490,8 +491,8 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
                 continue
             v = result["verdict"]
             log.info(
-                "  %s: %s (conf %.2f, dom %s, alloc ¥%s)",
-                sym, v["verdict"], v["confidence"], v["dominant_view"], v["alloc_cny"],
+                "  %s: %s (conf %.2f, dom %s, alloc %s%s)",
+                sym, v["verdict"], v["confidence"], v["dominant_view"], cur_prefix(), v["alloc_cny"],
             )
 
     # 3) Gemini 第二意见（综合所有资产 verdicts）
@@ -551,7 +552,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
                           and "集中度 lens 已按 config 关闭，不因超配减仓") or \
                          (v.get("_sanity5_reason") and "TRIM 没给合格买回点被否") or "防御规则"
             defense_note = (f"CIO 原始结论 {v['_original_verdict']}"
-                            f"（建议金额 ¥{v.get('_original_alloc', v['alloc_cny'])}），"
+                            f"（建议金额 {cur_prefix()}{v.get('_original_alloc', v['alloc_cny'])}），"
                             f"{reason}，最终改为 {v['verdict']}")
         path_lines = [ln for ln in (r.get("path_reference") or "").splitlines()
                       if ln.startswith("- ")]
@@ -561,7 +562,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
             # 翻译官只拿查表（不给自报数，免得它把自报复述成"把握"）
             "verdict_line": (f"{v['verdict']}，"
                              f"{confidence_display(v, confidence_lookup, with_raw=False)}，"
-                             f"建议金额 ¥{v['alloc_cny']}"),
+                             f"建议金额 {cur_prefix()}{v['alloc_cny']}"),
             "defense_note": defense_note,
             "path_lines": path_lines,
             "cio_memo": r["report"].cio_memo,
@@ -621,7 +622,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         v = asset_committees[sym]["verdict"]
         daily_block += (
             f"\n- {a.get('display_name', sym)} ({sym}): "
-            f"{v['verdict']} (conf {v['confidence']:.2f}, alloc ¥{v['alloc_cny']})"
+            f"{v['verdict']} (conf {v['confidence']:.2f}, alloc {cur_prefix()}{v['alloc_cny']})"
         )
     store.append_daily("committee_report", daily_block, date=today)
     store.append_daily(

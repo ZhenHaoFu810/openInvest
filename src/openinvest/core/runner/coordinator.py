@@ -313,6 +313,7 @@ def save_committee_transcript(
         defense_dca=defense_dca,
         alloc_ceiling=alloc_ceiling(),
     )
+    verdict["alloc_currency"] = base_currency()
 
     store = MemoryStore()
     today = datetime.now().strftime("%Y-%m-%d")

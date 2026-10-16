@@ -46,6 +46,12 @@ def money(amount: float, base: Optional[str] = None) -> str:
     return f"¥{amount:,.0f}" if base == "CNY" else f"{amount:,.0f} {base}"
 
 
+def cur_prefix(base: Optional[str] = None) -> str:
+    """金额前缀：CNY 写 ¥（与历史文本逐字一致），其它写 "AUD "。展示层按基准币种标注金额用。"""
+    base = base or base_currency()
+    return "¥" if base == "CNY" else f"{base} "
+
+
 def alloc_ceiling(base: Optional[str] = None) -> int:
     """CIO 单笔建议金额上限（verdict.alloc_cny_ceiling，按人民币标定）换成基准币种。"""
     from openinvest.core.config import load_config
@@ -67,4 +73,4 @@ def prompt_vars() -> Dict[str, object]:
     }
 
 
-__all__ = ["alloc_ceiling", "base_currency", "from_cny", "money", "prompt_vars"]
+__all__ = ["alloc_ceiling", "base_currency", "cur_prefix", "from_cny", "money", "prompt_vars"]

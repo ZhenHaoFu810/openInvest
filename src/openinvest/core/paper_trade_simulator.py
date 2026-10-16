@@ -135,6 +135,11 @@ class PaperTradeSimulator:
         # qty_cny,方向由 direction 决定。⚠ 旧代码 `alloc_cny <= 0` 把负的减仓 alloc 全吞成
         # HOLD → SELL/TRIM 从不成交(回测里委员会"减仓"全是 no-op,曾被误判成"会 de-risk")。
         qty_cny = abs(float(verdict.get("alloc_cny", 0) or 0))
+        # 基准币种非 CNY 时 alloc_cny 存的是基准币种金额（verdict["alloc_currency"]），按当日汇率换回人民币
+        _acur = str(verdict.get("alloc_currency") or "CNY").upper()
+        if _acur != "CNY" and qty_cny:
+            _r = get_fx_rate(_acur, "CNY", as_of_date=decision_date)
+            qty_cny *= _r if _r else 1.0
 
         if direction == "HOLD" or qty_cny == 0:
             tx = Transaction(

@@ -255,3 +255,14 @@ def test_gold_price_includes_usdcny_leg(mock_market):
     assert price == pytest.approx(100.0 * 7.1)
     # 对照：非黄金资产不叠汇率腿（AAPL 的估值换算在别处按 USD 计价走 fx）
     assert sim._get_price("AAPL", "2024-01-02") == pytest.approx(180.0)
+
+
+def test_buy_converts_non_cny_alloc_currency(mock_market):
+    """verdict 带 alloc_currency=AUD 时，alloc_cny 实为澳元金额：1000 AUD = 4700 CNY（回测不能把它当人民币）"""
+    from openinvest.core.paper_trade_simulator import PaperTradeSimulator
+    sim = PaperTradeSimulator(start_date="2024-01-02")
+    tx = sim.execute_verdict("2024-01-02", "NDQ.AX",
+                              {"verdict": "BUY", "confidence": 0.8, "alloc_cny": 1000,
+                               "alloc_currency": "AUD"})
+    assert abs(sim.account.cash["CNY"] - (100000 - 4700)) < 0.01
+    assert abs(tx.units - 20.0) < 0.01       # 1000 AUD / 50

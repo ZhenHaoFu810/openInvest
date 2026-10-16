@@ -173,7 +173,7 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
         next_step = (
             f"{cio_render_hint}\n\n"
             "A verdict has been generated. If the user agrees, follow these three steps:\n"
-            "1) The user opens their broker or banking app and places the real order using the verdict's alloc_cny amount and symbol "
+            "1) The user opens their broker or banking app and places the real order using the verdict's alloc_cny amount (in the currency named by alloc_currency, CNY if absent) and symbol "
             "(openInvest does not connect to exchanges; it only produces decisions)\n"
             "2) Come back and record the trade with the CLI `buy`/`sell` subcommands or the MCP `buy`/`sell` tools\n"
             "3) Use `record_execution` to link the decision to the execution outcome (record rejections too, with a reason)\n\n"
@@ -187,7 +187,7 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
         next_step = (
             f"{cio_render_hint}\n\n"
             "已生成 verdict。如果用户同意，按三步走：\n"
-            "1) 用户打开自己的证券/银行 App，按 verdict 的 alloc_cny 金额 + symbol 真实下单"
+            "1) 用户打开自己的证券/银行 App，按 verdict 的 alloc_cny 金额（币种见 alloc_currency，缺省 CNY）+ symbol 真实下单"
             "（openInvest 不接交易所，只做决策）\n"
             "2) 回来登记这笔：CLI `buy`/`sell` 子命令或 MCP `buy`/`sell` 工具\n"
             "3) 用 `record_execution` 关联决议（拒绝执行也记，附原因）\n\n"
