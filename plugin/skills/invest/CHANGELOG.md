@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.25.0...invest-skill-v0.26.0) (2026-10-16)
+
+
+### Features
+
+* **committee:** base currency for committee amounts, thresholds and portfolio summary ([#426](https://github.com/longsizhuo/openInvest/issues/426)) ([7b1519a](https://github.com/longsizhuo/openInvest/commit/7b1519a894e53aab4fa2a3cbba8789482a0917da))
+
 ## [0.25.0](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.24.3...invest-skill-v0.25.0) (2026-10-15)
 
 
