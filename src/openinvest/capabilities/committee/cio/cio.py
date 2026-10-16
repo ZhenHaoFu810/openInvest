@@ -27,7 +27,9 @@ from openinvest.capabilities.loader import apply_lens_blocks, load_skill
 # JSON 对象。字段名与 cio_parse.parse_cio_memo 的 fields 抽取一一对应；额外 memo 字段
 # 承载完整 prose（GUI/transcript 展示用，不丢分析）。必含 "json" 字样（DeepSeek 要求）。
 def _json_output_addendum() -> str:
-    return "\n\n" + bilingual(
+    from openinvest.utils.base_currency import base_currency
+    # 金额字段名带基准币种（suggested_alloc_cny / _aud …），cio_parse 接受任意三字母币种
+    return ("\n\n" + bilingual(
         """=== 输出格式覆盖（本次仅此一种）===
 忽略上方 `VERDICT: / CONFIDENCE: ...` 文本格式。只输出**一个 JSON 对象**（不要 markdown 代码围栏、不要任何额外文字），字段如下：
 {
@@ -56,7 +58,7 @@ Ignore the `VERDICT: / CONFIDENCE: ...` text format above. Output **a single JSO
   "memo": "your full investment-bank-grade analysis memo, multi-paragraph, matching the depth of the plain-text memo"
 }
 All rules above still apply (sanity checks / TRIM constraints / concentration / verdict=HOLD with confidence<=0.4 when [WORKER_UNAVAILABLE] appears) -- they are just carried in the JSON fields.""",
-    )
+    )).replace("suggested_alloc_cny", f"suggested_alloc_{base_currency().lower()}")
 
 
 def build_cio_prompt(asset: Dict[str, Any], json_mode: bool = False) -> str:

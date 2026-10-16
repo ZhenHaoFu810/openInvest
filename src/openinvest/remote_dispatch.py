@@ -295,7 +295,7 @@ def _h_explain_decision(args: argparse.Namespace) -> None:
         _die({"status": "error", "error": f"decision {args.decision_id} has no verdict on hub"})
     _print_json({
         "decision_id": args.decision_id,
-        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny")},
+        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny", "alloc_currency")},
         "confidence_lookup": body.get("confidence_lookup"),   # 旧 hub 没这个字段 → None
         "transcript_markdown": md,
         "path_snapshot": None,

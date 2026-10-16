@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 # prepare_committee_brief / save_committee_transcript 在模块作用域用到这些；
 # exchange_fee / PortfolioManager 等改走函数内 call-time import（保持可被契约测试 patch）。
+from openinvest.utils.base_currency import alloc_ceiling, base_currency
 from openinvest.utils.symbols import safe_symbol
 from openinvest.core.committee import (
     atr_defense_from_text,  # save_committee_transcript 提 ATR 防御腿
@@ -135,9 +136,9 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
         else:
             current_prices[sym] = _safe_close_latest(sym)
 
-    total_cny, _value_status = total_portfolio_value_cny(pm, current_prices, base="CNY")
+    total, _value_status = total_portfolio_value_cny(pm, current_prices, base=base_currency())
     # insights / 确定性事实块以模块全局名调用 shared loaders（单一可信源 + 可被契约测试 monkeypatch）
-    portfolio_summary = portfolio_summary_text(pm, total_cny, current_prices,
+    portfolio_summary = portfolio_summary_text(pm, total, current_prices,
                                                excluded=unvalued(_value_status))
     insights = load_prior_insights(target, pm)
 
@@ -310,6 +311,7 @@ def save_committee_transcript(
         regime=regime,
         defense_flag_on=("INDEP_DEFENSE_FLAG: on" in raw or atr_defense_on),
         defense_dca=defense_dca,
+        alloc_ceiling=alloc_ceiling(),
     )
 
     store = MemoryStore()
@@ -326,7 +328,7 @@ def save_committee_transcript(
         f"**Provider**: {provider} (skill mode)",
         f"**Verdict**: {verdict['verdict']} (confidence {verdict['confidence']:.2f})",
         f"**Dominant view**: {verdict['dominant_view']}",
-        f"**Suggested allocation CNY**: {verdict['alloc_cny']}",
+        f"**Suggested allocation {base_currency()}**: {verdict['alloc_cny']}",
         "\n\n---\n\n## Reports\n",
     ]
     for role in ["MACRO", "QUANT_R1", "RISK_R1",

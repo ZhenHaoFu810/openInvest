@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 def portfolio_summary_text(
     pm: "PortfolioManager",
-    total_assets_cny: float,
+    total_assets: float,
     current_prices: Dict[str, float],
     excluded: Sequence[str] = (),
 ) -> str:
@@ -39,30 +39,32 @@ def portfolio_summary_text(
 
     Args:
         pm: PortfolioManager 实例（只读，不触发任何写）
-        total_assets_cny: 已经计算好的总资产（CNY 折算）
+        total_assets: 已经计算好的总资产（按基准币种 utils.base_currency 折算，调用方用同一基准算）
         current_prices: {symbol: 当前价} dict（per asset 币种）
         excluded: 没计入总资产的条目（fx.unvalued：缺汇率 / 缺价），总资产旁明说
 
     Returns:
         多行字符串，结尾带 \\n
     """
-    cash_cny = pm.cash_amount("CNY")
+    from openinvest.utils.base_currency import base_currency, money
+    base = base_currency()
+    cash_base = pm.cash_amount(base)
     aud_cash = pm.cash_amount("AUD")
     risk_level = str(pm.user.get("risk_tolerance", "Balanced"))
-    # 可投子弹 = 所有币种现金折算成人民币（基准币种方案 A，2026-10）；只有人民币现金时与旧口径相同
+    # 可投子弹 = 所有币种现金折算成基准币种（方案 A，2026-10）；只有基准币种现金时与旧口径相同
     from openinvest.utils.fx import dry_powder as _dry_powder
-    dry_powder, dp_missing = _dry_powder(pm, "CNY")
+    dry_powder, dp_missing = _dry_powder(pm, base)
     foreign_cash = {str(c).upper(): float(a or 0) for c, a in pm.cash.items()
-                    if str(c).upper() != "CNY" and float(a or 0) > 0}
+                    if str(c).upper() != base and float(a or 0) > 0}
 
     # 总资产是否可用：NaN / 非有限（上游某腿不可解析污染了 total）时显式降级，
     # 绝不渲染 ¥nan 或据假值算集中度。
     total_ok = (
-        isinstance(total_assets_cny, (int, float))
-        and math.isfinite(total_assets_cny)
-        and total_assets_cny > 0
+        isinstance(total_assets, (int, float))
+        and math.isfinite(total_assets)
+        and total_assets > 0
     )
-    total_str = f"¥{total_assets_cny:,.0f}" if total_ok else "¥不可用"
+    total_str = money(total_assets, base) if total_ok else ("¥不可用" if base == "CNY" else "不可用")
     if excluded:
         total_str += f"（未计入 {'、'.join(excluded)}：拉不到汇率或价格，实际总资产更高）"
 
@@ -70,12 +72,12 @@ def portfolio_summary_text(
     lines = [
         f"用户风险偏好: {risk_level}",
         f"总资产估算: {total_str}",
-        f"  - CNY 现金: ¥{cash_cny:,.0f}",
-        f"  - 可投子弹 (dry_powder): ¥{dry_powder:,.0f}"
+        f"  - {base} 现金: {money(cash_base, base)}",
+        f"  - 可投子弹 (dry_powder): {money(dry_powder, base)}"
         + ("（含外币现金按汇率折算）" if set(foreign_cash) - set(dp_missing) else "")
         + (f"（未计入 {'、'.join(dp_missing)} 现金：拉不到汇率）" if dp_missing else ""),
     ]
-    if aud_cash > 0:
+    if aud_cash > 0 and base != "AUD":
         lines.append(f"  - AUD 现金: ${aud_cash:,.0f}")
     for ccy, amt in sorted(foreign_cash.items()):
         if ccy != "AUD":
@@ -89,7 +91,7 @@ def portfolio_summary_text(
     if not real_holdings:
         lines.append("  - **当前无实仓持仓**（onboarding 后请通过 GUI/NapCat 添加）")
 
-    # 算每个 holding 的 market value (CNY) 用于集中度
+    # 算每个 holding 的 market value（基准币种）用于集中度
     # 2026-05-19 修复：LLM 自己算集中度连续 6 天错算 68.5%（真实 33.3%），
     # 直接显式输出每个 asset 的 concentration_pct 给 Risk Officer 用。
     # 用 utils.fx.to_base 而非硬编码 if ccy=="AUD"，支持任意币种 (EUR/JPY/HKD 等)。
@@ -99,21 +101,21 @@ def portfolio_summary_text(
     # 这是 cron / session / Direct 三路径共用的 helper,在此关一处即全关;下游
     # _extract_concentration_from_summary 取不到 → cio_parse 覆写 no-op，Risk 也拿不到数字。
     _show_conc = bool(load_config().verdict.concentration_lens_enabled)
-    holding_values_cny: Dict[str, float] = {}
+    holding_values: Dict[str, float] = {}
     for h in real_holdings:
         sym = str(h.get("symbol", ""))
         units = float(h.get("units", 0) or 0)
         ccy = str(h.get("cost_currency", "CNY"))
         cur = current_prices.get(sym)
-        # NaN 价等同缺价：不写进 holding_values_cny（否则 NaN 市值会污染下游展示）
+        # NaN 价等同缺价：不写进 holding_values（否则 NaN 市值会污染下游展示）
         if cur is None or not math.isfinite(cur):
             continue
         local_value = units * cur
         # live valuation: as_of_date intentionally not threaded (no historical caller).
         # For backtest/historical use, thread as_of_date like utils.fx.to_base (see PR#53 fix(fx)).
-        value_cny = to_base(ccy, local_value, "CNY")
-        if value_cny is not None and math.isfinite(value_cny):
-            holding_values_cny[sym] = value_cny
+        value = to_base(ccy, local_value, base)
+        if value is not None and math.isfinite(value):
+            holding_values[sym] = value
 
     for h in real_holdings:
         sym = str(h.get("symbol", ""))
@@ -145,28 +147,28 @@ def portfolio_summary_text(
             f"现价 {ccy_symbol}{cur:.2f}, "
             f"浮盈 {pnl_pct:+.2f}% (≈ {ccy_symbol}{pnl_local:+,.2f} {ccy})"
         )
-        # 该腿汇率拉不到时 value_cny=None：市值 / 集中度 / 压力测试都标"暂不可计算"，不当 0 用
-        value_cny = holding_values_cny.get(sym)
-        # 集中度 = 该 asset CNY 市值 / total_assets_cny —— 仅 lens 开启时渲染（ADR-020）
+        # 该腿汇率拉不到时 value=None：市值 / 集中度 / 压力测试都标"暂不可计算"，不当 0 用
+        value = holding_values.get(sym)
+        # 集中度 = 该 asset 基准币种市值 / total_assets —— 仅 lens 开启时渲染（ADR-020）
         if _show_conc:
-            if total_ok and value_cny is not None:
-                conc_pct = value_cny / total_assets_cny * 100
+            if total_ok and value is not None:
+                conc_pct = value / total_assets * 100
                 line += (
                     f", **集中度 {conc_pct:.1f}%** "
-                    f"(CNY 市值 ¥{value_cny:,.0f} / 总资产 ¥{total_assets_cny:,.0f})"
+                    f"({base} 市值 {money(value, base)} / 总资产 {money(total_assets, base)})"
                 )
             else:
                 # total 或该腿汇率不可用：绝不伪造 0.0%，输出可见降级标记促人工复核
-                mv = f"；CNY 市值 ¥{value_cny:,.0f}" if value_cny is not None else ""
+                mv = f"；{base} 市值 {money(value, base)}" if value is not None else ""
                 line += f", **集中度 暂不可计算**（总资产或汇率不可用，请勿估算占比{mv}）"
-        elif value_cny is not None:
-            line += f", CNY 市值 ¥{value_cny:,.0f}"
+        elif value is not None:
+            line += f", {base} 市值 {money(value, base)}"
         # 压力测试用绝对金额，两种 lens 都给：Risk 模板的最坏情景字段照抄它。
         # 2026-10-11：lens 关时没有市值数字，Risk 为填"跌 20% 整体损失 %"自己编占比
         # （虚构画像真值 16.7% 编成 1.7%，CIO 照抄"仓位仅占 1.7%"）
-        if value_cny is not None:
-            a, b, c = (value_cny * k for k in (0.10, 0.20, 0.35))
-            line += f"，现价再跌 10% / 20% / 35% 损失 ¥{a:,.0f} / ¥{b:,.0f} / ¥{c:,.0f}"
+        if value is not None:
+            a, b, c = (money(value * k, base) for k in (0.10, 0.20, 0.35))
+            line += f"，现价再跌 10% / 20% / 35% 损失 {a} / {b} / {c}"
         lines.append(line)
 
     return "\n".join(lines) + "\n"

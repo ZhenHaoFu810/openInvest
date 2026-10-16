@@ -139,7 +139,10 @@ def load_skill(
     raw = prompt_path.read_text(encoding="utf-8")
     _meta, body = _split_frontmatter(raw)
 
-    return _render_placeholders(body, variables)
+    # 币种占位符（{{BASE}} / {{DRY_POWDER_LOW}} …）统一在此注入：所有角色、两条路径（Direct /
+    # Coordinator）都经这里，新模板用到也不会漏传。调用方显式传的同名变量优先。
+    from openinvest.utils.base_currency import prompt_vars
+    return _render_placeholders(body, {**prompt_vars(), **variables})
 
 
 __all__ = ["apply_lens_blocks", "load_skill"]

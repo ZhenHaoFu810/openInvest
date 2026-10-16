@@ -58,11 +58,12 @@ def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
         except json.JSONDecodeError:
             pass
     sym_m = re.search(r"\*\*Symbol\*\*:\s*(\S+)", text)
-    alloc_m = re.search(r"\*\*Suggested allocation CNY\*\*:\s*(-?[\d,.]+)", text)
+    # 标签带基准币种（"Suggested allocation CNY" / "… AUD"），老存档都是 CNY
+    alloc_m = re.search(r"\*\*Suggested allocation ([A-Z]{3})\*\*:\s*(-?[\d,.]+)", text)
     alloc = None
     if alloc_m:
         try:
-            alloc = float(alloc_m.group(1).replace(",", ""))
+            alloc = float(alloc_m.group(2).replace(",", ""))
         except ValueError:
             pass
     return {
@@ -71,6 +72,7 @@ def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
         "macro_at_decision": macro,
         "symbol": sym_m.group(1) if sym_m else None,
         "alloc_cny": alloc,
+        "alloc_currency": alloc_m.group(1) if alloc_m else None,
     }
 
 
@@ -115,7 +117,7 @@ def explain_decision(decision_id: str) -> Dict[str, Any]:
             pass
     return {
         "decision_id": decision_id,
-        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny")},
+        **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny", "alloc_currency")},
         "confidence_lookup": confidence_display(parsed, load_confidence_lookup(), with_raw=False),
         "transcript_markdown": md.read_text(encoding="utf-8"),
         "path_snapshot": path_snapshot,
@@ -277,6 +279,7 @@ def list_decisions(days: int = 90) -> List[Dict[str, Any]]:
                 "verdict": parsed["verdict"],
                 "confidence": parsed["confidence"],
                 "alloc_cny": parsed["alloc_cny"],
+                "alloc_currency": parsed["alloc_currency"],
                 "intervention": None if iv is None else {
                     "rule": iv.get("rule"),
                     "rule_family": iv.get("rule_family"),

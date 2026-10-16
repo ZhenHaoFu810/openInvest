@@ -127,17 +127,17 @@ class TestPortfolioSummaryText:
     def test_cash_only_no_holdings(self, tmp_path):
         """纯现金，无持仓时显示'无实仓持仓'"""
         pm = _make_pm(tmp_path, cash={"CNY": 20000.0}, holdings=[])
-        text = portfolio_summary_text(pm, total_assets_cny=20000.0, current_prices={})
+        text = portfolio_summary_text(pm, total_assets=20000.0, current_prices={})
         assert "20,000" in text
         assert "当前无实仓持仓" in text
 
     def test_total_names_entries_left_out(self, tmp_path):
         """拉不到汇率/价格的条目没进总资产时，总资产旁明说，不悄悄偏小"""
         pm = _make_pm(tmp_path, cash={"CNY": 20000.0}, holdings=[])
-        text = portfolio_summary_text(pm, total_assets_cny=20000.0, current_prices={},
+        text = portfolio_summary_text(pm, total_assets=20000.0, current_prices={},
                                       excluded=["AAPL"])
         assert "总资产估算: ¥20,000（未计入 AAPL：拉不到汇率或价格，实际总资产更高）" in text
-        plain = portfolio_summary_text(pm, total_assets_cny=20000.0, current_prices={})
+        plain = portfolio_summary_text(pm, total_assets=20000.0, current_prices={})
         assert "总资产估算: ¥20,000\n" in plain   # 都算进去时文本不变
 
     def test_dry_powder_counts_foreign_cash(self, tmp_path, monkeypatch):
@@ -145,16 +145,16 @@ class TestPortfolioSummaryText:
         from openinvest.utils import fx
         monkeypatch.setattr(fx, "get_fx_rate", lambda q, b="CNY", as_of_date=None: {"AUD": 4.7}.get(q, 1.0 if q == b else None))
         only = portfolio_summary_text(_make_pm(tmp_path, cash={"CNY": 20000.0}, holdings=[]),
-                                      total_assets_cny=20000.0, current_prices={})
+                                      total_assets=20000.0, current_prices={})
         assert "  - 可投子弹 (dry_powder): ¥20,000\n" in only
         mixed = portfolio_summary_text(_make_pm(tmp_path / "m", cash={"CNY": 20000.0, "AUD": 1000.0}, holdings=[]),
-                                       total_assets_cny=24700.0, current_prices={})
+                                       total_assets=24700.0, current_prices={})
         assert "可投子弹 (dry_powder): ¥24,700（含外币现金按汇率折算）" in mixed
 
     def test_aud_cash_shown_when_positive(self, tmp_path):
         """AUD 余额 > 0 时显示"""
         pm = _make_pm(tmp_path, cash={"CNY": 10000.0, "AUD": 300.0}, holdings=[])
-        text = portfolio_summary_text(pm, total_assets_cny=11500.0, current_prices={})
+        text = portfolio_summary_text(pm, total_assets=11500.0, current_prices={})
         assert "AUD" in text
         assert "300" in text
 
@@ -166,7 +166,7 @@ class TestPortfolioSummaryText:
             "display_name": "BetaShares Nasdaq 100",
         }]
         pm = _make_pm(tmp_path, cash={"CNY": 0.0}, holdings=holdings)
-        text = portfolio_summary_text(pm, total_assets_cny=25000.0,
+        text = portfolio_summary_text(pm, total_assets=25000.0,
                                        current_prices={"NDQ.AX": 55.0})
         assert "浮盈" in text
         assert "10.00%" in text  # (55-50)/50 = 10%
@@ -179,7 +179,7 @@ class TestPortfolioSummaryText:
             "unit_label": "股", "avg_cost": 50.0, "cost_currency": "AUD",
         }]
         pm = _make_pm(tmp_path, cash={"CNY": 0.0}, holdings=holdings)
-        text = portfolio_summary_text(pm, total_assets_cny=25000.0, current_prices={})
+        text = portfolio_summary_text(pm, total_assets=25000.0, current_prices={})
         assert "浮盈" not in text
         assert "50.00" in text  # avg_cost 显示
 
@@ -191,24 +191,24 @@ class TestPortfolioSummaryText:
              "is_tracking_only": True},
         ]
         pm = _make_pm(tmp_path, cash={"CNY": 1000.0}, holdings=holdings)
-        text = portfolio_summary_text(pm, total_assets_cny=10000.0, current_prices={})
+        text = portfolio_summary_text(pm, total_assets=10000.0, current_prices={})
         # TSLA is_tracking_only=True 但 units=0，不出现在 real_holdings
         assert "TSLA" not in text
 
     def test_dry_powder_equals_cash(self, tmp_path):
         """dry_powder = cash_cny（无 buffer 减项后）"""
         pm = _make_pm(tmp_path, cash={"CNY": 30000.0}, holdings=[])
-        text = portfolio_summary_text(pm, total_assets_cny=30000.0, current_prices={})
+        text = portfolio_summary_text(pm, total_assets=30000.0, current_prices={})
         assert "30,000" in text
 
     def test_risk_level_shown(self, tmp_path):
         """风险偏好显示正确"""
         pm = _make_pm(tmp_path)
-        text = portfolio_summary_text(pm, total_assets_cny=50000.0, current_prices={})
+        text = portfolio_summary_text(pm, total_assets=50000.0, current_prices={})
         assert "Balanced" in text
 
     def test_concentration_not_zeroed_when_total_unknown(self, tmp_path):
-        """total_assets_cny=NaN（上游某腿不可解析）时，集中度不得伪造成 0.0%。
+        """total_assets=NaN（上游某腿不可解析）时，集中度不得伪造成 0.0%。
 
         根因回归：单个持仓 current_price=NaN 污染 total → total=NaN → renderer 走
         `total>0=False` else 分支，把每个 holding 的集中度静默写成 0.0%。这会让
@@ -225,7 +225,7 @@ class TestPortfolioSummaryText:
         ]
         pm = _make_pm(tmp_path, cash={"CNY": 0.0}, holdings=holdings)
         text = portfolio_summary_text(
-            pm, total_assets_cny=float("nan"),
+            pm, total_assets=float("nan"),
             current_prices={"NDQ.AX": 55.0, "510300.SS": 4.5},
         )
         # 不得出现伪造的 0.0% 集中度
@@ -250,7 +250,7 @@ class TestPortfolioSummaryText:
         pm = _make_pm(tmp_path, cash={"CNY": 100.0}, holdings=holdings)
         # 合法 total（已剔除缺价腿）：cash 100 + 黄金 134 = 234；黄金占比 134/234 ≈ 57.3%
         text = portfolio_summary_text(
-            pm, total_assets_cny=234.0,
+            pm, total_assets=234.0,
             current_prices={"GOLD": 134.0},  # 510300.SS 缺价
         )
         # 有价持仓显示正确非零集中度（不再被 NaN 静默归零）
@@ -270,7 +270,7 @@ class TestPortfolioSummaryText:
         pm = _make_pm(tmp_path, cash={"CNY": 100.0}, holdings=holdings)
         # 默认 config = lens OFF（#93/ADR-020），不显式 override
         text = portfolio_summary_text(
-            pm, total_assets_cny=234.0, current_prices={"GOLD": 134.0},
+            pm, total_assets=234.0, current_prices={"GOLD": 134.0},
         )
         assert "集中度" not in text, "lens OFF 时集中度不应出现在 portfolio_summary"
         assert "黄金" in text and "浮盈" in text  # 其余持仓信息仍在
@@ -284,7 +284,7 @@ class TestPortfolioSummaryText:
              "avg_cost": 1.0, "cost_currency": "CNY", "display_name": "某基金"},
         ]
         pm = _make_pm(tmp_path, cash={"CNY": 50000.0}, holdings=holdings)
-        text = portfolio_summary_text(pm, total_assets_cny=60000.0, current_prices={"FUND01": 1.0})
+        text = portfolio_summary_text(pm, total_assets=60000.0, current_prices={"FUND01": 1.0})
         assert "CNY 市值 ¥10,000" in text
         assert "现价再跌 10% / 20% / 35% 损失 ¥1,000 / ¥2,000 / ¥3,500" in text
         assert "集中度" not in text and "16.7" not in text  # 占比既不渲染也不能被拼出来
@@ -299,7 +299,7 @@ class TestPortfolioSummaryText:
              "avg_cost": 1.0, "cost_currency": "CNY", "display_name": "某基金"},
         ]
         pm = _make_pm(tmp_path, cash={"CNY": 50000.0}, holdings=holdings)
-        text = portfolio_summary_text(pm, total_assets_cny=60000.0, current_prices={"FUND01": 1.0})
+        text = portfolio_summary_text(pm, total_assets=60000.0, current_prices={"FUND01": 1.0})
         assert "**集中度 16.7%** (CNY 市值 ¥10,000 / 总资产 ¥60,000)，现价再跌 10% / 20% / 35% 损失 ¥1,000 / ¥2,000 / ¥3,500" in text
         assert _extract_concentration_from_summary(text, "FUND01") == 16.7
 
@@ -315,7 +315,7 @@ class TestPortfolioSummaryText:
         pm = _make_pm(tmp_path, cash={"CNY": 50000.0}, holdings=holdings)
         for lens in (True, False):
             set_config_override({"verdict": {"concentration_lens_enabled": lens}})
-            text = portfolio_summary_text(pm, total_assets_cny=50000.0, current_prices={"AAPL": 200.0})
+            text = portfolio_summary_text(pm, total_assets=50000.0, current_prices={"AAPL": 200.0})
             assert "集中度 0.0%" not in text and "损失 ¥" not in text and "CNY 市值 ¥0" not in text
             assert ("暂不可计算" in text) == lens
 

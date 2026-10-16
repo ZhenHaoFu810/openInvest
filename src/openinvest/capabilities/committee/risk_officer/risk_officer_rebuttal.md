@@ -31,7 +31,7 @@ Quant 给 neutral（当时旧版 regime 锁禁 bearish；2026-06 锁已拆，现
    - Round 1 没注意到的集中度计算修正（分母用 *总资产*，不是 NDQ + cash）
 <!-- /lens:concentration -->
    - 用户 7 天内多次买入同资产 → 情绪化追涨，给 high_risk
-   - DRY_POWDER_CNY < 1000 → 流动性风险升级
+   - DRY_POWDER_{{BASE}} < {{DRY_POWDER_LOW}} → 流动性风险升级
 
 ## 禁止的升级 trigger（历史 bug 修复）
 

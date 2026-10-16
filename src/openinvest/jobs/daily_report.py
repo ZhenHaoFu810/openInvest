@@ -106,11 +106,11 @@ def _format_staleness(label: str, age_days: Optional[int]) -> str:
 
 def _portfolio_summary(
     pm: PortfolioManager,
-    total_assets_cny: float,
+    total_assets: float,
     current_prices: Dict[str, float],
 ) -> str:
-    """用户上下文文本，委托给 daily_report_builder（见 ADR-005）"""
-    return portfolio_summary_text(pm, total_assets_cny, current_prices)
+    """用户上下文文本（基准币种），委托给 daily_report_builder（见 ADR-005）"""
+    return portfolio_summary_text(pm, total_assets, current_prices)
 
 
 # 独立 challenge 用的第二意见 CLI，按优先级探测（agy 优先——各家 CLI 更替快，
@@ -420,12 +420,17 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
     # 总资产走全仓库唯一实现 fx.total_portfolio_value（2026-10 基准币种第 1 步：这里原先自己算一份，
     # 缺价的持仓直接剔出分母，和 status / 委员会路径的"按成本价计入"不一致，集中度偏高）。
     # skipped_assets（行情过期熔断）照旧整个不计入。
+    from openinvest.utils.base_currency import base_currency
     from openinvest.utils.fx import total_portfolio_value
-    total_assets_cny, value_status = total_portfolio_value(
-        pm, current_prices, "CNY", exclude=tuple(skipped_assets))
+    _base = base_currency()
+    total_assets, value_status = total_portfolio_value(
+        pm, current_prices, _base, exclude=tuple(skipped_assets))
     data_warnings.extend(_value_warnings(value_status))
 
-    portfolio_summary = _portfolio_summary(pm, total_assets_cny, current_prices)
+    portfolio_summary = _portfolio_summary(pm, total_assets, current_prices)
+    # 邮件正文的总资产仍按人民币展示，基准币种化在第 2 步（展示层）
+    total_assets_cny = total_assets if _base == "CNY" else total_portfolio_value(
+        pm, current_prices, "CNY", exclude=tuple(skipped_assets))[0]
     if data_warnings:
         portfolio_summary += "\n\n=== 数据可信度告警 ===" + "".join(data_warnings)
 
