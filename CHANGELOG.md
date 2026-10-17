@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.49.0](https://github.com/longsizhuo/openInvest/compare/v0.48.0...v0.49.0) (2026-10-17)
+
+
+### Features
+
+* **portfolio:** rebalance_plan turns strategy targets into a buy/sell list ([#447](https://github.com/longsizhuo/openInvest/issues/447)) ([3425844](https://github.com/longsizhuo/openInvest/commit/3425844a19e2242600b00df760722e9af2e1757e))
+
+
+### Bug Fixes
+
+* **pnl,portfolio:** public PnL chart and status stop assuming the author's assets (C4) ([#448](https://github.com/longsizhuo/openInvest/issues/448)) ([c5a774b](https://github.com/longsizhuo/openInvest/commit/c5a774b229890c584beb07b976d27142561afead))
+
 ## [0.48.0](https://github.com/longsizhuo/openInvest/compare/v0.47.0...v0.48.0) (2026-10-17)
 
 
