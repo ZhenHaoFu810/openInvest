@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 # prepare_committee_brief / save_committee_transcript 在模块作用域用到这些；
 # exchange_fee / PortfolioManager 等改走函数内 call-time import（保持可被契约测试 patch）。
-from openinvest.utils.base_currency import alloc_ceiling, base_currency
+from openinvest.utils.base_currency import alloc_ceiling, base_currency, single_invest_cap
 from openinvest.utils.symbols import safe_symbol
 from openinvest.core.committee import (
     CommitteeReport,
@@ -15,6 +15,7 @@ from openinvest.core.committee import (
     atr_defense_from_text,  # save_committee_transcript 提 ATR 防御腿
     build_input_health,
     parse_cio_memo,
+    single_invest_cap_note,
     regime_label_from_text,
 )
 from openinvest.core.regime import classify_regime, format_regime_brief
@@ -299,13 +300,14 @@ def save_committee_transcript(
     has_df = df is not None and not df.empty
     current_price = compute_metrics(df).get("current_price") if has_df else None
     try:
+        strategy = PortfolioManager().strategy
         target = next(
-            (a for a in PortfolioManager().strategy.get("target_assets", [])
+            (a for a in strategy.get("target_assets", [])
              if a.get("symbol") == symbol),
             {},
         )
-    except Exception:  # noqa: BLE001  策略读不到 → 当非黄金（defense_dca=None 旧全拦）
-        target = {}
+    except Exception:  # noqa: BLE001  策略读不到 → 当非黄金（defense_dca=None 旧全拦）、无单次上限
+        strategy, target = {}, {}
     defense_dca = gold_defense_dca_plan(symbol, target, df.index if has_df else [])
     verdict = parse_cio_memo(
         cio_text,
@@ -315,8 +317,12 @@ def save_committee_transcript(
         defense_flag_on=("INDEP_DEFENSE_FLAG: on" in raw or atr_defense_on),
         defense_dca=defense_dca,
         alloc_ceiling=alloc_ceiling(),
+        single_invest_cap=single_invest_cap(target, strategy),  # Sanity 6（与 Direct 同源）
     )
     verdict["alloc_currency"] = base_currency()
+    _cap_note = single_invest_cap_note(verdict)
+    if _cap_note and "CIO" in sections:
+        sections["CIO"] = f"{sections['CIO'].rstrip()}\n\n⚠️ {_cap_note}"
 
     store = MemoryStore()
     now = datetime.now()
