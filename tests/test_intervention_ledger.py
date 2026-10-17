@@ -308,3 +308,12 @@ class TestGoldDcaGate:
         ])
         g = self._gate()
         assert g["allow"] is False and g["reason"] == "spacing"
+
+    def test_plan_keys_on_gc_f_not_target_type(self, tmp_path, monkeypatch):
+        # 生产 strategy.md 的 target_assets 没有任何写入方写 type：闸按 symbol 认黄金。
+        # 旧实现判 type == "metal"，生产里永远 None（防御一触发黄金就整笔全拦）。
+        self._seed(tmp_path, monkeypatch, [])
+        from openinvest.core.runner.intervention import gold_defense_dca_plan
+        plan = gold_defense_dca_plan("GC=F", {"symbol": "GC=F"}, self.CAL)
+        assert plan is not None and plan["allow"] is True and plan["reason"] == "first"
+        assert gold_defense_dca_plan("NDQ.AX", {"symbol": "NDQ.AX", "type": "metal"}, self.CAL) is None
