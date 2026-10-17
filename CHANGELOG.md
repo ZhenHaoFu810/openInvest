@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.46.0](https://github.com/longsizhuo/openInvest/compare/v0.45.0...v0.46.0) (2026-10-17)
+
+
+### Features
+
+* **review:** 计分板诚实化——UNCLEAR 单列、同尺子基率/提升/区间 + transcript Input Health 块与同日重跑归档 ([#431](https://github.com/longsizhuo/openInvest/issues/431)) ([a76fcba](https://github.com/longsizhuo/openInvest/commit/a76fcbaf0cb8222dacbbc5128456dd23a5c63538))
+
+
+### Bug Fixes
+
+* **ledger:** idempotency key for money paths, agent-path decision matching, no bare load_dotenv ([#432](https://github.com/longsizhuo/openInvest/issues/432)) ([9df549d](https://github.com/longsizhuo/openInvest/commit/9df549d36543f7e98726cc6a2393223f23f9915f))
+
 ## [0.45.0](https://github.com/longsizhuo/openInvest/compare/v0.44.1...v0.45.0) (2026-10-17)
 
 
