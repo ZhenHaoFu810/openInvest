@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/longsizhuo/openInvest/compare/invest-backup-skill-v0.2.3...invest-backup-skill-v0.3.0) (2026-10-17)
+
+
+### Features
+
+* **jobs:** scheduled backup with WAL checkpoint ([#446](https://github.com/longsizhuo/openInvest/issues/446)) ([9d3f1bc](https://github.com/longsizhuo/openInvest/commit/9d3f1bc38773c1f70b229b3804f3aca34b9e682d))
+
 ## [0.2.3](https://github.com/longsizhuo/openInvest/compare/invest-backup-skill-v0.2.2...invest-backup-skill-v0.2.3) (2026-10-13)
 
 
