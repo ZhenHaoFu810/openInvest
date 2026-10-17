@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.47.0](https://github.com/longsizhuo/openInvest/compare/v0.46.0...v0.47.0) (2026-10-17)
+
+
+### Features
+
+* **committee:** Sanity 6 单次入场上限 + 删无出处 77% 规则 + 新闻注入防护 ([#430](https://github.com/longsizhuo/openInvest/issues/430)) ([81da569](https://github.com/longsizhuo/openInvest/commit/81da569837b624363a4b394addcfae3e7e08f55e))
+* **portfolio:** real-account TWR/XIRR/drawdown/benchmark in status and daily report ([#433](https://github.com/longsizhuo/openInvest/issues/433)) ([74dac7b](https://github.com/longsizhuo/openInvest/commit/74dac7b1a1e50cbab66ae4e263180746eaa33480))
+
 ## [0.46.0](https://github.com/longsizhuo/openInvest/compare/v0.45.0...v0.46.0) (2026-10-17)
 
 
