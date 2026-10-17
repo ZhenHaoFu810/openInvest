@@ -82,7 +82,8 @@ ProxyKind = Literal["direct", "gold_cny_per_gram", "fx_pair", "eastmoney_fund"]
 
 class Holding(BaseModel):
     """单个持仓 —— 通用化后支持任意 yfinance symbol"""
-    model_config = ConfigDict(extra="allow")
+    # allow_inf_nan=False：NaN / inf 的份数、均价在写入闸就被拒（见 PortfolioData）
+    model_config = ConfigDict(extra="allow", allow_inf_nan=False)
 
     symbol: str = Field(
         ...,
@@ -146,8 +147,12 @@ class PortfolioData(BaseModel):
     v1 的扁平字段（cash_cny/aud_cash/ndq_shares/gold_grams/gold_avg_cost_cny_per_gram/
     ndq_avg_cost_aud_per_share）由 scripts/migrate_portfolio_to_holdings.py 一次性转换；
     v2 后这些字段在写入端不应再出现（CI grep 会防回归）。
+
+    allow_inf_nan=False：with_portfolio_tx 提交前在这里校验。NaN 能穿过 PortfolioManager 里
+    `amount <= 0` 这类守卫（比较恒为 False），此前 `deposit -a nan` 会把 `CNY: .nan` 永久写进
+    账本、之后每笔存款都被吞掉，还返回 ok；现在整笔不落盘（流水在提交成功后才追加）。
     """
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", allow_inf_nan=False)
 
     cash: Dict[str, float] = Field(
         default_factory=dict,
