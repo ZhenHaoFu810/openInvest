@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.48.0](https://github.com/longsizhuo/openInvest/compare/v0.47.0...v0.48.0) (2026-10-17)
+
+
+### Features
+
+* **jobs:** scheduled backup with WAL checkpoint ([#446](https://github.com/longsizhuo/openInvest/issues/446)) ([9d3f1bc](https://github.com/longsizhuo/openInvest/commit/9d3f1bc38773c1f70b229b3804f3aca34b9e682d))
+* **review:** 反事实账本——每条裁决配同窗口基准超额与照做净损益 ([#442](https://github.com/longsizhuo/openInvest/issues/442)) ([ea19e06](https://github.com/longsizhuo/openInvest/commit/ea19e06d40603073fa41a0c45e9d24488142639f))
+
+
+### Bug Fixes
+
+* **committee:** Sprint 1 端到端跟进——成交匹配起点、单次上限措辞与守卫、缓存路径、performance 提示 ([#445](https://github.com/longsizhuo/openInvest/issues/445)) ([f02b3b2](https://github.com/longsizhuo/openInvest/commit/f02b3b29f39c6aa39825a60c87a8efbcfdab54b6))
+
 ## [0.47.0](https://github.com/longsizhuo/openInvest/compare/v0.46.0...v0.47.0) (2026-10-17)
 
 
