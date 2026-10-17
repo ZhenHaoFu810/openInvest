@@ -478,11 +478,13 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         macro_view = session["macro_view"]
         event_brief = session["event_brief"]
 
-        # 单资产 session 失败 → 合并到 skipped_assets, 防 cio_memos_combined /
-        # assemble_full_report 拿不到 report.cio_memo 抛 AttributeError
+        # 单资产 session 失败 → 合并到 skipped_assets，并移出 asset_committees（失败项只有
+        # {"error": ...}，没有 verdict / report）：下游每处只见真裁决，不必逐处判 skipped。
+        # 此前末尾组装 result["verdicts"] 漏判，单资产失败就 KeyError 'verdict'，整份日报丢失。
         for sym, err in session.get("errors", {}).items():
             log.warning("%s 在 session 内失败: %s; 加入 skipped_assets", sym, err)
             skipped_assets.add(sym)
+            asset_committees.pop(sym, None)
             store.dream_event({"phase": "committee_failed", "symbol": sym,
                                "error": err, "date": today})
 
