@@ -23,15 +23,18 @@ log = logging.getLogger(__name__)
 # Verdict 解析
 # ----------------------------------------------------------------------
 
-VERDICT_RE = re.compile(r"VERDICT:\s*(BUY|ACCUMULATE|HOLD|TRIM|SELL)", re.I)
-CONFIDENCE_RE = re.compile(r"CONFIDENCE:\s*([\d.]+)")
-DOMINANT_RE = re.compile(r"DOMINANT_VIEW:\s*(quant|macro|risk)", re.I)
-# 金额字段名带基准币种（SUGGESTED_ALLOC_CNY / _AUD …）；接受任意三字母，老存档照常解析
-ALLOC_RE = re.compile(r"SUGGESTED_ALLOC_[A-Z]{3}:\s*(-?\d+)")
+# 字段行容忍 markdown 加粗（**VERDICT**: HOLD / VERDICT: **HOLD**）：键后 `\**`，值前 `[\s*]*`
+VERDICT_RE = re.compile(r"VERDICT\**:[\s*]*(BUY|ACCUMULATE|HOLD|TRIM|SELL)", re.I)
+# 数字只取 \d*\.?\d+：句末的 "0.72." 不能把句号吃进去（float 抛错 → 整轮作废）
+CONFIDENCE_RE = re.compile(r"CONFIDENCE\**:[\s*]*(\d*\.?\d+)")
+DOMINANT_RE = re.compile(r"DOMINANT_VIEW\**:[\s*]*(quant|macro|risk)", re.I)
+# 金额字段名带基准币种（SUGGESTED_ALLOC_CNY / _AUD …）；接受任意三字母，老存档照常解析。
+# 值容忍 ¥5,000 / -¥3,000 / ¥-3000 / +5000，交给 _alloc_int 归一（旧式 (-?\d+) 把 10,000 读成 10、¥800 读成 0）
+ALLOC_RE = re.compile(r"SUGGESTED_ALLOC_[A-Z]{3}\**:[\s*]*([+\-−]?\s*[¥$€£]?\s*[+\-−]?\s*\d[\d,]*)")
 _ALLOC_KEY_RE = re.compile(r"suggested_alloc_[a-z]{3}")
-TRIM_REASON_RE = re.compile(r"TRIM_REASON:\s*(concentration|stop_loss|bearish)", re.I)
+TRIM_REASON_RE = re.compile(r"TRIM_REASON\**:[\s*]*(concentration|stop_loss|bearish)", re.I)
 # TRIM 路径化：买回点 + 预期路径（EXECUTION_PLAN/RISK_PLAN 仍丢弃，只解析这三个）
-REENTRY_PRICE_RE = re.compile(r"REENTRY_PRICE:\s*[¥$]?\s*(-?[\d,]+(?:\.\d+)?)", re.I)
+REENTRY_PRICE_RE = re.compile(r"REENTRY_PRICE\**:[\s*]*[¥$]?\s*(-?[\d,]+(?:\.\d+)?)", re.I)
 REENTRY_CONDITION_RE = re.compile(r"REENTRY_CONDITION:\s*(.+)")
 EXPECTED_PATH_RE = re.compile(r"EXPECTED_PATH:\s*(.+)")
 # regime 标签（format_regime_brief 输出首行 / coordinator transcript 里的同款行）
@@ -40,6 +43,19 @@ REGIME_LABEL_RE = re.compile(r"^REGIME:\s*([a-z_]+)\s*$", re.MULTILINE)
 _WU_SENTINEL = f"{AGENT_UNAVAILABLE_MARKER} reason="
 # 独立快崩防御 ATR 腿：从 format_regime_brief 的确定性 INPUTS 行提取波动突变比
 ATR_SPIKE_RE = re.compile(r"\batr_spike_ratio=([\d.]+)")
+
+
+def _alloc_int(raw: Any) -> int:
+    """建议金额 → 整数（基准币种）。数字直接取整；字符串去货币符号 / 千分位 / 加粗，
+    负号在货币符号前后都认（-¥3,000 / ¥-3000）；读不出数字 → 0。JSON 与正则两条路径共用。"""
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    s = str(raw or "")
+    m = re.search(r"\d[\d,]*", s)
+    if not m:
+        return 0
+    n = int(m.group().replace(",", ""))
+    return -n if any(c in s[:m.start()] for c in "-−") else n
 
 
 def regime_label_from_text(text: str) -> Optional[str]:
@@ -131,8 +147,8 @@ def _fields_to_out(out: Dict[str, Any], fields: Dict[str, Any]) -> None:
     out["dominant_view"] = dv if dv in ("quant", "macro", "risk") else "tie"
     try:
         alloc = next((v for k, v in fields.items() if _ALLOC_KEY_RE.fullmatch(str(k))), None)
-        out["alloc_cny"] = int(float(alloc or 0))
-    except (TypeError, ValueError):
+        out["alloc_cny"] = _alloc_int(alloc)
+    except (TypeError, ValueError, OverflowError):
         out["alloc_cny"] = 0
     tr = fields.get("trim_reason")
     tr = str(tr).lower() if tr else None
@@ -184,7 +200,7 @@ def parse_cio_memo(
         m = DOMINANT_RE.search(text)
         out["dominant_view"] = m.group(1).lower() if m else "tie"
         m = ALLOC_RE.search(text)
-        out["alloc_cny"] = int(m.group(1)) if m else 0
+        out["alloc_cny"] = _alloc_int(m.group(1)) if m else 0
         m = TRIM_REASON_RE.search(text)
         out["trim_reason"] = m.group(1).lower() if m else None
 
