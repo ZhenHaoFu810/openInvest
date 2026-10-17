@@ -76,10 +76,17 @@ def test_fetch_failure_flagged_in_attrs(recording_yf, monkeypatch):
     assert ef.get_history_data("STALE.SS").attrs["yf_fetch_failed"] is True
 
     recording_yf.last_period = None
-    today = pd.DataFrame({"Close": [1.0]}, index=[pd.Timestamp.now().normalize()])
+    today = pd.DataFrame({"Close": [1.0] * 300},
+                         index=pd.date_range(end=pd.Timestamp.now().normalize(), periods=300, freq="D"))
     monkeypatch.setattr(ef._STORE, "get_history_df", lambda s, days=730: today.copy())
+    monkeypatch.setattr(ef._STORE, "seconds_since_fetch", lambda s: 0.0)
     assert ef.get_history_data("FRESH2.SS").attrs["yf_fetch_failed"] is False
-    assert recording_yf.last_period is None  # 库已是今天，没拉取
+    assert recording_yf.last_period is None  # 库已是今天且刚刷过，没拉取
+
+    # 今天这根超过 TTL 没刷 → 再刷 5d；拉空也不标失败（库里今天已有值，不是"行情源挂了"）
+    monkeypatch.setattr(ef._STORE, "seconds_since_fetch", lambda s: float("inf"))
+    assert ef.get_history_data("FRESH3.SS").attrs["yf_fetch_failed"] is False
+    assert recording_yf.last_period == "5d"
 
 
 def test_half_formed_nan_bar_is_not_stored(monkeypatch):

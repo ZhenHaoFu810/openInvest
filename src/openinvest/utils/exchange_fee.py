@@ -70,6 +70,8 @@ _ALL_ROWS = 100000
 # symbol → 今天已为「今天这根缺 H/L」补刷过的日期。每进程每 symbol 每天最多补一次：
 # yfinance 本就给不出 H/L 的 bar（FX 周末、盘中半成型）不会每次调用都重拉。
 _OHLCV_GAP_TRIED: dict[str, str] = {}
+# 今天这根 bar 距上次刷新超过这么久就再刷 5d（盘中临时值，见 get_history_data）。
+_TODAY_BAR_TTL_S = 30 * 60
 # 场外基金 symbol → 上次成功拉东方财富净值历史的 monotonic 时刻。净值一天只更新一次，
 # 每次全量（几百 KB）覆盖写库：常驻进程（MCP / scheduler）30 分钟内不重拉。
 _FUND_REFRESHED: dict[str, float] = {}
@@ -86,6 +88,38 @@ def _nan_to_none(v):
     except (TypeError, ValueError):
         return None
     return None if np.isnan(fv) else fv
+
+
+def _rebuild_days_from_intraday(ticker, symbol: str, days: dict) -> None:
+    """日线 Close 为 NaN 的日子用同日 60m bar 重建。days: {日期: 日线自带的成交量或 None}。
+
+    Yahoo 有时把日线 Close 给成 NaN（A 股 ETF 已收盘的日子也会，成交量却是全天的）。
+    数据源闸跳过 NaN，库里那天就停在盘中某次抓到的半截 bar：价不对，量只有全天的一小截，
+    RVOL 被读成"缩量"。重建口径：收 = 当天最后一根有效收盘，高 / 低取极值；量优先用日线
+    自带的（60m 偶有缺根，合计可能只有日线的一半），没有才取 60m 合计。60m 拉不到或当天
+    没有有效收盘就保持原样。
+    ponytail: 只看最近 5 天的 60m（覆盖 5d 增量刷新）；更早的 NaN 日保持原样。
+    """
+    try:
+        df60 = ticker.history(period="5d", interval="60m")
+    except Exception as e:  # noqa: BLE001  重建是尽力而为，失败不挡主刷新
+        print(f"⚠️ [intraday-rebuild] {symbol} 60m 拉取失败，NaN 日保持原样：{e}")
+        return
+    if df60 is None or df60.empty:
+        return
+    for day, g in df60.groupby(df60.index.strftime("%Y-%m-%d")):
+        closes = g["Close"].dropna()
+        if day not in days or closes.empty:
+            continue
+        volume = days[day]
+        if volume is None:
+            volume = _nan_to_none(g["Volume"].sum(min_count=1))
+        _STORE.save_generic_price(
+            symbol, day, float(closes.iloc[-1]), source="yfinance_60m",
+            high=_nan_to_none(g["High"].max()),
+            low=_nan_to_none(g["Low"].min()),
+            volume=volume,
+        )
 
 
 # ==========================================
@@ -132,6 +166,14 @@ def get_history_data(
     )
     if ohlcv_gap:
         _OHLCV_GAP_TRIED[symbol] = today_str
+    # 今天这根是盘中临时 bar：首个盘中调用落库后，同一天后面的调用都拿它当"今天收盘"
+    # （收盘后跑的日报委员会也读到上午的价和量）。距上次刷新超过 TTL 就再刷 5d；
+    # 刷新时间记在库里（fetch_log），CLI / MCP / cron 各进程共用。
+    # ponytail: 固定 TTL，收盘后也照刷；要按交易所收盘时间停刷时再加。
+    today_bar_stale = (
+        not needs_update and not ohlcv_gap and as_of_date is None
+        and _STORE.seconds_since_fetch(symbol) > _TODAY_BAR_TTL_S
+    )
 
     # backtest 模式 yfinance 策略：
     # - 实盘（as_of_date=None）：照常拉最新 5d
@@ -140,7 +182,7 @@ def get_history_data(
     #   cutoff 之前的足够数据让 RSI/ATR 等指标算得出来）
     # - backtest cutoff >= today - 30d：保守，仍 skip（防边界情况）
     should_fetch_yf = False
-    if needs_update or ohlcv_gap:
+    if needs_update or ohlcv_gap or today_bar_stale:
         if as_of_date is None:
             should_fetch_yf = True
             # 深度不足（empty 或仅几天）→ 全量回填 2y，保证 RSI/MA120/MA250/regime
@@ -181,6 +223,8 @@ def get_history_data(
                 mismatched = []
                 for idx, row in df_yf.iterrows():
                     day = idx.strftime("%Y-%m-%d")
+                    if day == today_str:  # 今天这根是盘中临时值，盘中刷新本就会变，不参与复权判断
+                        continue
                     new_c, old_c = _nan_to_none(row.get("Close")), db_close.get(day)
                     if new_c and old_c and abs(new_c / old_c - 1) > 0.01:
                         mismatched.append(day)
@@ -192,12 +236,14 @@ def get_history_data(
                     df_yf = ticker.history(period="2y")
             if not df_yf.empty:
                 yf_got_data = True
+                nan_days = {}
                 for idx, row in df_yf.iterrows():
                     # 数据源闸：close=NaN（yfinance 收盘前半成型 bar）不落库。
                     # 否则它以 NULL 入 daily_prices，下游读价 float(NULL)→NaN，穿过
                     # 全链路 is-None 守卫污染总资产（2026-06-23 根因）。
                     close = _nan_to_none(row.get('Close'))
                     if close is None:
+                        nan_days[idx.strftime('%Y-%m-%d')] = _nan_to_none(row.get('Volume'))
                         continue
                     # 一并落 OHLCV：High/Low 给真 TR/ATR，Volume 给 RVOL。
                     # NaN（如 FX/指数无成交量）转 None，落 NULL。
@@ -207,6 +253,9 @@ def get_history_data(
                         low=_nan_to_none(row.get('Low')),
                         volume=_nan_to_none(row.get('Volume')),
                     )
+                if nan_days and as_of_date is None:
+                    _rebuild_days_from_intraday(ticker, symbol, nan_days)
+                _STORE.mark_fetched(symbol)  # 拿到数据才记：行情源挂着时下次照样重试
                 df_db = _STORE.get_history_df(symbol, days=_ALL_ROWS)
         except Exception as e:
             print(f"❌ yfinance sync failed for {symbol}: {e}")
