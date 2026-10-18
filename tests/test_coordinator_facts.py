@@ -138,3 +138,14 @@ def test_submit_writes_daily_sidecar_and_loader_reads_it(env):
     assert rec["report"].macro_view == "宏观中性" and "VERDICT" in rec["report"].cio_memo
     assert rec["path_reference"] == "- 30d 回踩中位 -4%" and rec["path_profile"] == {"x": 1}
     assert co.load_submitted_committee("OTHER", day) is None
+
+
+def test_sidecar_keeps_numpy_numbers_numeric(env, monkeypatch):
+    import numpy as np
+    real = co.parse_cio_memo
+    monkeypatch.setattr(co, "parse_cio_memo", lambda t, **kw: {**real(t, **kw), "confidence": np.float64(0.66),
+                                                              "alloc_cny": np.int64(800)})
+    co.save_committee_transcript("TESTSYM", RAW)
+    rec = co.load_submitted_committee("TESTSYM", datetime.now().strftime("%Y-%m-%d"))
+    assert isinstance(rec["verdict"]["confidence"], float) and f"{rec['verdict']['confidence']:.2f}" == "0.66"
+    assert rec["verdict"]["alloc_cny"] == 800

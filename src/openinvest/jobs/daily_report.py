@@ -531,7 +531,9 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         friction_report=friction_report,
         event_brief=event_brief,
     )
-    final_decision_gemini = _run_gemini_cli_review(gemini_prompt)
+    # agent 模式后端不发起任何模型调用（Gemini/agy CLI 也是模型）——第二意见交给宿主 Agent
+    final_decision_gemini = ("（agent 模式：第二意见由宿主 Agent 负责，后端不发起模型调用）"
+                             if agent_mode else _run_gemini_cli_review(gemini_prompt))
 
     # 3.5) 翻译官：人话解读（一次 LLM 调用；任何失败 graceful 回落
     # builder 内的确定性一句话，邮件照发）

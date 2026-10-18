@@ -457,8 +457,10 @@ def save_committee_transcript(
         except Exception as e:  # noqa: BLE001
             log.warning(f"save_committee path 快照失败 graceful：{e}")
     # 日报（agent 模式）直接读这份：完整的规则后裁决 + 各角色正文 + 路径参考，不再自己重跑委员会
+    sidecar = out_dir / f"{safe_sym}_committee.json"
     try:
-        (out_dir / f"{safe_sym}_committee.json").write_text(json.dumps({
+        sidecar.unlink(missing_ok=True)   # 重交写失败时不能留下上一次的旧裁决
+        sidecar.write_text(json.dumps({
             "symbol": symbol, "saved_at": now.isoformat(timespec="seconds"), "provider": provider,
             "verdict": verdict,
             "macro_view": sections.get("MACRO", ""),
@@ -467,7 +469,9 @@ def save_committee_transcript(
             "cio_memo": sections.get("CIO", cio_text),
             "path_reference": (facts or {}).get("path_reference") or "",
             "path_profile": (facts or {}).get("path_profile"),
-        }, ensure_ascii=False, default=str), encoding="utf-8")
+        # numpy 标量转回原生数（default=str 会把 confidence / alloc 存成字符串，日报格式化时炸）
+        }, ensure_ascii=False, default=lambda o: o.item() if hasattr(o, "item") else str(o)),
+            encoding="utf-8")
     except Exception as e:  # noqa: BLE001  写不下 → 日报把该标的列为缺卷（响亮），不阻断收卷
         log.warning(f"save_committee 日报侧文件写入失败：{e}")
     record_intervention(symbol, regime or "", current_price, verdict, atr_defense_on)
@@ -489,6 +493,8 @@ def load_submitted_committee(symbol: str, day: str) -> Optional[Dict[str, Any]]:
         rec = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(rec, dict) or not isinstance(rec.get("verdict"), dict):
+        return None   # 格式不对按缺卷处理（日报响亮列出），不让整份日报挂掉
     return {
         "verdict": rec["verdict"],
         "report": CommitteeReport(
