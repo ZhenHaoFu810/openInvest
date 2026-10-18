@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 
 import pandas as pd
+import pytest
 
 from openinvest.jobs.review_calc import (
     VerdictReview,
@@ -12,6 +13,14 @@ from openinvest.jobs.review_calc import (
     confidence_display,
     merge_confidence_lookup,
 )
+
+
+@pytest.fixture(autouse=True)
+def _default_llm_model(monkeypatch):
+    """查表按"当前配置的模型"过滤样本（build_confidence_lookup(model=)）：本文件的夹具行都是 DeepSeek 时代的，
+    别让开发机 / CI 的 LLM_MODEL 改变结果（评审 #497）。个别用例需要别的模型时自己 setenv。"""
+    for var in ("LLM_MODEL", "DEEPSEEK_MODEL"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _rv(verdict, hit, *, date="2026-06-01", conf=0.6, source="live", flat=True,

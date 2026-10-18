@@ -18,7 +18,8 @@
 
 - 每个窗口附 by_model {<model_era>: 同上一份窗口聚合}：换模型后新旧账分开算（model_era = "谁跑的:模型名"，如
   direct:claude-sonnet-5-5 / hermes:claude-haiku-5-5；模型名不算敏感）。每个模型各自按 n<30 抑制；另外
-  只要有模型子样本 0<n<30（被抑制），其余模型的数字也一并置 null（互补抑制：窗口合计 − 其余模型 = 被抑制那几行）
+  某个量（命中总数 / 各方向桶命中 / 校准 / 市场基率 / 超额）在某模型里有数据却因 n<30 被藏、而窗口合计公开时，其余模型的同一个量
+  也置 null（互补抑制：窗口合计 − 其余模型 = 被藏的那几行；按量族逐个检查，见 _complementary_mask）
 
 用法：
     python scripts/export_accuracy.py
@@ -268,6 +269,10 @@ def _suppress_small_samples(window: Dict[str, Any]) -> Dict[str, Any]:
         if bucket == "unclear":
             new_by_dir[bucket] = c   # 本就只有 total，没有可还原的命中率
             continue
+        # 方向桶里的 base_rate 是「同样本里市场标签为真的占比」，口径与命中同一把尺子——HOLD 桶的 base_rate 就是
+        # P(留在 flat band)，样本只有几行时它直接等于 HOLD 命中率（by_model 里的小模型尤其如此）。样本 <30 一并抹掉。
+        if int(out.get("sample_size", 0) or 0) < MIN_SAMPLE_FOR_PUBLIC and "base_rate" in c:
+            c["base_rate"] = None
         # 超额/跑赢比率的分母是 n_benchmark（基准覆盖不全时可能远小于 total）——按它自己的 n 抑制（CR #442 建议 2）
         if int(c.get("n_benchmark", 0) or 0) < MIN_SAMPLE_FOR_PUBLIC:
             for k in ("excess_mean", "beat_benchmark_rate"):
@@ -312,38 +317,70 @@ def _suppress_small_samples(window: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _mask_numbers(window: Dict[str, Any]) -> Dict[str, Any]:
-    """整份窗口聚合只留计数（sample_size / total / n），数字全置 None——互补抑制用（见 _by_model）。"""
-    out = dict(window)
-    out["direction_hit_rate"] = None
-    out["by_direction"] = {
-        b: (dict(c) if b == "unclear" else {k: (v if k == "total" else None) for k, v in c.items()})
-        for b, c in (window.get("by_direction") or {}).items()}
-    keep = ("n", "n_excluded", "n_zero_conf")
-    out["calibration"] = {k: (v if k in keep else None) for k, v in (window.get("calibration") or {}).items()}
-    out["base_rate"] = {k: (v if k == "n" else None) for k, v in (window.get("base_rate") or {}).items()}
+# ---- by_model 的跨模型互补抑制 ----
+# 窗口合计（direction_hit_rate / by_direction / calibration / base_rate）是公开的，且每个量 × 它的公开计数都是跨模型可加的
+# （hit、命中总数 = rate×n、Brier×n、市场标签数 = 占比×n）。所以只要某个模型的某个量因 n<30 被藏掉、而窗口合计和其余模型的同一个量都公开，
+# 「窗口 − 其余模型」就能精确还原被藏的那几行（评审 #497：方向桶粒度、命中总数、校准、市场基率都是这条通道）。
+# 做法：按「量族」检查——某族在某模型里**有数据却被藏**（计数>0、数字 None）且窗口该族是公开的 → 其余模型的同一族也置 None
+# （藏的未知质量 ≥ 其余模型的计数 ≥ 30，没法单点还原）。宁可多藏：被藏模型 ≥2 个或汇总 ≥30 条也照藏。
+# 族 = (名字, 要藏的叶子路径[第一个叶子也是“是否公开”的判据], 计数路径)
+def _families() -> List[Tuple[str, List[Tuple[str, ...]], Tuple[str, ...]]]:
+    fams: List[Tuple[str, List[Tuple[str, ...]], Tuple[str, ...]]] = [
+        ("hit_rate", [("direction_hit_rate",)], ("sample_size",)),
+        ("calibration", [("calibration", k) for k in ("ece", "brier", "base_rate_brier")], ("calibration", "n")),
+        ("base_rate", [("base_rate", k) for k in ("up", "down", "flat")], ("base_rate", "n")),
+    ]
+    for b in ("bullish", "bearish", "hold"):
+        fams += [
+            (f"{b}_hit", [("by_direction", b, k) for k in ("hit", "rate", "lift", "ci95")], ("by_direction", b, "total")),
+            (f"{b}_excess", [("by_direction", b, k) for k in ("excess_mean", "beat_benchmark_rate")],
+             ("by_direction", b, "n_benchmark")),
+            (f"{b}_base", [("by_direction", b, "base_rate")], ("sample_size",)),
+        ]
+    return fams
+
+
+def _get(d: Any, path: Tuple[str, ...]) -> Any:
+    for k in path:
+        d = d.get(k) if isinstance(d, dict) else None
+    return d
+
+
+def _null(d: Dict[str, Any], path: Tuple[str, ...]) -> None:
+    cur: Any = d
+    for k in path[:-1]:
+        cur = cur.get(k) if isinstance(cur, dict) else None
+    if isinstance(cur, dict) and path[-1] in cur:
+        cur[path[-1]] = None
+
+
+def _complementary_mask(window: Dict[str, Any], models: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """见上。window = 窗口公开聚合；models = {model_era: 该模型的公开聚合}。返回新 dict（深拷贝，不改入参）。"""
+    import copy
+    out = copy.deepcopy(models)
+    for _name, paths, count_path in _families():
+        hidden = {e for e, a in out.items()
+                  if int(_get(a, count_path) or 0) > 0 and _get(a, paths[0]) is None}
+        if hidden and _get(window, paths[0]) is not None:
+            for e, a in out.items():
+                if e not in hidden:
+                    for path in paths:
+                        _null(a, path)
     return out
 
 
-def _by_model(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """窗口内按 model_era 分模型聚合（每个模型 = 一份 _aggregate + 红线 #2 抑制）。
+def _by_model(rows: List[Dict[str, Any]], window_public: Dict[str, Any]) -> Dict[str, Any]:
+    """窗口内按 model_era 分模型聚合（每个模型 = 一份 _aggregate + 红线 #2 抑制，再做跨模型互补抑制）。
 
     model_era 取行里的字段；老 jsonl 没有就按同一个纯函数从 input_health + date 重算。
-
-    互补抑制：窗口合计（direction_hit_rate / by_direction / calibration / base_rate）是公开的，
-    若某模型子样本 0<n<30 被抑制，别的模型的数字 + 窗口合计相减就能还原那几行的命中——
-    所以被抑制模型的 sample_size 合计落在 (0, 30) 时，其余模型也只留计数（同 _suppress_small_samples
-    对方向桶的纪律；合计 0 条没有可还原的东西，≥30 条不单点可还原）。
+    window_public = 该窗口已抑制的公开聚合（互补抑制要看窗口那一族是不是公开的）。
     """
     by_era: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         era = str(r.get("model_era") or "") or model_era_of(r.get("input_health"), str(r.get("date") or ""))
         by_era.setdefault(era, []).append(r)
     agg = {era: _suppress_small_samples(_aggregate(rs)) for era, rs in sorted(by_era.items())}
-    small = [e for e, a in agg.items() if 0 < int(a["sample_size"]) < MIN_SAMPLE_FOR_PUBLIC]
-    if small and sum(int(agg[e]["sample_size"]) for e in small) < MIN_SAMPLE_FOR_PUBLIC:
-        agg = {e: (a if e in small else _mask_numbers(a)) for e, a in agg.items()}
-    return agg
+    return _complementary_mask(window_public, agg)
 
 
 def _filter_by_window(
@@ -361,6 +398,11 @@ def _filter_by_window(
         if dt is not None and dt >= cutoff:
             result.append(row)
     return result
+
+
+def _with_by_model(subset: List[Dict[str, Any]]) -> Dict[str, Any]:
+    public = _suppress_small_samples(_aggregate(subset))
+    return {**public, "by_model": _by_model(subset, public)}
 
 
 def build_summary(jsonl_path: Path) -> Dict[str, Any]:
@@ -389,7 +431,7 @@ def build_summary(jsonl_path: Path) -> Dict[str, Any]:
         "windows": {
             # 红线 #2：公开输出抹掉小样本命中率（_aggregate 仍算原始统计，
             # 抑制只发生在对外这一层）
-            name: {**_suppress_small_samples(_aggregate(subset)), "by_model": _by_model(subset)}
+            name: _with_by_model(subset)
             for name, subset in windows.items()
         },
     }

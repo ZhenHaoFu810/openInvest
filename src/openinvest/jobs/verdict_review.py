@@ -55,6 +55,7 @@ from openinvest.jobs.review_calc import (  # noqa: F401
     _flat_band,
     build_confidence_lookup,
     merge_confidence_lookup,
+    model_era_of,
     _is_hit,
     _summarize_bucket,
 )
@@ -418,6 +419,7 @@ def review_one(
         expected_direction=EXPECTED_DIRECTION.get(parsed["verdict"], UNCLEAR_DIRECTION),
         macro_at_decision=parsed["macro_at_decision"],
         input_health=parsed.get("input_health") or {},
+        model_era=model_era_of(parsed.get("input_health"), decision_date, parsed.get("provider")),
         alloc_cny=float(parsed.get("alloc_cny") or 0.0),
         alloc_currency=str(parsed.get("alloc_currency") or "").upper(),
         benchmark_symbol=ctx.get("benchmark_symbol", ""),

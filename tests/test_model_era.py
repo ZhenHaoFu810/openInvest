@@ -261,3 +261,102 @@ def test_arm_report_rows_without_recorded_model_are_not_a_second_model():
     txt = "\n".join(rc.arms_report_lines(arm, ctl))
     assert "direct:unknown × 2" in txt and "不止一个模型" not in txt
     assert "另有 2 行没有记录模型" in txt
+
+
+# ---------- 评审 #497：方向桶 / 命中总数 / 校准 / 市场基率的跨模型减法通道 ----------
+
+def _mk(model_health, day, *, bull=0, bull_hits=0, hold=0, hold_hits=0, bear=0, bear_hits=0):
+    """合成一个模型的成熟行：看涨 bull 条（命中 bull_hits）、HOLD hold 条、看跌 bear 条。"""
+    rows = []
+    for direction, n, k in (("up", bull, bull_hits), ("flat", hold, hold_hits), ("down", bear, bear_hits)):
+        for i in range(n):
+            hit = i < k
+            mkt = {"up": "up" if hit else "flat", "flat": "flat" if hit else "up",
+                   "down": "down" if hit else "flat"}[direction]
+            r = _row(health=model_health, day=day, hit=hit, conf=0.6)
+            r["expected_direction"] = direction
+            r["directions"] = {"30d": mkt}
+            r["actual_returns"] = {"30d": 0.02 if mkt == "up" else (-0.02 if mkt == "down" else 0.0)}
+            rows.append(r)
+    return rows
+
+
+def test_public_by_model_closes_direction_bucket_subtraction(tmp_path):
+    """评审复现：A 35 看涨(18 中)+30 HOLD；B 30 HOLD+5 看涨(4 中)。窗口 bullish.hit=22 公开，A 的 bullish 也公开，
+    则 22−18=4 还原 B 的 5 条。现在被藏桶所在的量族在其余模型里也藏掉。"""
+    rows = _mk(None, "2026-08-03", bull=35, bull_hits=18, hold=30, hold_hits=20) \
+        + _mk(SONNET_H, "2026-10-20", bull=5, bull_hits=4, hold=30, hold_hits=20)
+    w = _export(tmp_path, rows)
+    a, b = w["by_model"][PRE], w["by_model"][SONNET]
+    assert w["by_direction"]["bullish"]["hit"] == 22 and w["by_direction"]["bullish"]["total"] == 40   # 窗口公开
+    assert b["by_direction"]["bullish"]["total"] == 5 and b["by_direction"]["bullish"]["hit"] is None   # B 的小桶被抑制
+    # A 的 bullish 族也藏（total 计数保留）→ 窗口 − A 还原不出 B
+    assert a["by_direction"]["bullish"]["total"] == 35
+    assert all(a["by_direction"]["bullish"][k] is None for k in ("hit", "rate", "lift", "ci95"))
+    # B 整体 ≥30 但因小桶被互补抑制，direction_hit_rate=None；窗口公开 → A 的也藏，否则 窗口−A 得 B 的命中总数，再减 B 的 HOLD 桶得小桶命中
+    assert w["direction_hit_rate"] is not None
+    assert a["direction_hit_rate"] is None and b["direction_hit_rate"] is None
+    # 校准同理（Brier×n 跨模型可加）
+    assert w["calibration"]["brier"] is not None
+    assert a["calibration"]["brier"] is None and b["calibration"]["brier"] is None
+    # 两边都 ≥30 的 HOLD 桶不受牵连，照出
+    assert a["by_direction"]["hold"]["hit"] == 20 and b["by_direction"]["hold"]["hit"] == 20
+
+
+def _recoverable(window):
+    """独立于实现的攻击者视角：某个量族里恰好一个模型有数据却被藏、窗口和其余有数据的模型都公开 → 可由减法还原。"""
+    from scripts.export_accuracy import _families, _get
+    leaks = []
+    for name, paths, count_path in _families():
+        hidden = [m for m, a in window["by_model"].items()
+                  if int(_get(a, count_path) or 0) > 0 and _get(a, paths[0]) is None]
+        others_public = all(_get(a, paths[0]) is not None for m, a in window["by_model"].items()
+                            if m not in hidden and int(_get(a, count_path) or 0) > 0)
+        if len(hidden) == 1 and _get(window, paths[0]) is not None and others_public \
+                and len([m for m in window["by_model"] if int(_get(window["by_model"][m], count_path) or 0) > 0]) > 1:
+            leaks.append((name, hidden[0]))
+    return leaks
+
+
+@pytest.mark.parametrize("a_bull,b_bull,b_hold,b_bear", [
+    (35, 5, 30, 0), (35, 29, 31, 0), (30, 1, 40, 0), (40, 0, 3, 0), (45, 30, 10, 0),
+    (35, 4, 30, 6), (31, 31, 31, 31), (60, 3, 1, 1), (33, 0, 35, 2),
+])
+def test_public_by_model_no_single_model_is_recoverable_by_subtraction(tmp_path, a_bull, b_bull, b_hold, b_bear):
+    rows = _mk(None, "2026-08-03", bull=a_bull, bull_hits=a_bull // 2, hold=40, hold_hits=25, bear=33, bear_hits=20) \
+        + _mk(SONNET_H, "2026-10-20", bull=b_bull, bull_hits=b_bull // 2, hold=b_hold, hold_hits=b_hold // 2,
+              bear=b_bear, bear_hits=b_bear // 2)
+    w = _export(tmp_path, rows)
+    assert _recoverable(w) == []
+
+
+def test_small_window_does_not_leak_hold_hit_through_bucket_base_rate(tmp_path):
+    """方向桶里的 base_rate（同尺子的市场标签占比）在样本只有几行时 = HOLD 命中率：样本 <30 也抹掉。"""
+    w = _export(tmp_path, _mk(SONNET_H, "2026-10-20", hold=4, hold_hits=3))
+    for scope in (w, w["by_model"][SONNET]):
+        assert scope["by_direction"]["hold"]["rate"] is None and scope["by_direction"]["hold"]["base_rate"] is None
+
+
+# ---------- 评审 #497：Input Health 上线前的 Coordinator 存档不能按日期算成 DeepSeek ----------
+
+def test_old_coordinator_archive_without_health_is_not_deepseek(tmp_path, monkeypatch):
+    from openinvest.core.decision_ledger import parse_committee_text
+    skill = ("# Committee: X\n\n**Date**: 2026-09-01\n**Symbol**: X\n**Provider**: claude (skill mode)\n"
+             "**Verdict**: HOLD (confidence 0.60)\n")
+    direct = "# Committee: X\n**Symbol**: X\n**Verdict**: HOLD (confidence 0.60)\n"
+    assert parse_committee_text(skill)["provider"] == "claude"
+    assert parse_committee_text(direct)["provider"] is None
+    assert rc.model_era_of({}, "2026-09-01", "claude") == "claude:unknown"
+    assert rc.model_era_of({}, "2026-09-01", None) == PRE            # Direct 老存档：仍按日期归 DeepSeek
+    # 端到端：review_one 把 Provider 行带进 model_era
+    from openinvest.jobs import verdict_review as vr
+    d = tmp_path / "2026-09-01"
+    d.mkdir()
+    (d / "X.md").write_text(skill, encoding="utf-8")
+    (d / "Y.md").write_text(direct.replace("**Symbol**: X", "**Symbol**: Y"), encoding="utf-8")
+    monkeypatch.setattr(vr, "_window_return", lambda *a, **k: 0.0)
+    monkeypatch.setattr(vr, "_detect_macro_shock", lambda *a, **k: {"detected": False, "drivers": []})
+    monkeypatch.setattr(vr, "_decision_regime", lambda *a, **k: None)
+    monkeypatch.setattr(vr, "_atr_pct_cached", lambda *a, **k: 2.0)
+    assert vr.review_one(d, "X", {}).model_era == "claude:unknown"
+    assert vr.review_one(d, "Y", {}).model_era == PRE
