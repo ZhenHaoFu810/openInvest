@@ -3,67 +3,67 @@
   "n": 3,
   "limit": 30,
   "max_rounds": 1,
-  "model": "claude-sonnet-5-5",
-  "note": "PARTIAL: 6 of 30 planned items (18 of 90 planned reruns), stopped early on cost. Not a baseline yet - see README."
+  "model": "claude-sonnet-5-5"
  },
  "summary": {
-  "n_items": 6,
+  "n_items": 30,
   "distinct_symbols": 4,
-  "n_runs": 16,
-  "direction_flip_rate": 0.0,
+  "n_runs": 90,
+  "direction_flip_rate": 0.067,
   "direction_flip_ci95": [
-   0.0,
-   0.39
+   0.018,
+   0.213
   ],
-  "pair_flip_rate": 0.0,
-  "label_flip_rate": 0.0,
-  "conf_std_mean": 0.0085,
-  "conf_std_median": 0.0058,
-  "alloc_cv_mean": null,
-  "alloc_cv_median": null,
-  "alloc_cv_n_items": 0,
-  "alloc_all_zero_items": 6,
-  "rerun_vs_orig_direction_diff_rate": 0.125,
+  "pair_flip_rate": 0.044,
+  "label_flip_rate": 0.067,
+  "conf_std_mean": 0.01,
+  "conf_std_median": 0.0115,
+  "alloc_cv_mean": 1.7321,
+  "alloc_cv_median": 1.7321,
+  "alloc_cv_n_items": 2,
+  "alloc_all_zero_items": 28,
+  "rerun_vs_orig_direction_diff_rate": 0.056,
   "by_symbol": {
    "A": {
-    "n_items": 2,
-    "n_runs": 5,
+    "n_items": 11,
+    "n_runs": 33,
     "verdict_counts": {
-     "HOLD": 5
+     "HOLD": 33
     },
     "pair_flip_rate": 0.0,
-    "conf_mean": 0.6,
-    "conf_std": 0.0
+    "conf_mean": 0.5958,
+    "conf_std": 0.0189
    },
    "B": {
-    "n_items": 2,
-    "n_runs": 5,
+    "n_items": 8,
+    "n_runs": 24,
     "verdict_counts": {
-     "HOLD": 5
+     "HOLD": 22,
+     "TRIM": 2
     },
-    "pair_flip_rate": 0.0,
-    "conf_mean": 0.608,
-    "conf_std": 0.011
+    "pair_flip_rate": 0.1594,
+    "conf_mean": 0.5846,
+    "conf_std": 0.023
    },
    "C": {
-    "n_items": 1,
-    "n_runs": 3,
+    "n_items": 6,
+    "n_runs": 18,
     "verdict_counts": {
-     "HOLD": 3
+     "HOLD": 18
     },
     "pair_flip_rate": 0.0,
-    "conf_mean": 0.5767,
-    "conf_std": 0.0252
+    "conf_mean": 0.5994,
+    "conf_std": 0.0139
    },
    "D": {
-    "n_items": 1,
-    "n_runs": 3,
+    "n_items": 5,
+    "n_runs": 15,
     "verdict_counts": {
-     "HOLD": 3
+     "HOLD": 15
     },
     "pair_flip_rate": 0.0,
-    "conf_mean": 0.6,
-    "conf_std": 0.0
+    "conf_mean": 0.612,
+    "conf_std": 0.0101
    }
   }
  }
