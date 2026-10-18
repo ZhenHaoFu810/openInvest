@@ -141,8 +141,9 @@ def test_init_gold_booking_rejects_usd_ounce_but_writes_other_rows(tmp_path):
     assert pm.cash_amount("CNY") == 5000.0
 
 
-def test_init_books_cny_gram_gold_with_proxy_kind(tmp_path):
-    gold = {"symbol": "GC=F", "kind": "stock", "units": 5, "avg_cost": 880, "cost_currency": "CNY", "unit_label": "g"}
+@pytest.mark.parametrize("unit_label", ["g", ""])   # LLM 没给单位 → 按克，不能比 import 更严
+def test_init_books_cny_gram_gold_with_proxy_kind(tmp_path, unit_label):
+    gold = {"symbol": "GC=F", "kind": "stock", "units": 5, "avg_cost": 880, "cost_currency": "CNY", "unit_label": unit_label}
     out = _run_init(tmp_path, {"profile": {"name": "T", "holdings_v2": {"cash": {}, "holdings": [gold]}}, "env": {}})
     assert out.returncode == 0, out.stderr
     assert "rejected_holdings" not in _json(out)

@@ -126,7 +126,8 @@ def _write_v2_portfolio(
             "display_name": str(h.get("display_name") or sym),
         }
         try:  # 黄金口径与 buy / import --commit 同一道闸（#457）；非 GC=F → None；fresh init 没有旧持仓
-            row.update(gold_booking(sym, row["cost_currency"], row["unit_label"], None) or {})
+            # 没给单位按克（同 buy 的默认单位语义、同 import 的 normalizer 默认值）；给了 oz / 盎司才拒
+            row.update(gold_booking(sym, row["cost_currency"], row["unit_label"] or "克", None) or {})
         except ValueError as e:
             rejected[sym] = f"{e}{EXISTING_POSITION_HINT}"
             continue
