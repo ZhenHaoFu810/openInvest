@@ -249,7 +249,10 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
                 # 黄金口径与 buy / record_existing_position 同一道闸（#457）；非 GC=F → None
                 norm.update(gold_booking(norm["symbol"], norm["cost_currency"], norm["unit_label"], None) or {})
             except ValueError as e:
-                rejected[norm["symbol"]] = str(e)   # 只拒这一行，其余持仓照常入账
+                # 只拒这一行，其余持仓照常入账。gold_booking 的示例是给现金买入写的；导入的是已有仓位，
+                # 照抄会再扣一次现金（CR #499），所以补一句走 existing-position 的提示
+                rejected[norm["symbol"]] = (f"{e}（导入的是已有仓位：补录时用 buy --existing-position / "
+                                           f"MCP record_existing_position，不扣现金）")
                 continue
             holdings.append(norm)
             existing.add(norm["symbol"])

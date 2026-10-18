@@ -169,6 +169,8 @@ def cmd_import_holdings(args: argparse.Namespace) -> None:
 
     --commit 走**非破坏**写入：只加 portfolio 里还没有的 symbol、cash 只填当前为 0 的币种，
     已存在的跳过并在 summary 报告（重复导入幂等，不覆盖真实数据）。需要 LLM_API_KEY / DEEPSEEK_API_KEY。
+    summary.rejected_holdings 非空（如黄金按 USD/盎司解析被拒，#462）时**不是导入成功**：把里面的正确写法
+    转告用户，按提示以已有仓位补录（不扣现金）。
     """
     from pathlib import Path
 

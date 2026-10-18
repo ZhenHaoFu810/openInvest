@@ -150,6 +150,7 @@ def test_commit_rejects_usd_ounce_gold_but_keeps_other_rows():
     ]})
     assert s["added_holdings"] == ["510300.SS"]
     assert "CNY" in s["rejected_holdings"]["GC=F"]
+    assert "existing" in s["rejected_holdings"]["GC=F"]   # 已有仓位补录提示，照抄不会二次扣现金
     assert [h["symbol"] for h in pm.state["holdings"]] == ["510300.SS"]
 
 
