@@ -220,6 +220,25 @@ def test_prepare_committee_quant_prompts_name_no_tools(_mock_world, capfd):
     assert "# 市场数据:" in out["instructions"]   # 协议确实把 market_data 贴在这个标题下
 
 
+def test_prepare_committee_risk_prompt_names_no_tools_and_real_headings(_mock_world, capfd):
+    """#476 的 Coordinator 路径对照：Risk prompt 不得命令它调工具（Direct 路径钉在
+    tests/test_risk_prompt_no_phantom_tools.py），且 prompt 里给 Coordinator 的两个块标题
+    必须和 instructions 模板真正粘贴的标题一致——模板改了标题这里要红。"""
+    from openinvest.capabilities.tools import TOOL_IMPL
+    from openinvest.cli import cmd_prepare_committee
+
+    cmd_prepare_committee(argparse.Namespace(symbol="TEST.AX"))
+    raw = capfd.readouterr().out
+    out = json.loads(raw[raw.index("{"):])
+
+    prompt = out["prompts"]["risk_round1"]
+    for tool in TOOL_IMPL:
+        assert f"{tool}(" not in prompt, f"prompts.risk_round1 不得写调用 {tool}(...)"
+    assert "你有工具可调用" not in prompt
+    for heading in ("# 用户持仓:", "# 长期模式:"):
+        assert heading in out["instructions"], f"instructions 不再以 {heading} 粘贴，risk_officer.md 的指向要跟着改"
+
+
 def test_prepare_facts_feed_save_defense_and_regime(_mock_world, monkeypatch):
     """SENTINEL（P1）：真跑 prepare → save。prepare 落盘的事实 key（regime_brief / sentiment_brief）
     或 regime brief 的行格式一改，save 端会静默退回"从 transcript 解析"——这里会红。"""
