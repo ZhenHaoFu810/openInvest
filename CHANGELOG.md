@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.0](https://github.com/longsizhuo/openInvest/compare/v0.49.0...v0.50.0) (2026-10-18)
+
+
+### Features
+
+* **review:** 自报置信度校准 + 裁决中性度 + 同输入方差研究（Sprint 2 A5/A4） ([#455](https://github.com/longsizhuo/openInvest/issues/455)) ([2dd9229](https://github.com/longsizhuo/openInvest/commit/2dd922941a3bc25a1cdf1a4ef8c31338e7bc8a3d))
+
 ## [0.49.0](https://github.com/longsizhuo/openInvest/compare/v0.48.0...v0.49.0) (2026-10-17)
 
 
