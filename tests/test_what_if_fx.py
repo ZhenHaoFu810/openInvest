@@ -75,7 +75,7 @@ def test_missing_holding_hint_names_real_cli_subcommands(monkeypatch):
     hint = out["hint"]
 
     sub = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction))
-    cmds = re.findall(r"`run\.sh (\S+)", hint)
+    cmds = re.findall(r"`run\.sh ([a-z_]+)", hint)
     assert cmds and all(c in sub.choices for c in cmds), (cmds, sorted(sub.choices))
     buy_opts = {o for a in sub.choices["buy"]._actions for o in a.option_strings}
     assert "--existing-position" in buy_opts and "--existing-position" in hint
