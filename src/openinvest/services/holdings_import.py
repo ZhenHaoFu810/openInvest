@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from openinvest.core.portfolio_manager import gold_booking
+
 _HOLDINGS_PARSE_SYSTEM_PROMPT = """你是金融数据解析助手。把用户的自然语言持仓描述解析成严格 JSON。
 
 输出 schema（无 markdown 无解释）：
@@ -222,11 +224,14 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
       - holdings：只加 portfolio 里**还没有**的 symbol；已存在的跳过并报告（不覆盖 units/均价）
       - cash：每个币种只在当前余额为 0 时填入；已有余额的跳过并报告（不覆盖）
     重复导入因此幂等，绝不撕裂已有真实数据。返回 summary 给调用方展示。
+      - 黄金（GC=F）必须 CNY/克（同 buy 的 gold_booking）；USD/盎司等被拒的行进
+        ``rejected_holdings: {symbol: 正确写法}``，不入账、不影响其他行，用户照提示 `buy` 手记。
     """
     holdings_in = parsed.get("holdings") or []
     cash_in = parsed.get("cash") or {}
     added: List[str] = []
     skipped: List[str] = []
+    rejected: Dict[str, str] = {}
     cash_set: Dict[str, float] = {}
     cash_skipped: Dict[str, float] = {}
 
@@ -239,6 +244,12 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             if norm["symbol"] in existing:
                 skipped.append(norm["symbol"])
+                continue
+            try:
+                # 黄金口径与 buy / record_existing_position 同一道闸（#457）；非 GC=F → None
+                norm.update(gold_booking(norm["symbol"], norm["cost_currency"], norm["unit_label"], None) or {})
+            except ValueError as e:
+                rejected[norm["symbol"]] = str(e)   # 只拒这一行，其余持仓照常入账
                 continue
             holdings.append(norm)
             existing.add(norm["symbol"])
@@ -259,6 +270,7 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "added_holdings": added,
         "skipped_holdings": skipped,
+        "rejected_holdings": rejected,
         "cash_set": cash_set,
         "cash_skipped": cash_skipped,
     }
