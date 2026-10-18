@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.51.0](https://github.com/longsizhuo/openInvest/compare/v0.50.0...v0.51.0) (2026-10-18)
+
+
+### Features
+
+* **review:** B4 四臂 A/B（舰队 --sealed-arm / --debate-arm / --macro-soft-arm + 独立复盘），live 裁决不变 ([#460](https://github.com/longsizhuo/openInvest/issues/460)) ([5a197d3](https://github.com/longsizhuo/openInvest/commit/5a197d3f47652aaf148f7c26556d6876a81837f2))
+
+
+### Bug Fixes
+
+* **portfolio:** gold booked per gram in CNY, MCP doctor + optional checks, target_pct writable ([#443](https://github.com/longsizhuo/openInvest/issues/443) [#444](https://github.com/longsizhuo/openInvest/issues/444) [#449](https://github.com/longsizhuo/openInvest/issues/449)) ([#457](https://github.com/longsizhuo/openInvest/issues/457)) ([30f120d](https://github.com/longsizhuo/openInvest/commit/30f120d2f582c2d90a4a4f7237b39b12a5075ea4))
+
+
+### Refactor
+
+* 去重 + 删死代码 + 文档漂移修正（[#236](https://github.com/longsizhuo/openInvest/issues/236) / 评审 D8） ([#458](https://github.com/longsizhuo/openInvest/issues/458)) ([a84632e](https://github.com/longsizhuo/openInvest/commit/a84632e1d103c58b51fbb63105a83fcd41f23159))
+
 ## [0.50.0](https://github.com/longsizhuo/openInvest/compare/v0.49.0...v0.50.0) (2026-10-18)
 
 
