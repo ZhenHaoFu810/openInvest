@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.57.1](https://github.com/longsizhuo/openInvest/compare/v0.57.0...v0.57.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **committee:** stop telling Risk Officer to call tools it does not have ([#500](https://github.com/longsizhuo/openInvest/issues/500)) ([6965016](https://github.com/longsizhuo/openInvest/commit/6965016a4de42f1b9a01ea4a81001276b7332f65)), closes [#476](https://github.com/longsizhuo/openInvest/issues/476)
+* **import:** reuse buy's gold booking check in import --commit ([#499](https://github.com/longsizhuo/openInvest/issues/499)) ([48cd9ae](https://github.com/longsizhuo/openInvest/commit/48cd9aecb7ca0017ec8a0492f8f324880e94308f)), closes [#462](https://github.com/longsizhuo/openInvest/issues/462)
+
 ## [0.57.0](https://github.com/longsizhuo/openInvest/compare/v0.56.1...v0.57.0) (2026-10-18)
 
 
