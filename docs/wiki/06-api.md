@@ -164,7 +164,7 @@ curl -X POST http://127.0.0.1:8765/api/holdings -d '{
 
 `commit:false` 只解析返回预览（`parsed.{cash,holdings}`），`commit:true` **非破坏写入**：
 只新增 portfolio 里还没有的 symbol、cash 只填当前为 0 的币种，已存在的跳过
-（`summary.{added_holdings,skipped_holdings,cash_set,cash_skipped}`）。无 LLM key → 400。
+（`summary.{added_holdings,skipped_holdings,rejected_holdings,cash_set,cash_skipped}`；`rejected_holdings` = 被拒的行 `{symbol: 正确写法}`，如黄金按 USD/盎司解析会被拒，需按 CNY/克用 `buy --existing-position`（MCP `record_existing_position`）补录，不扣现金）。无 LLM key → 400。
 单一可信源 `services/holdings_import.py`，CLI `openinvest import`、onboarding 共用（原 GUI「导入持仓」已随 GUI 退役）。
 
 ```bash
@@ -457,8 +457,8 @@ claude mcp add openinvest -e INVEST_HOME=<数据目录> -- uvx openinvest-mcp
   - **streamable-HTTP（`openinvest-mcp --http`，2026-07，BETA）**：remote MCP，hub 常驻
     127.0.0.1:8766（`INVEST_MCP_HOST/PORT`），spoke agent 直连 `/mcp`；鉴权复用
     `INVEST_API_TOKEN`（bearer，`/health` 豁免），stateless + SSE（请求内推进度与心跳）。
-    能力差集注记：Coordinator 协议（prepare/save_committee）与 event_check
-    仍只在 REST/CLI（Decision 5/6 刻意不进 MCP），详见 wiki 08 §9
+    能力差集注记：event_check 仍只在 REST/CLI（Decision 6），详见 wiki 08 §9。
+    Coordinator 协议 2026-10-18 起已进 MCP（`prepare_committee` / `submit_committee`，推翻 Decision 5）
   写操作与 CLI/REST 并存安全（`with_portfolio_tx` fcntl 锁同一模型）
 - **工具集**（封闭集合，以快照测试 `tests/test_mcp_server.py` 为准）：doctor / status /
   strategy / history / live_prices / what_if / rebalance_plan / discipline / decisions /
@@ -467,7 +467,9 @@ claude mcp add openinvest -e INVEST_HOME=<数据目录> -- uvx openinvest-mcp
   record_split / record_return_of_capital（ADR-027 PR2：分红·利息 / 费用·税 / 拆股 / 退回本金）/
   place_fund_order / confirm_fund_order / cancel_fund_order（ADR-027 PR3：场外基金下单扣现金记在途 / 按净值确认 / 撤销）/ set_allocations /
   track_asset / untrack_asset / news_sources / add_news_source /
-  remove_news_source / run_committee（Direct 路径，当天已跑读缓存）。
+  remove_news_source / run_committee（Direct 路径，当天已跑读缓存）/
+  prepare_committee / submit_committee（Coordinator 路径：Agent 自己跑四个角色，后端不调模型；
+  收卷时防御 / regime 用出题时后端存下的事实判定，CIO 解析不出裁决直接拒收）。
   同步工具经线程池执行，慢 IO 不占事件循环
 - **doctor**（只读，顾问模式拒绝）：纯 MCP agent 的第一步，与 CLI `doctor` / `GET /api/doctor` 同源。
   `status` 只看 onboarding 必需项：memory 未初始化（或 portfolio 是 v1）→ `needs_setup`，否则 `ready`；
@@ -482,8 +484,9 @@ claude mcp add openinvest -e INVEST_HOME=<数据目录> -- uvx openinvest-mcp
   清空）；CLI：`track_asset --alert-price-below 900` / `set_allocations --alert GC=F:price_below=900`。`status` 的
   `all_holdings[].alerts` 返回各线与距离。哨兵按线触发（价格线 24h 冷却、日涨跌线同一交易日只报一次），**只有 `INVEST_EVENT_ALERT=1` 才发**，不触发委员会，
   详见 [21-intel-sentinel](21-intel-sentinel.md#每标的报警线用户自设价格线--跌幅线)
-- 刻意不把 81 个 REST 端点全暴露（撑爆 agent context）；Coordinator 委员会
-  workflow 也不在这里——那是 Skill 的职责（issue #133 Decision 5/6）
+- 刻意不把 81 个 REST 端点全暴露（撑爆 agent context）。Coordinator 委员会原先也不在这里
+  （issue #133 Decision 5：当时视为 Skill 专属流程）；2026-10-18 方向改为"插件不持模型 key、
+  推理由宿主 Agent 负责"后，出题 / 收卷两个工具进了 MCP，纯 MCP 的 Agent 也能自己跑委员会
 
 ## 下一步
 

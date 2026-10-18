@@ -42,6 +42,8 @@ HOME_REDIRECT = os.getenv("COOLDOWN_HOME_REDIRECT", "https://render.qmuse.pub/p/
 LOOKUP_PER_IP_DAILY = int(os.getenv("COOLDOWN_LOOKUP_PER_IP_DAILY", "30"))
 LOOKUP_GLOBAL_DAILY = int(os.getenv("COOLDOWN_LOOKUP_GLOBAL_DAILY", "2000"))
 GENERIC_ERROR = "这次辩论没跑成，稍后再试"
+NOT_FOUND = "没找到这个代码：确认是基金或股票代码，或数据源暂时没响应，过一会再试"
+BAD_CODE = "请输入基金或股票代码，例如 110011、600519、0700.HK、AAPL"
 # 首页默认展示这只基金当天的报告：每天一次委员会，失败当天最多再试 2 次，不占访客额度
 SAMPLE_CODE = os.getenv("COOLDOWN_SAMPLE_CODE", "110011")
 SAMPLE_TRIES = 3
@@ -107,6 +109,52 @@ def _take(counter: Counter, ip: str, per_ip: int, total: int, what: str) -> str 
 
 
 # ---------- 数据：全部由程序计算 ----------
+
+def _candidates(raw: str) -> List[tuple] | None:
+    """输入 → 依次尝试的 (kind, id)。格式不对返回 None。
+
+    6 位数字先当基金查（东方财富），查不到再按 A 股查（沪 6/9 开头，深 0/2/3 开头）；
+    000001 这类基金和股票撞号的，带后缀（000001.SZ）直接查股票。港股 0700.HK、美股 AAPL 直接查股票。
+    """
+    s = raw.strip().upper()
+    if re.fullmatch(r"\d{6}", s):
+        ex = {"6": "SS", "9": "SS", "0": "SZ", "2": "SZ", "3": "SZ"}.get(s[0])
+        return [("fund", s)] + ([("stock", f"{s}.{ex}")] if ex else [])
+    m = re.fullmatch(r"(\d{6})\.(SS|SH|SZ)", s)
+    if m:
+        return [("stock", f"{m[1]}.{'SS' if m[2] == 'SH' else m[2]}")]
+    m = re.fullmatch(r"(\d{1,5})\.HK", s)
+    if m:
+        return [("stock", f"{int(m[1]):04d}.HK")]
+    if re.fullmatch(r"[A-Z]{1,5}", s):
+        return [("stock", s)]
+    return None
+
+
+def _stock_name(symbol: str) -> str | None:
+    """股票中文名（新浪行情；东方财富 push2 在本机 502）。拿不到就缺，页面显示代码。"""
+    code, _, ex = symbol.partition(".")
+    key, idx = {"SS": (f"sh{code}", 0), "SZ": (f"sz{code}", 0)}.get(ex) or (
+        (f"rt_hk{int(code):05d}", 1) if ex == "HK" else (f"gb_{code.lower()}", 0))
+    try:
+        r = requests.get(f"https://hq.sinajs.cn/list={key}", timeout=10,
+                         headers={"Referer": "https://finance.sina.com.cn"})
+        r.encoding = "gbk"
+        return r.text.split('"')[1].split(",")[idx] or None
+    except (requests.RequestException, IndexError, ValueError):
+        return None
+
+
+def _returns(c) -> Dict[str, float]:
+    """近 1 年 / 近 6 月涨跌（%），回看日当天或之前最后一个收盘。股票没有基金那种阶段收益字段。"""
+    import pandas as pd
+    out: Dict[str, float] = {}
+    for key, months in (("ret_1y", 12), ("ret_6m", 6)):
+        past = c[c.index <= c.index[-1] - pd.DateOffset(months=months)]
+        if len(past):
+            out[key] = float(c.iloc[-1] / past.iloc[-1] - 1) * 100
+    return out
+
 
 def _pct_rank(series, value) -> int:
     """value 在 series 里的分位（0~100，含等于）。"""
@@ -185,14 +233,22 @@ _CHIP_ORDER = ("ret_1y", "scale", "tnx", "from_high", "drawdown", "ret_6m", "sto
 
 
 def fund_facts(code: str) -> Dict[str, Any] | None:
-    """页面的全部确定性数据。查不到这只基金返回 None。"""
+    """基金页面的全部确定性数据。查不到这只基金返回 None。"""
+    return _facts(f"FUND:{code}", code, "fund")
+
+
+def stock_facts(symbol: str) -> Dict[str, Any] | None:
+    """股票页面的全部确定性数据（symbol 是行情代码，如 600519.SS）。查不到返回 None。"""
+    return _facts(symbol, symbol, "stock")
+
+
+def _facts(symbol: str, code: str, kind: str) -> Dict[str, Any] | None:
     import pandas as pd
     from openinvest.calc.market_metrics import METRICS_PERIOD, compute_metrics
     from openinvest.calc.regime import classify_regime
     from openinvest.core.regime_probability import build_reentry_reference
     from openinvest.utils.exchange_fee import get_history_data
 
-    symbol = f"FUND:{code}"
     full = get_history_data(symbol, "max")
     if full is None or full.empty or len(full) < 30:
         return None
@@ -229,7 +285,7 @@ def fund_facts(code: str) -> Dict[str, Any] | None:
             data[key], data[f"{key}_pct"] = float(s.iloc[-1]), _pct_rank(s, s.iloc[-1])
         except Exception:  # noqa: BLE001  宏观指标拿不到就不给这一项
             pass
-    pz = _pingzhong(code)
+    pz = _pingzhong(code) if kind == "fund" else {"name": _stock_name(symbol), **_returns(c)}
     data.update({k: v for k, v in pz.items() if k != "name"})
     metrics = _metrics(data)
     chips = [metrics[k]["chip"] for k in _CHIP_ORDER if k in metrics and metrics[k]["hot"]][:3]
@@ -247,7 +303,7 @@ def fund_facts(code: str) -> Dict[str, Any] | None:
     except Exception:  # noqa: BLE001  分布拿不到就不显示这一块
         pass
 
-    return {"name": pz.get("name") or code, "code": code,
+    return {"name": pz.get("name") or code, "code": code, "kind": kind, "symbol": symbol,
             "nav": round(float(c.iloc[-1]), 4), "nav_date": c.index[-1].strftime("%Y-%m-%d"),
             "chips": chips, "chart": chart, "dist": dist, "metrics": metrics}
 
@@ -255,11 +311,13 @@ def fund_facts(code: str) -> Dict[str, Any] | None:
 # ---------- 委员会 ----------
 
 def _run(job_id: str, code: str) -> None:
-    metrics = _jobs[job_id]["facts"]["metrics"]
+    facts = _jobs[job_id]["facts"]
+    metrics = facts["metrics"]
     with _committee_lock:
         _jobs[job_id]["status"] = "running"
         try:
-            res = cooldown.debate_summary(f"FUND:{code}", {k: v["text"] for k, v in metrics.items()})
+            res = cooldown.debate_summary(facts.get("symbol") or f"FUND:{code}",
+                                          {k: v["text"] for k, v in metrics.items()})
         except Exception as e:  # noqa: BLE001
             res = {"status": "error", "error": f"{type(e).__name__}: {e}"}
     # 出口白名单：只放行书记员骨架，依据数值按指标键从 metrics 回填；其余一律通用一句话——
@@ -294,24 +352,29 @@ def index() -> FileResponse | RedirectResponse:
 
 @app.post("/api/debate")
 def start(body: DebateIn, request: Request) -> Dict[str, Any]:
-    code = body.code.strip()
-    if not re.fullmatch(r"\d{6}", code):
-        raise HTTPException(400, "请输入 6 位基金代码")
+    code = body.code.strip().upper()
+    cands = _candidates(code)
+    if not cands:
+        raise HTTPException(400, BAD_CODE)
     ip = _client_ip(request)
-    facts = _facts_cache.get(code)    # 同一只基金当天只下载一次
+    facts = _facts_cache.get(code)    # 同一个代码当天只下载一次
     if facts is None and time.time() - _misses.get(code, 0) < MISS_TTL:
-        raise HTTPException(404, "没找到这只基金：确认代码，或数据源暂时没响应，过一会再试")
+        raise HTTPException(404, NOT_FOUND)
     if facts is None:
         reason = _take(_lookups, ip, LOOKUP_PER_IP_DAILY, LOOKUP_GLOBAL_DAILY, "查询")
         if reason:
             raise HTTPException(429, reason)
-        facts = fund_facts(code)
+        # 一次查询额度覆盖全部候选：6 位数字先基金后股票
+        for kind, ident in cands:
+            facts = fund_facts(ident) if kind == "fund" else stock_facts(ident)
+            if facts is not None:
+                break
         # 查不到不缓存：东方财富一次超时会和"代码不存在"一样返回空，缓存下来就让这只基金
         # 当天对所有人都"没找到"（10-12/13 的 510300、159819 等）。重查受上面的查询额度约束。
         if facts is None:
             _misses[code] = time.time()
-            raise HTTPException(404, "没找到这只基金：确认代码，或数据源暂时没响应，过一会再试")
-        _facts_cache[code] = facts       # 先确认基金存在，再扣辩论次数、再花 LLM
+            raise HTTPException(404, NOT_FOUND)
+        _facts_cache[code] = facts       # 先确认标的存在，再扣辩论次数、再花 LLM
     reason = _take(_used, ip, PER_IP_DAILY, GLOBAL_DAILY, "辩论")
     if reason:
         raise HTTPException(429, reason)

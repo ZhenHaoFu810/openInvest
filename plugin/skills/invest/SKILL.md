@@ -1,6 +1,6 @@
 ---
 name: invest
-version: 0.28.0 # x-release-please-version
+version: 0.29.0 # x-release-please-version
 description: openInvest multi-asset AI investment committee — **daily use**. Read portfolio / live prices / strategy / decision history / adjust positions / run a 4-role LLM committee for an investment verdict. Supports any yfinance symbol (A-share / HK / US / ETF / crypto / commodities) and any currency. **Two paths** — (1) Coordinator, Claude Code spawns 4 subagents, saves DeepSeek tokens; (2) Direct, any agent (Codex / Hermes / OpenClaw / Cursor / Cline / plain script) runs `run.sh run_committee <SYM>` for a one-shot verdict. **Trigger scenarios** — "show portfolio / 看看我的持仓", "how is my P&L / 我现在涨了多少", "should I buy/sell X / 该不该买卖X", "analyze X / 分析一下X", "run committee on X / 跑委员会", "track AAPL / 跟踪苹果", "add/trim a position, log a trade / 加仓减仓记一笔". **First-time install uses a separate skill `invest-setup`** (switch to it when `doctor` returns `needs_setup`). Backend — longsizhuo/openInvest.
 platforms: [linux, macos]
 metadata:
@@ -279,7 +279,12 @@ record_execution / ingest_event / buy / record_existing_position / sell / deposi
 record_dividend / record_fee / record_split / record_return_of_capital /
 place_fund_order / confirm_fund_order / cancel_fund_order /
 set_allocations / track_asset / untrack_asset / news_sources / add_news_source / remove_news_source /
-run_committee — schemas auto-discovered; call them directly, no table lookup needed.
+run_committee / prepare_committee / submit_committee — schemas auto-discovered; call them directly, no table lookup needed.
+**Agent-run committee over MCP (no backend LLM key):** `prepare_committee` returns the data blocks, the 6 role
+prompts and `instructions`; play Macro / Quant / Risk (cheap subagents are fine), write the CIO memo yourself,
+then `submit_committee(symbol, transcript, provider, model)` within 6 hours (`provider` = your brand, `model` = the model that
+plays the roles, e.g. `claude-haiku-5-5`; omitted is recorded as `unknown` and the scorecard buckets by `provider:model`). The backend applies its own saved facts for the
+defense / regime rules and rejects a CIO section with no parseable verdict (fix it and resubmit).
 `track_asset` takes an optional `target_pct` (0–1 share of total assets, read by `rebalance_plan`) and
 `set_allocations` a `target_pcts` map — use them instead of editing strategy.md; the weights must sum
 to ≤ `target_allocation_stock` (a write that exceeds it is rejected with the current sum).

@@ -32,8 +32,10 @@ INVEST_HOME=~/openinvest-demo INVEST_ADVISORY_MODE=1 \
 
 ## 演示站
 
-`scripts/server.py`（FastAPI）+ `scripts/index.html`：输入 6 位基金代码 → 先查基金并给出纯计算的事实
-（近两年净值小图、最深跌幅、离高点多远，不调 LLM）→ 后台跑一次委员会 → 页面轮询拿书记员纪要。
+`scripts/server.py`（FastAPI）+ `scripts/index.html`：输入基金或股票代码 → 先查标的并给出纯计算的事实
+（近两年净值 / 价格小图、最深跌幅、离高点多远，不调 LLM）→ 后台跑一次委员会 → 页面轮询拿书记员纪要。
+6 位数字先当基金查（东方财富），查不到再按 A 股查（沪 6/9、深 0/2/3 开头）；带后缀的 `000001.SZ`、港股 `0700.HK`、
+美股 `AAPL` 直接查股票（yfinance 行情，新浪取中文名）。一次查询额度覆盖全部候选。
 
 ```bash
 INVEST_HOME=~/openinvest-demo INVEST_ADVISORY_MODE=1 \

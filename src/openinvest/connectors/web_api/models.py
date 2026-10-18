@@ -213,7 +213,7 @@ class HoldingsImportResponse(BaseModel):
     """POST /api/holdings/import 返回 — parsed 预览 +（commit 时）写入 summary"""
     parsed: Dict[str, Any] = Field(..., description="LLM 解析出的 {cash, holdings}")
     committed: bool = Field(..., description="是否已落盘")
-    summary: Optional[Dict[str, Any]] = Field(None, description="commit 时的 {added_holdings, skipped_holdings, cash_set, cash_skipped}")
+    summary: Optional[Dict[str, Any]] = Field(None, description="commit 时的 {added_holdings, skipped_holdings, rejected_holdings, cash_set, cash_skipped}")
 
 
 # 注：v2 通用 cash CRUD（/api/cash/{currency}/deposit|withdraw）放在文件末尾，

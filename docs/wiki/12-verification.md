@@ -472,7 +472,7 @@ ACCUMULATE（备忘录逐字执行“不否决 + 折扣”），其余臂与 #46
 | 人群 | 谁在跑 | 模型 | model_era | 备注 |
 |---|---|---|---|---|
 | live Direct（日报 cron / `run_committee`） | 后端 Direct 路径 | `claude-sonnet-5-5`（2026-10-19 起的 transcript） | `direct:claude-sonnet-5-5` | Input Health 的 `model` = 落盘时刻的全局 LLM 配置 |
-| Hermes Coordinator | Hermes 的 `delegate_task` 子代理 | Claude Haiku（如 `claude-haiku-5-5`） | `hermes:claude-haiku-5-5` | **host 必须传** `save_committee --model <名>`；没传记 `unknown`（`hermes:unknown` / `claude:unknown`），不猜 |
+| Hermes Coordinator | Hermes 的 `delegate_task` 子代理 | Claude Haiku（如 `claude-haiku-5-5`） | `hermes:claude-haiku-5-5` | **host 必须传** `save_committee --model <名>`（MCP：`submit_committee(..., model=<名>)`）；没传记 `unknown`（`hermes:unknown` / `claude:unknown`），不猜 |
 | 纸面舰队 + B4 四臂 | 后端 Direct 路径（cron 钉 DeepSeek） | `deepseek-v4-flash` | `direct:deepseek-v4-flash` | 舰队继续钉 DeepSeek，见下。对照臂 / T2 臂的 transcript 自 2026-10-18 起在 Input Health 记 `model`；更早的行没记，是 `direct:unknown`（复盘的“不止一个模型”警告不把 unknown 当一个模型） |
 | 老存档（没有 Input Health 块） | — | 决议日 ≤ 2026-10-18 的 Direct 行一律 DeepSeek | `direct:deepseek-v4-flash(pre-health)` | 10-18 之后没块的 → `unknown`（不猜）。transcript 有 `**Provider**: X (skill mode)` 行的是 Coordinator 老存档（模型名当时不落盘），归 `X:unknown`，不混进 DeepSeek 基线（live 里目前 6 条 claude） |
 

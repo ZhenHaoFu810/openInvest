@@ -27,6 +27,7 @@ def client(monkeypatch):
     monkeypatch.setattr(server, "_misses", {})
     monkeypatch.setattr(server, "_sample", {"d": None, "job": None, "tries": 0})
     monkeypatch.setattr(server, "fund_facts", lambda code: None if code.startswith("9") else FACTS)
+    monkeypatch.setattr(server, "stock_facts", lambda symbol: None)
     monkeypatch.setattr(server.cooldown, "debate_summary", lambda sym, metrics: SCRIBE)
     return TestClient(server.app)
 
@@ -42,6 +43,7 @@ def _wait(client, job_id):
 
 def test_rejects_bad_and_unknown_codes_without_using_debate_quota(client):
     assert client.post("/api/debate", json={"code": "11001"}).status_code == 400
+    assert client.post("/api/debate", json={"code": "TOOLONG1"}).status_code == 400
     assert client.post("/api/debate", json={"code": "999999"}).status_code == 404
     assert server._used["*"] == 0 and server._lookups["*"] == 1
 
@@ -156,3 +158,41 @@ def test_lookup_miss_is_not_cached_so_a_flaky_source_recovers(client, monkeypatc
     assert client.post("/api/debate", json={"code": "510300"}).status_code == 404
     r = client.post("/api/debate", json={"code": "510300"})
     assert r.status_code == 200 and r.json()["job_id"]
+
+
+STOCK = {**FACTS, "name": "贵州茅台", "code": "600519.SS", "kind": "stock", "symbol": "600519.SS"}
+
+
+def test_six_digits_fall_back_to_a_share_stock_with_one_lookup(client, monkeypatch):
+    """6 位数字先查基金，查不到再按 A 股查；两次尝试只扣一次查询额度，委员会拿到股票的行情代码。"""
+    tried, runs = [], []
+    monkeypatch.setattr(server, "fund_facts", lambda code: tried.append(code) and None)
+    monkeypatch.setattr(server, "stock_facts", lambda sym: tried.append(sym) or (STOCK if sym == "600519.SS" else None))
+    monkeypatch.setattr(server.cooldown, "debate_summary", lambda sym, m: runs.append(sym) or SCRIBE)
+    r = client.post("/api/debate", json={"code": "600519"})
+    assert r.status_code == 200 and r.json()["facts"]["kind"] == "stock"
+    _wait(client, r.json()["job_id"])
+    assert tried == ["600519", "600519.SS"] and runs == ["600519.SS"] and server._lookups["*"] == 1
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("110011", [("fund", "110011")]),                       # 1/5 开头：只有基金
+    ("600519", [("fund", "600519"), ("stock", "600519.SS")]),
+    ("000001", [("fund", "000001"), ("stock", "000001.SZ")]),
+    ("000001.sz", [("stock", "000001.SZ")]),                 # 带后缀：跳过基金，直接查股票
+    ("600519.SH", [("stock", "600519.SS")]),
+    ("700.hk", [("stock", "0700.HK")]),
+    (" aapl ", [("stock", "AAPL")]),
+    ("11001", None), ("TOOLONG1", None), ("6005.19", None),
+])
+def test_code_candidates(raw, expected):
+    assert server._candidates(raw) == expected
+
+
+def test_stock_returns_from_prices():
+    import pandas as pd
+    idx = pd.date_range("2025-01-01", "2026-01-01", freq="D")
+    c = pd.Series(range(100, 100 + len(idx)), index=idx, dtype=float)
+    r = server._returns(c)
+    assert round(r["ret_1y"], 1) == round((c.iloc[-1] / 100 - 1) * 100, 1)
+    assert round(r["ret_6m"], 1) == round((c.iloc[-1] / c[c.index <= "2025-07-01"].iloc[-1] - 1) * 100, 1)

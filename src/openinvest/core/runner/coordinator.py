@@ -1,9 +1,11 @@
 """coordinator — Coordinator 路径 prepare/save（Claude Code spawn subagent）（从 committee_runner.py 拆分，逻辑不变）。"""
 from __future__ import annotations
 
+import json
 import logging
 import re
-from typing import Any, Dict
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional
 
 # prepare_committee_brief / save_committee_transcript 在模块作用域用到这些；
 # exchange_fee / PortfolioManager 等改走函数内 call-time import（保持可被契约测试 patch）。
@@ -56,6 +58,38 @@ def _safe_close_latest(symbol: str) -> float:
     if df.empty:
         df = get_history_data(symbol, "5d")
     return float(df["Close"].iloc[-1]) if not df.empty else 0.0
+
+
+# 出题时存一份后端算的确定性事实，收卷时用它做 regime / ATR / 独立防御判定与路径快照，
+# 不再从 agent 交回的文字里解析（agent 漏贴一行 INDEP_DEFENSE_FLAG，防御降级就静默失效）。
+BRIEF_FACTS_MAX_AGE = timedelta(hours=6)
+
+
+def _brief_facts_path(symbol: str):
+    from openinvest.core.memory_store import MemoryStore
+    return MemoryStore().root / ".committee_facts" / f"{safe_symbol(symbol)}.json"
+
+
+def _save_brief_facts(symbol: str, facts: Dict[str, Any]) -> None:
+    try:
+        path = _brief_facts_path(symbol)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "symbol": symbol, "prepared_at": datetime.now().isoformat(timespec="seconds"), **facts,
+        }, ensure_ascii=False, default=str), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001  存不下 → 收卷退回从 transcript 解析，并在 Input Health 标出
+        log.warning(f"prepare 事实快照落盘失败（submit 将退回从 transcript 解析）: {e}")
+
+
+def _load_brief_facts(symbol: str) -> Optional[Dict[str, Any]]:
+    """最近一次 prepare 存下的事实；没有或超过 BRIEF_FACTS_MAX_AGE → None。"""
+    try:
+        facts = json.loads(_brief_facts_path(symbol).read_text(encoding="utf-8"))
+        if datetime.now() - datetime.fromisoformat(facts["prepared_at"]) > BRIEF_FACTS_MAX_AGE:
+            return None
+        return facts
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
@@ -184,6 +218,11 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
     except Exception:  # noqa: BLE001  路径参考读失败不阻断 prepare
         pass
 
+    _save_brief_facts(target["symbol"], {
+        "regime_brief": regime_brief, "sentiment_brief": sentiment_brief,
+        "path_profile": path_profile, "atr_pct": metrics.get("atr_pct"),
+    })
+
     return {
         "asset": target,
         "portfolio_summary": portfolio_summary,
@@ -210,9 +249,11 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
             "risk_round2_after_quant": build_risk_officer_prompt(target, "rebuttal"),
             "cio": build_cio_prompt(target),
         },
-        "save_command": (
-            f"~/.claude/skills/invest/run.sh save_committee {symbol}"
-        ),
+        # 插件用户经 run.sh（uvx 拉后端，PATH 上不一定有 openinvest）；pip/uvx 装的直接
+        # `openinvest save_committee`；MCP agent 用 submit_committee 工具（三者同一入口）
+        "save_command": f"bash <plugin>/skills/invest/scripts/run.sh save_committee {symbol}",
+        "save_alternatives": [f"openinvest save_committee {symbol}",
+                              "MCP tool: submit_committee(symbol, transcript)"],
         "instructions": (
             "Claude: 这是 Investment Committee 的 3 轮流程：\n"
             "  Round 1 - 独立陈述: Macro (跨资产共享) + Quant + Risk Officer 各自看自己的数据\n"
@@ -238,14 +279,16 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
             '  "\\n\\n=== VALUATION (确定性事实，必须纳入) ===\\n<paste valuation_brief>'
             '\\n\\n=== MARKET SENTIMENT 表盘 (确定性事实，必须纳入) ===\\n<paste sentiment_brief>'
             '\\n\\n=== 卖出后路径 / 买回点参考 ===\\n<paste reentry_reference>"\n'
-            "  ⚠️ sentiment_brief 的 INDEP_DEFENSE_FLAG 行和 regime_brief 的 INPUTS 行\n"
-            "  （含 atr_spike_ratio）必须**原样**进最终 transcript —— save_committee 靠\n"
-            "  这些确定性行做防御降级/风险档后处理，缺了整条防御链失效。\n"
+            "  防御降级 / regime / 路径快照由后端按本次 prepare 存下的事实判定，不依赖你\n"
+            "  把 INDEP_DEFENSE_FLAG / INPUTS 行抄进 transcript（抄进去给 CIO 看仍有益）。\n"
+            "**模型**：Macro / Quant / Risk 可交给便宜的子 agent；CIO 由你（编排者）亲自写。\n"
             "请依次扮演 6 段输出，用以下分隔符：\n"
             "=== MACRO ===\n=== QUANT_R1 ===\n=== RISK_R1 ===\n"
             "=== QUANT_R2 ===\n=== RISK_R2 ===\n=== CIO ===\n"
-            f"全部完成后通过 stdin 喂给 save_committee {symbol} --provider <你的品牌> --model <实际扮演角色的模型名>"
-            "（模型名只有你知道；不传记 unknown，复盘按 provider:model 分桶）"
+            f"全部完成后交卷：MCP 调 submit_committee(symbol, transcript, provider, model)，"
+            f"或命令行 stdin 喂给 save_command 加 --provider <你的品牌> --model <实际扮演角色的模型名>"
+            f"（插件 run.sh；pip 安装用 openinvest save_committee {symbol}）。"
+            "模型名只有你知道；不传记 unknown，复盘按 provider:model 分桶"
         ),
     }
 
@@ -288,8 +331,12 @@ def save_committee_transcript(
     # risk_profile / 快崩防御 后处理输入（与 direct 路径同款）：transcript 里有
     # 粘贴进去的确定性 regime_brief（REGIME:/INPUTS:/THRESHOLDS: 行）和
     # sentiment_brief（INDEP_DEFENSE_FLAG 行）
-    regime = regime_label_from_text(raw)
-    atr_defense_on = atr_defense_from_text(raw)
+    # 确定性事实优先用本次 prepare 存下的（后端自己算的）；没有才退回从 transcript 解析
+    facts = _load_brief_facts(symbol)
+    fact_text = (f"{facts.get('regime_brief') or ''}\n{facts.get('sentiment_brief') or ''}"
+                 if facts else raw)
+    regime = regime_label_from_text(fact_text)
+    atr_defense_on = atr_defense_from_text(fact_text)
     # 2026-10-07 #234-5：补齐 Direct 路径的三条确定性后处理——Sanity5 现价校验
     # （current_price）/ 黄金防御分批 DCA 闸 / 干预反事实记账，与 session 共用
     # intervention.py 同一组入口。transcript 不含绝对价位（ADR-022），现价与交易日
@@ -319,11 +366,16 @@ def save_committee_transcript(
         worker_brief=raw,  # 分段时 cio_text 只剩 CIO 段，worker 失败哨兵在别的段里
         current_price=current_price,
         regime=regime,
-        defense_flag_on=("INDEP_DEFENSE_FLAG: on" in raw or atr_defense_on),
+        defense_flag_on=("INDEP_DEFENSE_FLAG: on" in fact_text or atr_defense_on),
         defense_dca=defense_dca,
         alloc_ceiling=alloc_ceiling(),
         single_invest_cap=single_invest_cap(target, strategy),  # Sanity 6（与 Direct 同源）
     )
+    if str(verdict.get("verdict") or "").upper() == "UNCLEAR":
+        # 解析不出裁决 = 不是一份裁决：不存档（否则当天记录成 UNCLEAR、看门狗报失败），让交卷方修了重交
+        raise ValueError(
+            "CIO 段解析不出裁决（UNCLEAR）：`=== CIO ===` 分节里需要 VERDICT: / CONFIDENCE: 等行，"
+            "格式见 prompts.cio。本次未存档，修正后重新提交。")
     verdict["alloc_currency"] = base_currency()
     _cap_note = single_invest_cap_note(verdict)
     if _cap_note and "CIO" in sections:
@@ -351,8 +403,17 @@ def save_committee_transcript(
     health = build_input_health(
         report_like, verdict, None,
         {"entry": "coordinator", "provider": provider, "model": (model or "").strip() or "unknown",
-         "has_df": bool(has_df)},
+         "has_df": bool(has_df),
+         # prepare = 防御/regime 用后端存的事实；transcript = 没有可用快照，退回解析 agent 文字
+         "facts_source": "prepare" if facts else "transcript"},
     )
+    # 与 Direct _persist 同款宏观快照（verdict_review 事后归因读它；以前 Coordinator 记录这块为空）
+    from openinvest.core.committee.persist import _capture_macro_context
+    try:
+        macro_ctx = _capture_macro_context()
+    except Exception as e:  # noqa: BLE001  宏观拉不到不阻断落盘
+        log.warning(f"save_committee 宏观快照失败 graceful：{e}")
+        macro_ctx = {}
 
     import json as _json
     lines = [
@@ -364,6 +425,8 @@ def save_committee_transcript(
         f"**Verdict**: {verdict['verdict']} (confidence {verdict['confidence']:.2f})",
         f"**Dominant view**: {verdict['dominant_view']}",
         f"**Suggested allocation {base_currency()}**: {verdict['alloc_cny']}",
+        "\n\n---\n\n## Macro Context Snapshot (for post-hoc attribution)\n",
+        f"```json\n{_json.dumps(macro_ctx, ensure_ascii=False, indent=2)}\n```",
         "\n\n---\n\n## Input Health (deterministic)\n",
         f"```json\n{_json.dumps(health, ensure_ascii=False, indent=2)}\n```",
         "\n\n---\n\n## Reports\n",
@@ -380,6 +443,18 @@ def save_committee_transcript(
     if archived is not None:
         log.info("save_committee: 同日重跑，旧 transcript 归档到 %s", archived)
     path.write_text("\n".join(lines), encoding="utf-8")
+    # 路径预测快照（path_review 闭环），与 Direct session 6.5 同一入口；顾问模式同样跳过
+    from openinvest.utils.advisory import is_advisory_mode
+    if not facts:
+        # 没有出题快照的重交：别让当天早先那份 _path.json 和新裁决对不上
+        (out_dir / f"{safe_sym}_path.json").unlink(missing_ok=True)
+    elif facts.get("path_profile") and not is_advisory_mode():
+        try:
+            from openinvest.core.runner.intervention import _save_path_snapshot
+            _save_path_snapshot(symbol, regime or "", current_price, facts.get("atr_pct"),
+                                facts["path_profile"])
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"save_committee path 快照失败 graceful：{e}")
     record_intervention(symbol, regime or "", current_price, verdict, atr_defense_on)
     store.dream_event({
         "phase": "committee_finished_skill",
