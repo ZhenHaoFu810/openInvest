@@ -1231,7 +1231,8 @@ _GOLD_FIELDS = {"kind": "metal", "unit_label": "克", "proxy_kind": "gold_cny_pe
 _GRAM_LABELS = {"克", "g", "gram", "grams", "股"}
 
 
-def gold_booking(symbol: str, ccy: str, unit_label: str, held: Optional[str]) -> Optional[Dict[str, str]]:
+def gold_booking(symbol: str, ccy: str, unit_label: str, held: Optional[str],
+                 *, existing: bool = False) -> Optional[Dict[str, str]]:
     """GC=F 的入口校验（buy / record_existing_position 共用）：非 GC=F 返回 None；
     合法（CNY + 克）返回要落账的 kind / unit_label / proxy_kind 字段；其余抛 ValueError 并给正确写法。
 
@@ -1240,9 +1241,15 @@ def gold_booking(symbol: str, ccy: str, unit_label: str, held: Optional[str]) ->
     """
     if symbol.strip().upper() != _GOLD_SYMBOL:
         return None
-    how = (f"黄金必须按「人民币 / 克」记账：price 填 CNY/克、currency=CNY、unit_label=克，"
-           f"如 buy {symbol} --units 5 --price 880 -c CNY --kind metal --unit-label 克"
-           f"（MCP: symbol='{symbol}', units=5, price=880, currency='CNY', kind='metal', unit_label='克'）；"
+    # existing=True：调用方登记的是已有仓位（import / init），示例给不扣现金的写法；照抄普通 buy 会再扣一次现金（CR #499/#514）
+    if existing:
+        example = (f"如 buy {symbol} --units 5 --price 880 -c CNY --kind metal --unit-label 克 --existing-position"
+                   f"（MCP: record_existing_position(symbol='{symbol}', units=5, price=880, currency='CNY', "
+                   f"kind='metal', unit_label='克')，不扣现金）")
+    else:
+        example = (f"如 buy {symbol} --units 5 --price 880 -c CNY --kind metal --unit-label 克"
+                   f"（MCP: symbol='{symbol}', units=5, price=880, currency='CNY', kind='metal', unit_label='克'）")
+    how = (f"黄金必须按「人民币 / 克」记账：price 填 CNY/克、currency=CNY、unit_label=克，{example}；"
            f"美元/盎司报价先折成 CNY/克（USD/oz ÷ 31.1035 × USDCNY）")
     if held and held != "CNY":
         raise ValueError(
