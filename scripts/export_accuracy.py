@@ -346,26 +346,45 @@ def _get(d: Any, path: Tuple[str, ...]) -> Any:
     return d
 
 
-def _null(d: Dict[str, Any], path: Tuple[str, ...]) -> None:
+def _null(d: Dict[str, Any], path: Tuple[str, ...]) -> bool:
+    """把叶子置 None；真的改动了一个非 None 值才返回 True（给不动点循环判停）。"""
     cur: Any = d
     for k in path[:-1]:
         cur = cur.get(k) if isinstance(cur, dict) else None
-    if isinstance(cur, dict) and path[-1] in cur:
+    if isinstance(cur, dict) and cur.get(path[-1]) is not None:
         cur[path[-1]] = None
+        return True
+    return False
+
+
+_CAL_PATHS = [("calibration", k) for k in ("ece", "brier", "base_rate_brier")]
 
 
 def _complementary_mask(window: Dict[str, Any], models: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """见上。window = 窗口公开聚合；models = {model_era: 该模型的公开聚合}。返回新 dict（深拷贝，不改入参）。"""
+    """见上。window = 窗口公开聚合；models = {model_era: 该模型的公开聚合}。返回新 dict（深拷贝，不改入参）。
+
+    跨族：_suppress_small_samples 在单个模型内的规则「direction_hit_rate 为 None ⇒ calibration 数字也为 None」
+    （base_rate_brier = p̄(1−p̄) 会把命中率还原出来）必须在被互补掩码后继续成立——某模型的 direction_hit_rate 被上面的
+    族掩码置 None，而它的校准数字还留着，就能由 p̄ 得到它的命中总数，再 窗口 − 其余模型 还原被藏模型（安全评审 #497）。
+    所以「族掩码」和「hit_rate 为 None ⇒ 校准为 None」循环到不再变化为止（校准被藏又会让校准族去藏别的模型）。"""
     import copy
     out = copy.deepcopy(models)
-    for _name, paths, count_path in _families():
-        hidden = {e for e, a in out.items()
-                  if int(_get(a, count_path) or 0) > 0 and _get(a, paths[0]) is None}
-        if hidden and _get(window, paths[0]) is not None:
-            for e, a in out.items():
-                if e not in hidden:
-                    for path in paths:
-                        _null(a, path)
+    for _ in range(len(_families()) + 2):
+        changed = False
+        for a in out.values():
+            if _get(a, ("direction_hit_rate",)) is None:
+                for path in _CAL_PATHS:
+                    changed |= _null(a, path)
+        for _name, paths, count_path in _families():
+            hidden = {e for e, a in out.items()
+                      if int(_get(a, count_path) or 0) > 0 and _get(a, paths[0]) is None}
+            if hidden and _get(window, paths[0]) is not None:
+                for e, a in out.items():
+                    if e not in hidden:
+                        for path in paths:
+                            changed |= _null(a, path)
+        if not changed:
+            break
     return out
 
 

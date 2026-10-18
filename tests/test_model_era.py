@@ -360,3 +360,43 @@ def test_old_coordinator_archive_without_health_is_not_deepseek(tmp_path, monkey
     monkeypatch.setattr(vr, "_atr_pct_cached", lambda *a, **k: 2.0)
     assert vr.review_one(d, "X", {}).model_era == "claude:unknown"
     assert vr.review_one(d, "Y", {}).model_era == PRE
+
+
+# ---------- 安全评审 #497：掩码要跨族（direction_hit_rate 被掩 ⇒ 校准也掩） ----------
+
+def test_masked_hit_rate_also_masks_calibration_and_keeps_n(tmp_path):
+    """两个模型子桶、其中一个 n<30 被掩：另一个的 direction_hit_rate 与 calibration 数字都为 null，n 保留。"""
+    rows = _mk(None, "2026-08-03", hold=40, hold_hits=25) + _mk(SONNET_H, "2026-10-20", hold=3, hold_hits=2)
+    w = _export(tmp_path, rows)
+    a, b = w["by_model"][PRE], w["by_model"][SONNET]
+    assert a["direction_hit_rate"] is None and b["direction_hit_rate"] is None
+    for m in (a, b):
+        assert all(m["calibration"][k] is None for k in ("ece", "brier", "base_rate_brier"))
+    assert a["calibration"]["n"] == 40 and b["calibration"]["n"] == 3 and a["sample_size"] == 40
+
+
+def test_calibration_must_follow_hit_rate_even_when_window_calibration_is_not_public(tmp_path):
+    """校准族自己不会触发掩码的情形：被藏模型 B 的 5 条全是 confidence=0.0（不进校准、cal.n=0）→ 窗口校准因
+    0<n_excluded<30 本身就是 null、校准族没有“有数据被藏”的模型。但 direction_hit_rate 族照样掩掉 A 的命中率；
+    若 A 的校准还留着，base_rate_brier=p̄(1−p̄) 把 A 的命中总数还原出来，再 窗口命中总数 − A = B 的命中。"""
+    rows = _mk(None, "2026-08-03", hold=60, hold_hits=40)
+    rows += [{**r, "confidence": 0.0} for r in _mk(SONNET_H, "2026-10-20", hold=5, hold_hits=4)]
+    w = _export(tmp_path, rows)
+    a, b = w["by_model"][PRE], w["by_model"][SONNET]
+    assert w["direction_hit_rate"] is not None and w["calibration"]["brier"] is None   # 前提成立
+    assert b["direction_hit_rate"] is None
+    assert a["direction_hit_rate"] is None, "hit_rate 族：窗口公开、B 被藏 → A 也藏"
+    assert all(a["calibration"][k] is None for k in ("ece", "brier", "base_rate_brier")), "A 的校准必须跟着藏"
+    assert a["calibration"]["n"] == 60                                                  # 计数保留
+
+
+def test_published_numbers_never_pin_down_a_masked_models_hit_rate(tmp_path):
+    """攻击者视角：对每个模型，若它的 direction_hit_rate 是 None，其余模型公开的数字里不能再藏着它的命中率
+    （校准的 base_rate_brier 反推 p̄；方向桶命中之和 = 命中总数）。"""
+    for hold_b in (1, 5, 29):
+        rows = _mk(None, "2026-08-03", hold=60, hold_hits=40, bull=35, bull_hits=18) \
+            + _mk(SONNET_H, "2026-10-20", hold=hold_b, hold_hits=hold_b // 2)
+        w = _export(tmp_path, rows)
+        for era, m in w["by_model"].items():
+            if m["direction_hit_rate"] is None:
+                assert all(m["calibration"][k] is None for k in ("ece", "brier", "base_rate_brier")), era
