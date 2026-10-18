@@ -233,8 +233,12 @@ def cmd_save_committee(args: argparse.Namespace) -> None:
     """
     raw = sys.stdin.read()
     if not raw.strip():
-        _print_json({"error": "empty stdin"})
-        return
+        _print_json({"status": "error", "error": "empty stdin"})
+        sys.exit(1)
     from openinvest.core.committee_runner import save_committee_transcript
     provider = getattr(args, "provider", None) or "claude"
-    _print_json(save_committee_transcript(args.symbol, raw, provider=provider))
+    try:
+        _print_json(save_committee_transcript(args.symbol, raw, provider=provider))
+    except ValueError as e:   # CIO 解析不出裁决：不存档，退出码 1 让 agent 看见并重交
+        _print_json({"status": "error", "error": str(e)})
+        sys.exit(1)

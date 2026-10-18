@@ -491,8 +491,8 @@ Access Service Token 和应用 Bearer token 是两层独立鉴权，组合使用
 同时发送上文的三项 header。
 
 **与 REST 转发的关系**：CLI→REST 转发（下文 `INVEST_API_BASE`）进入维护模式，
-仍支持但不再演进——它还覆盖 remote MCP 没有的 Coordinator 协议
-（prepare/save_committee）与 event_check（doctor 已有 MCP 工具）；日常读写/Direct 委员会请优先
+仍支持但不再演进——它还覆盖 remote MCP 没有的 event_check
+（Coordinator 协议 2026-10-18 起已有 MCP 工具 prepare_committee / submit_committee）（doctor 已有 MCP 工具）；日常读写/Direct 委员会请优先
 remote MCP。HTTP 使用 stateless SSE：`run_committee` 在同一请求中返回最终结果，
 期间发送 SDK 心跳，并在客户端提供 progress token 时推送阶段进度。同步工具的
 阻塞 IO 在线程池执行，慢查询不会占住事件循环、阻塞其他客户端或心跳。
