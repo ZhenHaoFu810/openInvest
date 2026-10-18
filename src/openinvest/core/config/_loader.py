@@ -17,6 +17,7 @@ from .tunable import (
     DCAConfig,
     DreamingTunableConfig,
     EventConfig,
+    FleetConfig,
     FundConfig,
     LanguageConfig,
     MacroBucketConfig,
@@ -27,6 +28,7 @@ from .tunable import (
     RewardConfig,
     SchedulerConfig,
     SentimentConfig,
+    SonnetArmConfig,
     StalenessConfig,
     TunableConfig,
     ValuationConfig,
@@ -210,6 +212,10 @@ def _build_tunable_from_dict(data: dict[str, Any]) -> TunableConfig:
 
     fund = FundConfig(**{k: v for k, v in data.get("fund", {}).items() if k in {f.name for f in fields(FundConfig)}})
 
+    sonnet_data = (data.get("fleet") or {}).get("sonnet_arm") or {}
+    fleet = FleetConfig(sonnet_arm=SonnetArmConfig(
+        **{k: v for k, v in sonnet_data.items() if k in {f.name for f in fields(SonnetArmConfig)}}))
+
     return TunableConfig(
         language=language,
         portfolio=portfolio,
@@ -227,6 +233,7 @@ def _build_tunable_from_dict(data: dict[str, Any]) -> TunableConfig:
         staleness=staleness,
         scheduler=scheduler,
         fund=fund,
+        fleet=fleet,
     )
 
 

@@ -122,3 +122,11 @@ fund:
     default: 1
     qdii: 2
     fof: 2
+
+fleet:
+  # 纸面舰队 Sonnet 模型臂（backtest_committee --sonnet-arm）：同一批标的、live 配置（rounds=1、单次抽样），
+  # 只把 LLM 换成这里的模型，且仅在该臂作用域内生效。key 只存环境变量名，值由 cron 从 .env 注入（别写进仓库）。
+  sonnet_arm:
+    model: claude-sonnet-5-5
+    base_url: https://api.anthropic.com/v1
+    api_key_env: FLEET_SONNET_API_KEY

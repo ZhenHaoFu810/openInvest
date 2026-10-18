@@ -9,7 +9,7 @@
      memory/.dreams/confidence_lookup.json（裁决旁展示的同类决议查表，D10 P1）
      memory/.dreams/verdict_neutrality.json（裁决中性度聚合，日报读它出一行；A5）
      memory/.dreams/verdict_review_<臂>.jsonl + docs/verdict_accuracy_arms.md（B4 实验臂 sealed / debate /
-         macrosoft，review_arm / run_arms；与上面所有 live 产物物理分离，不进命中率页 / 公开 JSON / 查表）
+         macrosoft + 模型臂 sonnet，review_arm / run_arms；与上面所有 live 产物物理分离，不进命中率页 / 公开 JSON / 查表）
 
 命中率定义：
 - BUY / ACCUMULATE → 后续涨 >0% = hit
@@ -632,9 +632,10 @@ def review_fleet() -> List[VerdictReview]:
 
 # 臂名 → memory/ 下的目录。scripts/backtest_committee 的 --sealed-arm / --debate-arm / --macro-soft-arm 写，本节读；
 # 目录名单一可信源在此。
-ARM_DIRS = {"sealed": ".backtest_sealed", "debate": ".backtest_debate", "macrosoft": ".backtest_macrosoft"}
-SEALED_ARM_SUBDIR, DEBATE_ARM_SUBDIR, MACROSOFT_ARM_SUBDIR = (
-    ARM_DIRS["sealed"], ARM_DIRS["debate"], ARM_DIRS["macrosoft"])
+ARM_DIRS = {"sealed": ".backtest_sealed", "debate": ".backtest_debate", "macrosoft": ".backtest_macrosoft",
+            "sonnet": ".backtest_sonnet"}   # sonnet = 模型臂（换 LLM），报告里单列「模型对照」，不进四臂并排
+SEALED_ARM_SUBDIR, DEBATE_ARM_SUBDIR, MACROSOFT_ARM_SUBDIR, SONNET_ARM_SUBDIR = (
+    ARM_DIRS["sealed"], ARM_DIRS["debate"], ARM_DIRS["macrosoft"], ARM_DIRS["sonnet"])
 SEALED_ARM_NAME = "sealed"
 FLEET_CONTROL_SUBDIR = ".backtest"       # 对照臂 = 同日同标的的舰队行
 ARMS_REPORT = "verdict_accuracy_arms.md"
