@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.53.0](https://github.com/longsizhuo/openInvest/compare/v0.52.0...v0.53.0) (2026-10-18)
+
+
+### Features
+
+* **sentinel:** per-symbol alert lines (price / daily move / drawdown from cost) ([#469](https://github.com/longsizhuo/openInvest/issues/469)) ([c460c47](https://github.com/longsizhuo/openInvest/commit/c460c4779f02c3d48b994973b2af1e62373ade8d))
+
 ## [0.52.0](https://github.com/longsizhuo/openInvest/compare/v0.51.1...v0.52.0) (2026-10-18)
 
 
