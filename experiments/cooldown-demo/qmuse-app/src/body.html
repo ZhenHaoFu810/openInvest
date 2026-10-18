@@ -1,7 +1,7 @@
 <main>
   <div class="brand"><span>多空对照</span><a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openInvest</a></div>
   <form id="ask">
-    <input id="code" inputmode="numeric" autocomplete="off" maxlength="6" pattern="\d{6}" placeholder="6 位基金代码，例如 110011" aria-label="基金代码" required>
+    <input id="code" autocomplete="off" autocapitalize="characters" maxlength="10" pattern="[0-9A-Za-z.]{1,10}" placeholder="基金或股票代码，例如 110011、600519" aria-label="基金或股票代码" required>
     <button id="go" type="submit">复核</button>
   </form>
   <p class="hint" id="hint">网页为试用版：每人每天 3 次，约 30 秒。</p>
