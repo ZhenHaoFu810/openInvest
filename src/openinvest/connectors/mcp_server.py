@@ -9,10 +9,12 @@
 
 写安全与 CLI / web API 并存同一模型（with_portfolio_tx fcntl 锁）。
 
-工具刻意克制在高频能力（现 31 个）（80+ REST 端点全暴露会撑爆 agent context），
+工具刻意克制在高频能力（现 33 个）（80+ REST 端点全暴露会撑爆 agent context），
 全部复用 service 层 / PortfolioManager / decision_ledger——与 CLI、REST 同源，
-防三 adapter 漂移。委员会 Coordinator workflow 不在此处（Decision 5：那是
-Skill 的职责，MCP 只暴露 Direct 路径 run_committee）。
+防三 adapter 漂移。委员会 Coordinator 的出题/收卷（prepare_committee /
+submit_committee）2026-10-18 起也在此暴露：方向改为"插件不持模型 key、推理由宿主
+Agent 负责"，纯 MCP 的 agent 也要能走（推翻 Decision 5：那时只把 Coordinator 当
+Claude Code Skill 的专属流程）。
 
 注册（本地开发）：
     claude mcp add openinvest -- uv --directory <repo> run python -m connectors.mcp_server
@@ -23,6 +25,7 @@ Skill 的职责，MCP 只暴露 Direct 路径 run_committee）。
 from __future__ import annotations
 
 import asyncio
+import json
 from functools import partial, wraps
 from inspect import iscoroutinefunction
 from typing import Annotated, Any, Dict, List, Literal, Optional
@@ -1131,6 +1134,77 @@ def untrack_asset(
 
 
 # ---------- 委员会（Direct 路径） ----------
+
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+def prepare_committee(
+    symbol: Annotated[str, Field(description="A symbol already in strategy target_assets, e.g. 'GC=F', 'NDQ.AX'.")],
+) -> Dict[str, Any]:
+    """Step 1 of the agent-run committee (Coordinator path): get everything YOU
+    need to play the 4 roles yourself — no backend LLM key involved.
+
+    Returns the deterministic data blocks (regime, sentiment / defense flag,
+    valuation, macro, events, portfolio, path reference) plus the 6 role
+    prompts and `instructions` describing the 3 rounds. Run Macro / Quant /
+    Risk (cheap subagents are fine), write the CIO memo yourself, then call
+    `submit_committee` with the full transcript.
+
+    The backend keeps its own copy of the deterministic facts from this call
+    and uses them when you submit (defense downgrade, regime, path snapshot),
+    so a fact you forget to paste cannot silently switch a rule off. Submit
+    within 6 hours of preparing.
+    """
+    _check_advisory()
+    from mcp.server.fastmcp.exceptions import ToolError
+    from openinvest.core.committee_runner import prepare_committee_brief
+    out = prepare_committee_brief(symbol)
+    if out.get("status") == "error":
+        raise ToolError(f"{out.get('error')} {out.get('hint', '')}".strip())
+    return json.loads(json.dumps(out, ensure_ascii=False, default=str))
+
+
+# 同一份 transcript 重交 = 当天同一份裁决（旧的归档进 runs/），按幂等写标注
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+def submit_committee(
+    symbol: Annotated[str, Field(description="Same symbol you passed to prepare_committee.")],
+    transcript: Annotated[str, Field(description="All sections, each starting with its separator line: === MACRO ===, === QUANT_R1 ===, === RISK_R1 ===, === QUANT_R2 ===, === RISK_R2 ===, === CIO ===.")],
+    provider: Annotated[str, Field(description="Which agent played the roles, e.g. 'hermes', 'claude', 'codex'.")] = "agent",
+) -> Dict[str, Any]:
+    """Step 2 of the agent-run committee: hand in the transcript you produced
+    from `prepare_committee`. The backend parses the CIO memo, applies the same
+    deterministic rules as the backend-run committee (single-investment cap,
+    defense downgrade, sanity checks), saves the decision and returns it.
+
+    If the CIO section has no parseable verdict, nothing is saved and this
+    returns an error — fix the CIO section and submit again.
+
+    Returns:
+        `decision_id`, the post-rule `verdict` object, `saved` path and
+        `facts_source` ("prepare" = rules used the facts saved at prepare time;
+        "transcript" = no recent prepare found, facts were read from your text).
+    """
+    _check_advisory()
+    from datetime import datetime
+
+    from mcp.server.fastmcp.exceptions import ToolError
+    from openinvest.core.committee_runner import save_committee_transcript
+    from openinvest.core.decision_ledger import llm_failure_reason, parse_committee_file
+    if not transcript.strip():
+        raise ToolError("transcript is empty")
+    try:
+        res = save_committee_transcript(symbol, transcript, provider=provider)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    from pathlib import Path
+    parsed = parse_committee_file(Path(res["saved"])) or {}
+    reason = llm_failure_reason(parsed)
+    return {
+        "decision_id": f"{datetime.now().strftime('%Y-%m-%d')}/{symbol}",
+        "verdict": json.loads(json.dumps(res["verdict"], default=str)),
+        "saved": res["saved"],
+        "facts_source": (parsed.get("input_health") or {}).get("facts_source"),
+        **({"degraded": reason} if reason else {}),
+    }
+
 
 _COMMITTEE_LOCK = asyncio.Lock()
 

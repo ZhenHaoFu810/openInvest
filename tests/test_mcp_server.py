@@ -12,6 +12,8 @@ EXPECTED_TOOLS = {
     "status", "strategy", "history", "live_prices", "what_if", "discipline",
     "decisions", "explain_decision", "record_execution", "ingest_event",
     "buy", "sell", "deposit", "withdraw", "run_committee",
+    # Agent 自己编排委员会（Coordinator）：出题 / 收卷，后端不调模型（2026-10-18 插件不持 key）
+    "prepare_committee", "submit_committee",
     # 再平衡清单：只出清单不下单（读持仓，顾问模式拒绝）
     "rebalance_plan",
     # 补录用系统前就持有的仓位（不扣现金）：独立工具，老 server 上 Unknown tool 而不是静默扣现金
@@ -152,6 +154,8 @@ def test_advisory_mode_blocks_non_whitelisted_tools(monkeypatch):
         "set_allocations": {"target_allocation_stock": 0.7, "target_allocation_cash": 0.3},
         "track_asset": {"symbol": "GC=F"},
         "untrack_asset": {"symbol": "GC=F"},
+        "prepare_committee": {"symbol": "GC=F"},
+        "submit_committee": {"symbol": "GC=F", "transcript": "=== CIO ===\nVERDICT: HOLD"},
         "record_execution": {"decision_id": "2026-01-01/GC=F", "executed": True},
         "ingest_event": {"title": "t", "url": "https://x.co/a"},
     }
@@ -193,6 +197,7 @@ CLI_ALIASES = {
     "record_existing_position": ("buy", "--existing-position"),
     "add_news_source": ("news_sources", "--add"),
     "remove_news_source": ("news_sources", "--remove"),
+    "submit_committee": ("save_committee", None),
 }
 
 
