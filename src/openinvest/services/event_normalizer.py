@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openinvest.core.llm_telemetry import TelemetryMeta, record_llm_call
 from openinvest.services.embeddings import embed_text
 from openinvest.services.news_sources import RawNewsItem
-from openinvest.utils.llm import sampling_kwargs
+from openinvest.utils.llm import json_object_kwargs, sampling_kwargs
 
 log = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ def _call_flash_batch(
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ],
-        response_format={"type": "json_object"},
+        **json_object_kwargs(model),
         **sampling_kwargs(model, 0.0),
         **extra,
     )

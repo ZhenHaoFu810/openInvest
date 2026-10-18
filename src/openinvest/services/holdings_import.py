@@ -78,7 +78,7 @@ def _parse_holdings_with_llm(
     """
     from openai import OpenAI
 
-    from openinvest.utils.llm import get_llm_config_safe, needs_thinking_disabled, sampling_kwargs
+    from openinvest.utils.llm import get_llm_config_safe, json_object_kwargs, needs_thinking_disabled, sampling_kwargs
     _ak, _bu, _m, _p = get_llm_config_safe()
     base_url = base_url or _bu
     model = model or _m
@@ -95,7 +95,7 @@ def _parse_holdings_with_llm(
             {"role": "user", "content": description},
         ],
         **sampling_kwargs(model, 0.0),
-        response_format={"type": "json_object"},
+        **json_object_kwargs(model),
         extra_body=extra_body or None,
     )
     raw = resp.choices[0].message.content or "{}"

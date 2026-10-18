@@ -23,7 +23,7 @@ from openai import OpenAI
 
 from openinvest.capabilities.tools import TOOL_DEFINITIONS, execute_tool_call
 from openinvest.core.llm_telemetry import TelemetryMeta, record_llm_call, record_tool_call
-from openinvest.utils.llm import get_thinking_disable_kwargs, sampling_kwargs
+from openinvest.utils.llm import get_thinking_disable_kwargs, is_claude, sampling_kwargs
 
 
 @dataclass
@@ -191,7 +191,7 @@ class SDKAgent:
         # enable_thinking=True 的角色跳过 disable，保留思考模式（P3 CIO A/B）。
         if not self.enable_thinking:
             kwargs.update(get_thinking_disable_kwargs(self.model))
-        if self.response_format:
+        if self.response_format and not is_claude(self.model):  # Anthropic 兼容层收 json_object 会 400
             kwargs["response_format"] = self.response_format
         if self.enable_tools:
             kwargs["tools"] = TOOL_DEFINITIONS
