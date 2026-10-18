@@ -509,6 +509,12 @@ PY
 需要的是各臂之间只差一个变量；中途把舰队换成 Sonnet 会让臂内数据一半 DeepSeek 一半 Sonnet，对照臂也要跟着换，等于重开实验。
 所以 Sonnet 的账只从 live Direct 这一本里长，舰队这本不动。四臂报告现在标模型，若有人改了舰队的 `LLM_MODEL`，报告会直接警告。
 
+**舰队里的 Sonnet 模型臂**（`backtest_committee --sonnet-arm`）：舰队其余臂钉 DeepSeek，但"换模型本身"的效应需要同一批输入上的配对对照，
+live 每天只有 ~4 条，Sonnet 期的样本要等很久。这一臂同一批标的、live 配置（rounds=1、单次抽样）只把 LLM 换成 Sonnet 5.5
+（config `fleet.sonnet_arm`，key 来自环境变量 `FLEET_SONNET_API_KEY`），每天 ≈ 50 条；Macro 由 Sonnet 自己生成，所以复盘不按 `macro_shared` 剔行，
+在 `docs/verdict_accuracy_arms.md` 单列「模型对照」与对照臂同日同标的配对（差异 = 整条流水线换模型的总效应；稳定度那组 n/a）。
+每天 ≈ ¥20（实测 ¥0.405/标的 + ¥0.143 Macro，50 标的）。设计、cron 行、成本明细见 [`experiments/paper_fleet/README.md`](../../experiments/paper_fleet/README.md)。
+
 **#461 宏观否决要在 Sonnet 跑满一周后重看 Macro 信号分布。** #461 的前提是"Macro 恒为 risk_off、把 Quant 看多的行全压成 HOLD"，
 这是在 DeepSeek 上观察到的；换模型后 Macro 的 SIGNAL 分布可能不是同一个样子。Sonnet 期满一周（2026-10-26 前后）后，统计 `memory/.committee` 近 7 天的 Macro SIGNAL，
 并和换模型前的同长度窗口比（只看分布，不改判据）：
