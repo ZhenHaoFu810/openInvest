@@ -173,6 +173,38 @@ def test_zero_fetch_streak_ignores_failed_but_breaks_on_nonzero(db):
     assert find_problems(db, [EW_JOB], _t("2026-07-30T11:40:00")) == []
 
 
+def test_normalize_failed_two_in_a_row(db):
+    ok = "{'status': 'ok', 'fetched': 200, 'new_events': 3, 'normalize_failed': 0, 'triggered': 0}"
+    bad = "{'status': 'ok', 'fetched': 200, 'new_events': 0, 'normalize_failed': 2, 'triggered': 0}"
+    quiet = "{'status': 'ok', 'fetched': 200, 'new_events': 0, 'triggered': 0}"  # 无新新闻：没走归一化
+    _add(db, "event_watch", _t("2026-10-19T08:00:00"), output=ok)
+    _add(db, "event_watch", _t("2026-10-19T08:30:00"), output=bad)
+    keys = lambda now: [f["key"].split(":")[1] for f in find_problems(db, [EW_JOB], now)]  # noqa: E731
+    assert "normalize_failed" not in keys(_t("2026-10-19T08:40:00"))   # 一次偶发不报
+    _add(db, "event_watch", _t("2026-10-19T09:00:00"), output=quiet)   # 安静轮不打断连击
+    _add(db, "event_watch", _t("2026-10-19T09:30:00"), output=bad)
+    assert "normalize_failed" in keys(_t("2026-10-19T09:40:00"))
+    _add(db, "event_watch", _t("2026-10-19T10:00:00"), output=ok)      # 恢复 → 消警
+    assert "normalize_failed" not in keys(_t("2026-10-19T10:10:00"))
+
+
+def test_find_failed_verdicts(tmp_path):
+    from openinvest.jobs.job_watchdog import find_failed_verdicts
+    now = _t("2026-10-19T10:00:00")
+    d = tmp_path / "2026-10-19"
+    d.mkdir()
+    md = "**Symbol**: {s}\n**Verdict**: {v} (confidence {c})\n\n## Input Health (deterministic)\n\n```json\n{h}\n```\n"
+    (d / "OK.md").write_text(md.format(s="OK", v="HOLD", c="0.6", h='{"worker_unavailable": []}'))
+    (d / "DEAD.md").write_text(md.format(s="DEAD", v="UNCLEAR", c="0.0",
+                                         h='{"worker_unavailable": ["macro", "quant"], "cio_unclear": true}'))
+    (d / "HALF.md").write_text(md.format(s="HALF", v="HOLD", c="0.4", h='{"worker_unavailable": ["risk"]}'))
+    (tmp_path / "2026-10-10").mkdir()   # 更早的日期不扫
+    (tmp_path / "2026-10-10" / "OLD.md").write_text(md.format(s="OLD", v="UNCLEAR", c="0", h="{}"))
+    found = find_failed_verdicts(tmp_path, now)
+    assert sorted(f["key"] for f in found) == ["verdict_failed:2026-10-19/DEAD", "verdict_failed:2026-10-19/HALF"]
+    assert any("UNCLEAR" in f["text"] for f in found) and any("risk" in f["text"] for f in found)
+
+
 # ---------- run()：24h 去重 + 投递失败回滚 ----------
 
 @pytest.fixture

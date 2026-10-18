@@ -1171,7 +1171,8 @@ async def run_committee(
           `explain_decision` just to read them.
     """
     import json
-    from openinvest.core.decision_ledger import parse_committee_file
+    from mcp.server.fastmcp.exceptions import ToolError
+    from openinvest.core.decision_ledger import is_unclear, llm_failure_reason, parse_committee_file
     from openinvest.core.memory_store import MemoryStore
     from openinvest.jobs.review_calc import confidence_display
     from openinvest.jobs.verdict_review import load_confidence_lookup
@@ -1182,13 +1183,16 @@ async def run_committee(
         safe = safe_symbol(symbol)
         cached = MemoryStore().root / ".committee" / today / f"{safe}.md"
         parsed = parse_committee_file(cached)
-        if parsed:
+        # CIO 没出裁决（UNCLEAR）的记录不当缓存，直接重跑；部分角色失败的照常命中但带 degraded
+        # （单个角色持续失败时不至于每次调用都重跑整轮委员会）
+        if parsed and not is_unclear(parsed):
             return {"cached": True, "decision_id": f"{today}/{symbol}",
                     **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny", "alloc_currency")},
                     "confidence_lookup": confidence_display(parsed, load_confidence_lookup(),
                                                             with_raw=False),
                     # 与 CLI 同款：缓存命中也带 memo 与 Input Health，agent 不必再 explain_decision
-                    "cio_memo": parsed["cio_memo"], "input_health": parsed["input_health"]}
+                    "cio_memo": parsed["cio_memo"], "input_health": parsed["input_health"],
+                    **({"degraded": llm_failure_reason(parsed)} if llm_failure_reason(parsed) else {})}
 
     from openinvest.core.committee_runner import run_committee_session
 
@@ -1228,12 +1232,22 @@ async def run_committee(
             symbols=[symbol], max_debate_rounds=max_rounds, progress_callback=_on_phase))
     res = (out.get("asset_committees") or {}).get(symbol) or {}
     v = res.get("verdict") if isinstance(res, dict) else None
+    today = datetime.now().strftime("%Y-%m-%d")
+    failure = llm_failure_reason(
+        parse_committee_file(MemoryStore().root / ".committee" / today / f"{safe_symbol(symbol)}.md")
+        or ({"verdict": str(v.get("verdict") or "").upper()} if isinstance(v, dict) else None))
+    if failure and isinstance(v, dict) and str(v.get("verdict") or "").upper() == "UNCLEAR":
+        # 没有裁决可给：报错而不是返回一个 UNCLEAR"结果"（2026-10-09 Codex 实测 402 时 isError=false）
+        raise ToolError(f"委员会没跑成：{failure}。多半是后端 LLM 调用失败（key / 额度 / 参数），"
+                        f"先跑 doctor；失败记录已存档但不会当缓存，修好后直接重跑。")
     return {
         "cached": False,
-        "decision_id": f"{datetime.now().strftime('%Y-%m-%d')}/{symbol}",
+        "decision_id": f"{today}/{symbol}",
         "verdict": json.loads(json.dumps(v if v is not None else res, default=str)),
         "confidence_lookup": (confidence_display(v, load_confidence_lookup(), with_raw=False)
                               if isinstance(v, dict) else None),
+        # 有角色没产出但 CIO 仍给了（被强制的）HOLD：照给，但必须让 agent 看见并转告用户
+        **({"degraded": failure} if failure else {}),
     }
 
 

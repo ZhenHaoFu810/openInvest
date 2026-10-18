@@ -91,8 +91,16 @@ def normalize(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     skip_embedding: bool = False,
+    stats: Optional[Dict[str, int]] = None,
 ) -> List[NormalizedEvent]:
-    """批量归一化。空 items 返回 []，缺 LLM key 返回 []。"""
+    """批量归一化。空 items 返回 []，缺 LLM key 返回 []。
+
+    stats（可选）累加 batches / failed_batches：失败批与"这批真没新闻"返回值都是空，
+    只有计数分得开——event_watch 把它写进 job 结果，看门狗据此告警（2026-10-18 起失败要响亮）。
+    """
+    if stats is not None:
+        stats.setdefault("batches", 0)
+        stats.setdefault("failed_batches", 0)
     if not items:
         return []
     # 统一从 utils.llm 读 LLM 配置，向后兼容 DEEPSEEK_*
@@ -101,12 +109,18 @@ def normalize(
     api_key = api_key or _ak
     if not api_key:
         log.warning("LLM_API_KEY / DEEPSEEK_API_KEY 缺失，event_normalizer 跳过")
+        if stats is not None:
+            n = -(-len(items) // MAX_BATCH)
+            stats["batches"] += n
+            stats["failed_batches"] += n
         return []
 
     results: List[NormalizedEvent] = []
     # 分批，每批 MAX_BATCH 条
     for i in range(0, len(items), MAX_BATCH):
         batch = items[i:i + MAX_BATCH]
+        if stats is not None:
+            stats["batches"] += 1
         try:
             batch_events = _call_flash_batch(
                 batch,
@@ -117,6 +131,8 @@ def normalize(
             )
         except Exception as e:
             log.warning(f"normalize batch starting idx={i} 失败: {type(e).__name__}: {e}")
+            if stats is not None:
+                stats["failed_batches"] += 1
             continue
 
         for ne in batch_events:
@@ -199,21 +215,46 @@ def _parse_events_json(raw_text: str, *, expected_size: int, offset: int) -> Lis
     if text.startswith("```"):
         text = re.sub(r"^```[a-z]*\s*", "", text)
         text = re.sub(r"```\s*$", "", text)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        log.warning(f"normalize JSON 解析失败: {e}; raw[:200]={raw_text[:200]}")
-        return []
+    # 逐个解出全部 JSON 值再合并 events：Claude 有时一条回复里给两个 {"events": [...]}
+    # 或在 JSON 后面再跟一段——json.loads 整体报 "Extra data" 会把整批丢掉（2026-10-19 生产实况）。
+    # 解析失败一律抛：上游按"失败批"计数，不能和"这批真没新闻"混成同一个空列表。
+    dec = json.JSONDecoder()
+    chunks: List[Any] = []
+    pos = 0
+    while True:
+        while pos < len(text) and text[pos] in " \t\r\n,":
+            pos += 1
+        if pos >= len(text):
+            break
+        try:
+            obj, pos = dec.raw_decode(text, pos)
+        except json.JSONDecodeError as e:
+            if not chunks:
+                raise ValueError(f"normalize JSON 解析失败: {e}; raw[:200]={raw_text[:200]}") from e
+            log.warning(f"normalize JSON 后面的非 JSON 尾巴已忽略: {e}")
+            break
+        chunks.append(obj)
 
-    raw_events = data.get("events") if isinstance(data, dict) else data
-    if not isinstance(raw_events, list):
-        log.warning(f"normalize 返回非 list: {type(raw_events)}")
-        return []
+    raw_events: List[Any] = []
+    for obj in chunks:
+        ev = obj.get("events") if isinstance(obj, dict) else obj
+        if isinstance(ev, list):
+            raw_events.extend(ev)
+    if not raw_events and not any(
+        isinstance(o.get("events") if isinstance(o, dict) else o, list) for o in chunks
+    ):
+        raise ValueError(f"normalize 返回里没有 events 列表: raw[:200]={raw_text[:200]}")
 
     out: List[NormalizedEvent] = []
+    seen_idx = set()
     for raw in raw_events:
         if not isinstance(raw, dict):
             continue
+        # 多段 JSON 可能把同一组 events 吐两遍：同 idx 只留第一次（省一次 embedding，计数不虚高）
+        if raw.get("idx") is not None:
+            if raw["idx"] in seen_idx:
+                continue
+            seen_idx.add(raw["idx"])
         try:
             ne = _sanitize_event(raw, offset=offset)
         except Exception as e:

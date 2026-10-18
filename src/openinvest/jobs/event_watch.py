@@ -198,8 +198,10 @@ def run(
     if not unseen_items:
         return {"status": "ok", "fetched": len(raw_items), "new_events": 0, "triggered": 0}
 
-    normalized: List[NormalizedEvent] = normalize(unseen_items)
-    log.info(f"[event_watch] normalized {len(normalized)} events")
+    norm_stats: Dict[str, int] = {}
+    normalized: List[NormalizedEvent] = normalize(unseen_items, stats=norm_stats)
+    log.info(f"[event_watch] normalized {len(normalized)} events "
+             f"(failed batches {norm_stats.get('failed_batches', 0)}/{norm_stats.get('batches', 0)})")
 
     # 入库 + 收集新事件
     new_events: List[Dict[str, Any]] = []
@@ -234,6 +236,8 @@ def run(
         "status": "ok",
         "fetched": len(raw_items),
         "new_events": len(normalized),
+        # 看门狗读这个：归一化失败批数（缺 key / 额度 / 解析失败），job 本身仍算 success
+        "normalize_failed": norm_stats.get("failed_batches", 0),
         **trig,
         "dry_run": dry_run,
     }
