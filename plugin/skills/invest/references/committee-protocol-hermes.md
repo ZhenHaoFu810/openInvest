@@ -173,6 +173,15 @@ subagent model never mixes old and new track records. Omitted = recorded as `unk
 accurately tagged as run by Hermes (not hardcoded to claude); Dreaming's per-provider
 bucketed pattern mining and after-the-fact troubleshooting both depend on this field.
 
+**Over MCP instead of the shell**: if the roles were briefed from the MCP tool
+`prepare_committee`, hand in with `submit_committee(symbol, transcript, provider="hermes",
+model=<model-name>)` — same `=== … ===` transcript as the `transcript` string. Same archive,
+same Input Health. CLI and MCP hand-ins are interchangeable; never do both for one run (a second
+hand-in overwrites the archive and logs an intervention). Facts saved by `prepare_committee`
+are applied for 6 hours (`facts_source: prepare`); a later hand-in is still accepted and falls
+back to parsing facts from the transcript (`facts_source: transcript`) — this window applies to
+the CLI hand-in too.
+
 Lands in `memory/.committee/<date>/<asset>.md` with exactly the same schema as the
 other two paths; downstream tools such as `explain_decision` / `decisions` can read
 it with zero changes.

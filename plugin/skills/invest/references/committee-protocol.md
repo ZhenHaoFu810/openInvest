@@ -201,8 +201,22 @@ Lands in `memory/.committee/<date>/<asset>.md`, with exactly the same schema as 
 DeepSeek cron path, just tagged `Provider: claude (skill mode)` so Dreaming can later
 distinguish the transcripts of the two paths.
 
-**Always pass `--model <the model that actually plays the 4 roles>`** (the name of the model
-your subagents / you run on, e.g. `claude-sonnet-5-5`). The Coordinator path has no global LLM
+**No shell? Hand in over MCP instead.** If you ran Stage 1 through the MCP tool
+`prepare_committee` (or cannot run `run.sh`), call `submit_committee(symbol, transcript,
+provider="claude", model=<model-name>)` with the same `=== MACRO === … === CIO ===` transcript
+as the `transcript` string. Pass `provider="claude"` explicitly: the MCP default is `"agent"`,
+while the CLI defaults to `claude`, and the scorecard groups by `provider:model`. It writes the
+same archive and the same Input Health block; the CLI and MCP hand-ins are interchangeable,
+never do both for one run (a second hand-in overwrites the archive and logs an intervention).
+
+**The 6-hour window (CLI and MCP alike)**: facts saved by `prepare_committee` are applied to the
+hand-in for 6 hours (`facts_source: prepare`). A later hand-in is still accepted, it just falls
+back to parsing the facts out of the transcript (`facts_source: transcript`); do not re-run
+`prepare_committee` only because the window passed.
+
+**Always pass `--model <the model that actually plays the 4 roles>`** (over MCP: the `model`
+argument of `submit_committee`) — the name of the model your subagents / you run on, e.g.
+`claude-sonnet-5-5`. The Coordinator path has no global LLM
 config to read, so the host is the only one who knows. It lands in the transcript's Input Health
 block as `model`; the verdict scorecard buckets by `<provider>:<model>` (e.g.
 `claude:claude-sonnet-5-5`), so a model swap never mixes old and new track records. Omitted =
