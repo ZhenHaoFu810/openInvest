@@ -290,6 +290,8 @@ fetched news — `ingest_event` the relevant items with `one_line_claim` / `stan
 pass the rest as `dismiss_urls`. `pending_committees` lists triggered re-runs — prepare, run, submit each.
 Daily report in agent mode: submit a verdict for every target asset first, then `daily_report` returns the
 report Markdown to deliver; anything in `missing_verdicts` is a failure to report, never something to skip.
+Do the submissions and the `daily_report` call in the same run (it reads today's local date — splitting them
+across midnight makes every asset show as missing).
 `track_asset` takes an optional `target_pct` (0–1 share of total assets, read by `rebalance_plan`) and
 `set_allocations` a `target_pcts` map — use them instead of editing strategy.md; the weights must sum
 to ≤ `target_allocation_stock` (a write that exceeds it is rejected with the current sum).
