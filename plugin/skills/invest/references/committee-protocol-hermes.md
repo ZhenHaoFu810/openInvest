@@ -143,7 +143,7 @@ give an honestly low confidence).
 ## Stage 6: Persist the transcript
 
 ```bash
-cat <<EOF | run.sh save_committee <SYMBOL> --provider hermes
+cat <<EOF | run.sh save_committee <SYMBOL> --provider hermes --model <model-name>
 === MACRO ===
 <macro role output>
 
@@ -163,6 +163,11 @@ cat <<EOF | run.sh save_committee <SYMBOL> --provider hermes
 <the CIO memo you wrote>
 EOF
 ```
+
+`--model` = the model the `delegate_task` subagents actually run on (e.g. `claude-haiku-5-5`) —
+the 4 roles are played by that model, not by Direct's configured LLM. It is written into the
+transcript's Input Health as `model`; the scorecard buckets by `hermes:<model>`, so swapping the
+subagent model never mixes old and new track records. Omitted = recorded as `unknown`.
 
 **`--provider hermes` MUST be included** — the persisted transcript will then be
 accurately tagged as run by Hermes (not hardcoded to claude); Dreaming's per-provider

@@ -58,7 +58,10 @@ All three paths share the **same foundation** — the same prompts, the same dat
 preparation (regime classification + probability framing + deterministic fact
 block), and the same on-disk format
 (`memory/.committee/<date>/<asset>.md`; both Coordinator variants must call `save_committee`
-with `--provider <your-brand>` so the transcript is not mislabeled as claude). The only
+with `--provider <your-brand>` so the transcript is not mislabeled as claude, and
+`--model <the model that plays the 4 roles>`, e.g. `claude-haiku-5-5` — omitted is recorded as
+`unknown`, and the scorecard buckets verdicts per `<provider>:<model>`, so a model swap never
+mixes old and new track records). The only
 difference is "who plays the 4 LLM roles": on Coordinator you play them yourself
 (the model the user already subscribes to); on Direct the configured LLM (billed
 per token) plays them. Verdicts may differ (different models — useful for

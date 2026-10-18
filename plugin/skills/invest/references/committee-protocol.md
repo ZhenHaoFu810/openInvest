@@ -176,7 +176,7 @@ write the full CIO memo in the `prompts.cio` format.
 ## Stage 6: Persist the transcript
 
 ```bash
-cat <<EOF | <skill-dir>/scripts/run.sh save_committee <SYMBOL>
+cat <<EOF | <skill-dir>/scripts/run.sh save_committee <SYMBOL> --model <model-name>
 === MACRO ===
 <macro worker output>
 
@@ -200,6 +200,13 @@ EOF
 Lands in `memory/.committee/<date>/<asset>.md`, with exactly the same schema as the
 DeepSeek cron path, just tagged `Provider: claude (skill mode)` so Dreaming can later
 distinguish the transcripts of the two paths.
+
+**Always pass `--model <the model that actually plays the 4 roles>`** (the name of the model
+your subagents / you run on, e.g. `claude-sonnet-5-5`). The Coordinator path has no global LLM
+config to read, so the host is the only one who knows. It lands in the transcript's Input Health
+block as `model`; the verdict scorecard buckets by `<provider>:<model>` (e.g.
+`claude:claude-sonnet-5-5`), so a model swap never mixes old and new track records. Omitted =
+recorded as `unknown` (never guessed).
 
 ## After the verdict
 
