@@ -1,6 +1,6 @@
 # tests/
 
-pytest 测试套件：约 130 个 `test_*.py`、1700+ 条用例，**全部不联网**（外部依赖一律 mock / 假 uvx / tmp 目录）。CI（`.github/workflows/ci.yml`）跑 `uv run pytest tests/`，红了不合并；`experiments/signal-eval/` 另有一条独立 CI 步骤。
+pytest 测试套件：约 150 个 `test_*.py`、2100+ 条用例，**全部不联网**（外部依赖一律 mock / 假 uvx / tmp 目录）。CI（`.github/workflows/ci.yml`）跑 `uv run pytest tests/`，红了不合并；`experiments/signal-eval/` 另有一条独立 CI 步骤。
 
 ## 跑法
 
