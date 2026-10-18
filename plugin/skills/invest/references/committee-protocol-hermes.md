@@ -175,9 +175,12 @@ bucketed pattern mining and after-the-fact troubleshooting both depend on this f
 
 **Over MCP instead of the shell**: if the roles were briefed from the MCP tool
 `prepare_committee`, hand in with `submit_committee(symbol, transcript, provider="hermes",
-model=<model-name>)` — same `=== … ===` transcript as the `transcript` string, within 6 hours of
-`prepare_committee`. Same archive, same Input Health (`facts_source: prepare`). CLI and MCP
-hand-ins are interchangeable; never do both for one run.
+model=<model-name>)` — same `=== … ===` transcript as the `transcript` string. Same archive,
+same Input Health. CLI and MCP hand-ins are interchangeable; never do both for one run (a second
+hand-in overwrites the archive and logs an intervention). Facts saved by `prepare_committee`
+are applied for 6 hours (`facts_source: prepare`); a later hand-in is still accepted and falls
+back to parsing facts from the transcript (`facts_source: transcript`) — this window applies to
+the CLI hand-in too.
 
 Lands in `memory/.committee/<date>/<asset>.md` with exactly the same schema as the
 other two paths; downstream tools such as `explain_decision` / `decisions` can read
