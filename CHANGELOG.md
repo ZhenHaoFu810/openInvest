@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.54.0](https://github.com/longsizhuo/openInvest/compare/v0.53.1...v0.54.0) (2026-10-18)
+
+
+### Features
+
+* **events:** cap same-thesis reprints in the event brief and EVENT_STANCE ([9ba7b56](https://github.com/longsizhuo/openInvest/commit/9ba7b5639fa750810c89a6955ae80182c8d866f4))
+
+
+### Bug Fixes
+
+* **committee:** stop telling Quant to call tools it does not have ([9a4b549](https://github.com/longsizhuo/openInvest/commit/9a4b54957173c3c64fc2372710c40fb3f86f7dd5))
+
+
+### Refactor
+
+* **ledger:** 账本流水统一 Activity schema + replay_ledger 唯一读法（ADR-027 PR1） ([#479](https://github.com/longsizhuo/openInvest/issues/479)) ([c9db696](https://github.com/longsizhuo/openInvest/commit/c9db6964a4742af8a45a27eba55928647a1a23d5))
+
+
+### Docs
+
+* **skill:** point screeners / options / earnings calls / SEC filings at hosted MCPs ([46e0c55](https://github.com/longsizhuo/openInvest/commit/46e0c559f9ff2166f306c96d59f9012063cd8e1b))
+
 ## [0.53.1](https://github.com/longsizhuo/openInvest/compare/v0.53.0...v0.53.1) (2026-10-18)
 
 
