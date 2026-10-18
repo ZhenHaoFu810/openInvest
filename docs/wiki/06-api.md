@@ -164,7 +164,7 @@ curl -X POST http://127.0.0.1:8765/api/holdings -d '{
 
 `commit:false` 只解析返回预览（`parsed.{cash,holdings}`），`commit:true` **非破坏写入**：
 只新增 portfolio 里还没有的 symbol、cash 只填当前为 0 的币种，已存在的跳过
-（`summary.{added_holdings,skipped_holdings,cash_set,cash_skipped}`）。无 LLM key → 400。
+（`summary.{added_holdings,skipped_holdings,rejected_holdings,cash_set,cash_skipped}`；`rejected_holdings` = 被拒的行 `{symbol: 正确写法}`，如黄金按 USD/盎司解析会被拒，需按 CNY/克用 `buy --existing-position`（MCP `record_existing_position`）补录，不扣现金）。无 LLM key → 400。
 单一可信源 `services/holdings_import.py`，CLI `openinvest import`、onboarding 共用（原 GUI「导入持仓」已随 GUI 退役）。
 
 ```bash
