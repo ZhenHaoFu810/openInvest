@@ -144,7 +144,7 @@ _CIO_RULE2 = "2. **Quant vs Macro 分歧**: 看 Risk Officer 倒向哪边"
 
 
 class SonnetArmUnavailable(RuntimeError):
-    """模型臂没法启动（缺 API key 环境变量）。"""
+    """模型臂没法启动（缺 API key 环境变量，或预检调用失败）。"""
 
 
 def _sonnet_arm_settings():
@@ -155,6 +155,20 @@ def _sonnet_arm_settings():
     if not key:
         raise SonnetArmUnavailable(f"环境变量 {cfg.api_key_env} 未设（Sonnet 臂的 API key；cron 里从 .env 的 LLM_API_KEY 注入）")
     return cfg, key
+
+
+def _sonnet_preflight() -> None:
+    """进臂先花 1 个 token 验 key / 端点 / 模型名（必须在 _sonnet_arm 作用域内调：用的就是 patch 后的配置）。
+    不预检的话，key 坏了这一臂会把四个角色全记 [WORKER_UNAVAILABLE]、CIO 压成 HOLD，50 行还按"成功"落盘（CR #498）。
+    失败 → SonnetArmUnavailable，与缺 key 同一条路：跳过、不花钱、退出码非 0。"""
+    from openai import OpenAI
+    from openinvest.utils.llm import get_llm_config
+    key, base_url, model, _provider = get_llm_config()
+    try:
+        OpenAI(api_key=key, base_url=base_url).chat.completions.create(
+            model=model, messages=[{"role": "user", "content": "ping"}], max_tokens=1)
+    except Exception as e:
+        raise SonnetArmUnavailable(f"预检失败（key / 端点 / 模型名有一个不对）：{type(e).__name__}: {str(e)[:160]}") from e
 
 
 @contextmanager
@@ -705,6 +719,7 @@ def main():
             # 最后一臂（不借对照臂的 macro_view：Macro 由 Sonnet 自己生成）。缺 key → 跳过这一臂、不花钱、退出码非 0。
             try:
                 with _sonnet_arm() as sonnet_cfg:
+                    _sonnet_preflight()   # 1 个 token；坏 key 在这里就停，不会把 50 行 WORKER_UNAVAILABLE 记成成功
                     res_s = run_one_day(d, fresh, out_subdir=SONNET_ARM_SUBDIR,
                                         arm_health={"arm": SONNET_ARM_TAG})
             except SonnetArmUnavailable as e:

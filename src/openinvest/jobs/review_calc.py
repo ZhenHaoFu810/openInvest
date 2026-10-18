@@ -1187,7 +1187,7 @@ def arm_report_lines(name: str, cmp_: Dict[str, Any], stab: Optional[Dict[str, A
     bench = "、".join(A.get("benchmark_symbols") or C.get("benchmark_symbols") or []) or "未配置"
     lines += [
         f"\n## 配对对照（{name} vs 对照臂 · 同日同标的 {cmp_['matched']} 个；臂共 {cmp_['arm_total']}、对照臂共 {cmp_['control_total']}）\n",
-        input_note,
+        *([input_note] if input_note else []),
         f"| | {name} | 对照臂 |", "|---|---|---|",
         f"| 行数 | {A['n_rows']} | {C['n_rows']} |",
         f"| 30d 成熟可评分 n | {A['n_scored_30d']} | {C['n_scored_30d']} |",

@@ -94,6 +94,7 @@ debate 另有 `final_round` / `converged`；同日已落盘的标的跳过（断
 - **落盘**：Input Health `arm: "sonnet_live_cfg"`、`model` 是真实调用时的模型名（`claude-sonnet-5-5`）、`macro_signal` / `macro_strength` / `final_round` / `converged`。
   复盘 `model_era` = `direct:claude-sonnet-5-5`，报告臂一览里单列模型。
 - **缺 key**：`FLEET_SONNET_API_KEY` 没设（或全空白）→ 这一臂在花钱前跳过，打印原因，**退出码非 0**（其余臂照跑、照落盘）。
+- **预检**：进臂先花 1 个 token 调一次该模型（`_sonnet_preflight`，用的就是本臂 patch 后的 key / 端点 / 模型名）；401 / 404 等一律按缺 key 处理（跳过、退出码非 0）。不预检的话坏 key 会让四个角色全记 `[WORKER_UNAVAILABLE]`、CIO 压成 HOLD，50 行照样按“成功”落盘。
 - 不设通过门槛：这是描述性对照（“换了模型之后，同一批输入上裁决差多少”），不是 H1–H3 那样的预注册检验；若要冻结判据另签。
 - 只能和 `--prospective` 同用；开任一试跑臂时 `INVEST_MAX_DEBATE_ROUNDS` 必须未设或为 1（同其余臂）。
 

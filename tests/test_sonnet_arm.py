@@ -103,7 +103,7 @@ def test_missing_key_means_arm_cannot_start_and_nothing_is_patched(deepseek_env,
 
 # ---------- main() 调度 ----------
 
-def _prospective_main(monkeypatch, argv, fake_run_one_day):
+def _prospective_main(monkeypatch, argv, fake_run_one_day, preflight=lambda: None):
     import openinvest.db.market_store as ms_mod
 
     class _Store:
@@ -112,6 +112,7 @@ def _prospective_main(monkeypatch, argv, fake_run_one_day):
 
     monkeypatch.setattr(ms_mod, "MarketStore", _Store)
     monkeypatch.setattr(bc, "run_one_day", fake_run_one_day)
+    monkeypatch.setattr(bc, "_sonnet_preflight", preflight)   # 默认 no-op 不联网；预检自身在 test_sonnet_preflight_* 里测
     monkeypatch.setattr("sys.argv", ["backtest_committee", "--prospective", "--assets", "AAA,BBB", *argv])
     bc.main()
 
@@ -159,6 +160,51 @@ def test_main_sonnet_arm_failure_exits_nonzero(deepseek_env, monkeypatch):
     with pytest.raises(SystemExit) as ei:
         _prospective_main(monkeypatch, ["--sonnet-arm"], fake)
     assert ei.value.code == 1
+
+
+def test_main_preflight_failure_skips_only_sonnet_arm_and_exits_nonzero(deepseek_env, monkeypatch):
+    """CR #498：坏 key 不能"看似成功"。预检抛 SonnetArmUnavailable → 这一臂一行不跑、其余臂照跑、退出码 1。"""
+    seen: List[Dict[str, Any]] = []
+
+    def fake(d, syms, **kw):
+        seen.append(kw)
+        return {"date": d, "macro_view": "M", "verdicts": {s: {"verdict": "HOLD"} for s in syms}}
+
+    def bad_preflight():
+        raise bc.SonnetArmUnavailable("预检失败：AuthenticationError")
+
+    with pytest.raises(SystemExit) as ei:
+        _prospective_main(monkeypatch, ["--debate-arm", "--sonnet-arm"], fake, preflight=bad_preflight)
+    assert ei.value.code == 1
+    assert [k.get("out_subdir") for k in seen] == [None, bc.DEBATE_ARM_SUBDIR]   # Sonnet 臂没跑、没花钱
+
+
+def test_sonnet_preflight_uses_patched_config_and_maps_errors(deepseek_env, monkeypatch):
+    calls: List[Dict[str, Any]] = []
+
+    class _Completions:
+        def __init__(self, fail): self.fail = fail
+        def create(self, **kw):
+            calls.append(kw)
+            if self.fail:
+                raise RuntimeError("401 invalid x-api-key")
+            return object()
+
+    class _Client:
+        fail = False
+        def __init__(self, api_key, base_url):
+            calls.append({"api_key": api_key, "base_url": base_url})
+            self.chat = type("C", (), {"completions": _Completions(_Client.fail)})()
+
+    import openai
+    monkeypatch.setattr(openai, "OpenAI", _Client)
+    with bc._sonnet_arm() as cfg:
+        bc._sonnet_preflight()
+    assert calls[0] == {"api_key": "sonnet-key", "base_url": cfg.base_url}
+    assert calls[1]["model"] == cfg.model and calls[1]["max_tokens"] == 1
+    _Client.fail = True
+    with bc._sonnet_arm(), pytest.raises(bc.SonnetArmUnavailable, match="401"):
+        bc._sonnet_preflight()
 
 
 def test_sonnet_arm_requires_prospective_and_rounds_env(deepseek_env, monkeypatch):
@@ -247,6 +293,15 @@ def test_model_arm_rows_are_not_dropped_for_unshared_macro_but_other_arms_still_
     cmp_ = rc.arm_vs_control(sonnet, ctl, min_n=2)
     assert cmp_["matched"] == 3 and cmp_["arm_total"] == 3
     assert rc.arm_vs_control(debate, ctl, min_n=2)["matched"] == 0
+
+
+def test_model_arm_rows_are_still_dropped_when_contaminated_or_on_a_closed_weekend():
+    """CR #498：模型臂只豁免 macro_shared 一项；污染行和非加密标的的周末行照样剔。"""
+    bad = _rv("2026-08-03", "A", "HOLD", arm="sonnet_live_cfg", shared=False)
+    bad.contaminated = True
+    assert not rc._arm_row_ok(bad)
+    sat = _rv("2026-08-01", "A", "HOLD", arm="sonnet_live_cfg", shared=False)   # 周六，非加密
+    assert rc.is_closed_weekend("A", "2026-08-01") and not rc._arm_row_ok(sat)
 
 
 def test_arms_report_has_model_comparison_section_with_unshared_macro_note_and_na_stability():
