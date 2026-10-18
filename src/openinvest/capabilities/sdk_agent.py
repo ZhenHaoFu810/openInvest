@@ -23,7 +23,7 @@ from openai import OpenAI
 
 from openinvest.capabilities.tools import TOOL_DEFINITIONS, execute_tool_call
 from openinvest.core.llm_telemetry import TelemetryMeta, record_llm_call, record_tool_call
-from openinvest.utils.llm import get_thinking_disable_kwargs
+from openinvest.utils.llm import get_thinking_disable_kwargs, sampling_kwargs
 
 
 @dataclass
@@ -183,7 +183,7 @@ class SDKAgent:
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "temperature": self.temperature,
+            **sampling_kwargs(self.model, self.temperature),
         }
         # DeepSeek v4 / MiMo v2.5 系列默认 thinking 模式 → committee 场景 disable 走 fast 路径
         # （MiMo CIO long prompt 下 thinking 会吃完 max_tokens 导致 content 为空）。

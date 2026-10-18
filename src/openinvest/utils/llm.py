@@ -152,6 +152,18 @@ def get_thinking_disable_kwargs(model: Optional[str] = None) -> dict:
     return {"extra_body": {"thinking": {"type": "disabled"}}}
 
 
+def sampling_kwargs(model: Optional[str], temperature: float) -> dict:
+    """``chat.completions.create`` 的 temperature kwargs。
+
+    Claude 4.7 起（含 Sonnet/Opus 5.x）temperature 只收默认值，传 <1 直接 400
+    （OpenAI 兼容层同样），委员会每次调用都会被吞成 [WORKER_UNAVAILABLE] → 静默 HOLD。
+    claude-* 一律不传；其他 provider 原样。
+    """
+    # ponytail: 按名前缀判，老 Claude（≤4.6）也跟着丢 temperature；真要钉老模型再细分
+    m = (model or get_llm_config_safe()[2]).lower()
+    return {} if m.startswith("claude") else {"temperature": temperature}
+
+
 # NOTE 2026-05-19: 之前有个 needs_reasoning_carry(model) helper 按 model 名嗅探
 # 是否要 carry reasoning_content，是 hack。现在 SDKAgent 改成 response-driven：
 # 上一轮 API response 含 reasoning_content 就 carry，不靠 model name —— MiMo /
