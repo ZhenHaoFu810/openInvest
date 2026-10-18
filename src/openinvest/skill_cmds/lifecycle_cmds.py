@@ -57,7 +57,6 @@ def cmd_doctor(_: argparse.Namespace) -> None:
 # Web API /api/holdings/import + CLI `import` 共用，防 prompt/解析漂移）。这里 re-export
 # 保持 cmd_init 的 bare-name 调用 + 历史 monkeypatch(tests/test_skill_init_downgrade)命中。
 from openinvest.services.holdings_import import (  # noqa: E402
-    EXISTING_POSITION_HINT,
     _HOLDINGS_PARSE_SYSTEM_PROMPT,
     _parse_holdings_with_llm,
 )
@@ -127,9 +126,9 @@ def _write_v2_portfolio(
         }
         try:  # 黄金口径与 buy / import --commit 同一道闸（#457）；非 GC=F → None；fresh init 没有旧持仓
             # 没给单位按克（同 buy 的默认单位语义、同 import 的 normalizer 默认值）；给了 oz / 盎司才拒
-            row.update(gold_booking(sym, row["cost_currency"], row["unit_label"] or "克", None) or {})
+            row.update(gold_booking(sym, row["cost_currency"], row["unit_label"] or "克", None, existing=True) or {})
         except ValueError as e:
-            rejected[sym] = f"{e}{EXISTING_POSITION_HINT}"
+            rejected[sym] = str(e)   # existing=True：示例是 --existing-position，照抄不扣现金
             continue
         portfolio_data["holdings"].append(row)
 
@@ -392,7 +391,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             _v2_write_error = str(exc)
             holdings_parse_note += f"; v2 write failed: {exc!s}"
     # 写失败时 parsed holdings 只是预览，不能让 agent 当成已入账读给用户确认
-    _holdings_written = bool(holdings_v2.get("holdings")) and not _v2_write_error
+    _holdings_written = len(holdings_v2.get("holdings") or []) > len(_rejected) and not _v2_write_error   # 被拒的不算写入
     # 场外基金净值源全挂 → 0 份入账；点名写进 note，否则 agent 只看到 "parsed via LLM"
     _fund_warnings = list(holdings_v2.get("warnings") or []) if _holdings_written else []
     if _fund_warnings:
@@ -527,7 +526,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "migrate_stderr": result.stderr[-500:] if result.stderr else "",
         "migrate_returncode": result.returncode,
         "holdings_parse_note": holdings_parse_note or "no holdings_description provided",
-        "holdings_count": len((holdings_v2 or {}).get("holdings", [])),
+        "holdings_count": len((holdings_v2 or {}).get("holdings", [])) - len(_rejected),   # 实际写入的行数
         "parsed_holdings_for_user_review": (
             # 把 LLM 解析出来的 holdings 原样回放给 agent，让 agent 把它读给用户确认
             # 一遍："我理解你持有：A 3000 股 4.2 元、B 5 万现金。对吗？"——避免

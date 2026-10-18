@@ -173,3 +173,16 @@ def test_doctor_has_no_gold_check_for_correct_or_absent_gold_row(tmp_path):
     _pm(holdings=[{"symbol": "GC=F", "kind": "metal", "units": 5.0, "avg_cost": 880.0, "unit_label": "克",
                    "cost_currency": "CNY", "proxy_kind": "direct"}])                           # 旧 direct 但 CNY/克：能自愈，不报
     assert "gold_booking" not in {x["name"] for x in build_doctor_view(tmp_path)["checks"]}
+
+
+def test_gold_booking_existing_flag_switches_the_example_to_no_cash_path():
+    """CR #514：import / init 登记的是已有仓位，拒收示例必须是 --existing-position / record_existing_position，
+    照抄普通 buy 会再扣一次现金；buy 路径的示例保持现金买入。"""
+    from openinvest.core.portfolio_manager import gold_booking
+    with pytest.raises(ValueError) as cash:
+        gold_booking("GC=F", "USD", "盎司", None)
+    with pytest.raises(ValueError) as held:
+        gold_booking("GC=F", "USD", "盎司", None, existing=True)
+    assert "--existing-position" not in str(cash.value) and "buy GC=F" in str(cash.value)
+    assert "--existing-position" in str(held.value) and "record_existing_position" in str(held.value)
+

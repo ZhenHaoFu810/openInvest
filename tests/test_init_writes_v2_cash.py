@@ -141,6 +141,18 @@ def test_init_gold_booking_rejects_usd_ounce_but_writes_other_rows(tmp_path):
     assert pm.cash_amount("CNY") == 5000.0
 
 
+def test_init_all_holdings_rejected_is_not_reported_as_written(tmp_path):
+    """CR #514：全被拒时 holdings_count=0、user_review_required=False，不说"持仓已存在"。"""
+    gold = {"symbol": "GC=F", "kind": "metal", "units": 2, "avg_cost": 2300, "cost_currency": "USD", "unit_label": "盎司"}
+    out = _run_init(tmp_path, {"profile": {"name": "T", "holdings_v2": {"cash": {"CNY": 100}, "holdings": [gold]}}, "env": {}})
+    assert out.returncode == 0, out.stderr
+    r = _json(out)
+    assert r["holdings_count"] == 0 and r["user_review_required"] is False
+    assert "--existing-position" in r["rejected_holdings"]["GC=F"] and "被拒" in r["next_step"]
+    assert "持仓已存在" not in r["next_step"]
+    assert list(PortfolioManager(MemoryStore(tmp_path / "memory")).holdings) == []
+
+
 @pytest.mark.parametrize("unit_label", ["g", ""])   # LLM 没给单位 → 按克，不能比 import 更严
 def test_init_books_cny_gram_gold_with_proxy_kind(tmp_path, unit_label):
     gold = {"symbol": "GC=F", "kind": "stock", "units": 5, "avg_cost": 880, "cost_currency": "CNY", "unit_label": unit_label}

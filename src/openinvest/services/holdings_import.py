@@ -16,10 +16,6 @@ from typing import Any, Dict, List, Optional
 
 from openinvest.core.portfolio_manager import gold_booking
 
-# gold_booking 的示例是给现金买入写的；导入 / onboarding 的是已有仓位，照抄会再扣一次现金（CR #499）
-EXISTING_POSITION_HINT = ("（导入的是已有仓位：补录时用 buy --existing-position / "
-                          "MCP record_existing_position，不扣现金）")
-
 _HOLDINGS_PARSE_SYSTEM_PROMPT = """你是金融数据解析助手。把用户的自然语言持仓描述解析成严格 JSON。
 
 输出 schema（无 markdown 无解释）：
@@ -49,6 +45,7 @@ Symbol 映射规则：
 - 澳股: ticker + .AX (NDQ.AX)
 - 加密: 大写 + -USD (BTC-USD, ETH-USD)
 - 黄金/纸黄金/积存金: GC=F (浙商/工行/招行积存金都映射到 GC=F，渠道写银行名)
+  黄金按用户给的币种 / 单位**原样输出**（GC=F 入账要求 CNY/克；USD/盎司会被拒并提示用户按 CNY/克补录），**不要自行换算汇率**，没给单位就留空
 - 中国场外公募基金: FUND:<六位基金代码>（例如 123456 → FUND:123456），kind=fund；
   绝对不要追加 .SS/.SZ。用户只给“持有金额/持仓收益”而没给份额和成本时，
   原样输出 market_value 和 pnl，units/avg_cost 先填 0，后端会按最新单位净值换算。
@@ -251,11 +248,11 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             try:
                 # 黄金口径与 buy / record_existing_position 同一道闸（#457）；非 GC=F → None
-                norm.update(gold_booking(norm["symbol"], norm["cost_currency"], norm["unit_label"], None) or {})
+                # existing=True：导入的是已有仓位，示例给 --existing-position / record_existing_position（不扣现金，CR #499）
+                norm.update(gold_booking(norm["symbol"], norm["cost_currency"], norm["unit_label"], None,
+                                         existing=True) or {})
             except ValueError as e:
-                # 只拒这一行，其余持仓照常入账。gold_booking 的示例是给现金买入写的；导入的是已有仓位，
-                # 照抄会再扣一次现金（CR #499），所以补一句走 existing-position 的提示
-                rejected[norm["symbol"]] = f"{e}{EXISTING_POSITION_HINT}"
+                rejected[norm["symbol"]] = str(e)   # 只拒这一行，其余持仓照常入账
                 continue
             holdings.append(norm)
             existing.add(norm["symbol"])
