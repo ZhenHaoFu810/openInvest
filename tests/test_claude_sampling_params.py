@@ -57,16 +57,16 @@ def test_model_none_falls_back_to_env(monkeypatch):
 
 
 def test_direct_call_sites_route_through_helpers():
-    """直连 chat.completions.create 的调用里不许再写死 temperature= / json_object——
-    回退了 Claude 会 400 且静默。"""
+    """所有 chat.completions.create 只许出现在 utils/llm.py:create_chat_completion 里——
+    别处直调会绕开 Claude 参数规则（400 → 静默 HOLD）和计费回落。"""
     import re
     from pathlib import Path
     src = Path(__file__).resolve().parents[1] / "src" / "openinvest"
     bad = []
     for p in src.rglob("*.py"):
+        if p.relative_to(src).as_posix() == "utils/llm.py":
+            continue
         text = p.read_text(encoding="utf-8")
         for m in re.finditer(r"chat\.completions\.create\(", text):
-            call = text[m.end():m.end() + 800].split("\n    )", 1)[0]
-            if re.search(r"\btemperature\s*=|\"type\":\s*\"json_object\"", call):
-                bad.append(f"{p.relative_to(src)}:{text[:m.start()].count(chr(10)) + 1}")
+            bad.append(f"{p.relative_to(src)}:{text[:m.start()].count(chr(10)) + 1}")
     assert not bad, bad

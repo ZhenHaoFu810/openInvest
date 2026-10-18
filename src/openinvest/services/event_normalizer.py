@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openinvest.core.llm_telemetry import TelemetryMeta, record_llm_call
 from openinvest.services.embeddings import embed_text
 from openinvest.services.news_sources import RawNewsItem
-from openinvest.utils.llm import json_object_kwargs, sampling_kwargs
+from openinvest.utils.llm import create_chat_completion
 
 log = logging.getLogger(__name__)
 
@@ -164,19 +164,16 @@ def _call_flash_batch(
         model=model,
     )
     t0 = time.time()
-    extra: Dict[str, Any] = {}
-    if "v4" in model:
-        # v4-flash 默认 thinking 模式且不兼容 response_format / 大 batch；关闭
-        extra["extra_body"] = {"thinking": {"type": "disabled"}}
-    resp = client.chat.completions.create(
+    # v4-flash 默认 thinking 模式且不兼容 response_format / 大 batch → helper 统一关闭
+    resp, meta.model = create_chat_completion(
+        client,
         model=model,
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ],
-        **json_object_kwargs(model),
-        **sampling_kwargs(model, 0.0),
-        **extra,
+        temperature=0.0,
+        response_format={"type": "json_object"},
     )
     latency_ms = int((time.time() - t0) * 1000)
     usage = getattr(resp, "usage", None)

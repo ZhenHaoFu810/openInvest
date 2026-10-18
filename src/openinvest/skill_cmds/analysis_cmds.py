@@ -218,7 +218,7 @@ def cmd_correlate(args: argparse.Namespace) -> None:
 
     # 6. 可选 LLM 给一句话总结
     if args.with_llm:
-        from openinvest.utils.llm import get_llm_config_safe, needs_thinking_disabled, sampling_kwargs
+        from openinvest.utils.llm import create_chat_completion, get_llm_config_safe
         api_key, base_url, model_name, _provider = get_llm_config_safe()
         if not api_key:
             out["llm_summary"] = "(--with-llm 需要 LLM_API_KEY 或 DEEPSEEK_API_KEY)"
@@ -230,7 +230,8 @@ def cmd_correlate(args: argparse.Namespace) -> None:
                     "symbols": symbols, "corr": out["correlation_matrix"],
                     "sectors": sectors, "macro_corr": macro_corr,
                 }, ensure_ascii=False)
-                resp = client.chat.completions.create(
+                resp, _ = create_chat_completion(
+                    client,
                     model=model_name,
                     messages=[
                         {"role": "system", "content": (
@@ -241,10 +242,8 @@ def cmd_correlate(args: argparse.Namespace) -> None:
                         )},
                         {"role": "user", "content": ctx},
                     ],
-                    **sampling_kwargs(model_name, 0.2),
+                    temperature=0.2,
                     timeout=30,
-                    # DeepSeek v4 需要 disable thinking；千问/智谱/OpenAI 不需要
-                    extra_body={"thinking": {"type": "disabled"}} if needs_thinking_disabled(model_name) else None,
                 )
                 out["llm_summary"] = resp.choices[0].message.content
             except Exception as e:

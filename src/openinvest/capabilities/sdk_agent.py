@@ -23,7 +23,7 @@ from openai import OpenAI
 
 from openinvest.capabilities.tools import TOOL_DEFINITIONS, execute_tool_call
 from openinvest.core.llm_telemetry import TelemetryMeta, record_llm_call, record_tool_call
-from openinvest.utils.llm import get_thinking_disable_kwargs, is_claude, sampling_kwargs
+from openinvest.utils.llm import create_chat_completion
 
 
 @dataclass
@@ -79,6 +79,8 @@ class SDKAgent:
         self.response_format = response_format
         self.provider = provider
         self.last_tool_calls: List[ToolCallTrace] = []
+        # 实际服务过的模型（主 LLM 计费失败会回落 DEEPSEEK_*，裁决记录要如实写）
+        self.models_used: set = set()
         # v3 透明化：LLM 调用元数据；caller 不传则用默认匿名
         self.telemetry_meta = telemetry_meta or TelemetryMeta(
             provider=provider, model=model,
@@ -129,7 +131,13 @@ class SDKAgent:
         """
         start = time.perf_counter()
         try:
-            response = self.client.chat.completions.create(**kwargs)
+            response, used = create_chat_completion(
+                self.client, model=self.model, temperature=self.temperature,
+                response_format=self.response_format,
+                disable_thinking=not self.enable_thinking, **kwargs,
+            )
+            self.telemetry_meta.model = used
+            self.models_used.add(used)
             latency_ms = int((time.perf_counter() - start) * 1000)
 
             usage = getattr(response, "usage", None)
@@ -180,19 +188,11 @@ class SDKAgent:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        kwargs: Dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            **sampling_kwargs(self.model, self.temperature),
-        }
-        # DeepSeek v4 / MiMo v2.5 系列默认 thinking 模式 → committee 场景 disable 走 fast 路径
-        # （MiMo CIO long prompt 下 thinking 会吃完 max_tokens 导致 content 为空）。
-        # 不同 provider 的 extra_body 格式不同（DeepSeek 用 dict，MiMo 用 string），helper 统一处理。
+        # 模型相关参数（temperature / response_format / thinking 关闭）由
+        # utils.llm.create_chat_completion 按实际服务的模型拼——回落换模型时要重拼。
+        # DeepSeek v4 / MiMo v2.5 默认 thinking → committee 场景 disable 走 fast 路径；
         # enable_thinking=True 的角色跳过 disable，保留思考模式（P3 CIO A/B）。
-        if not self.enable_thinking:
-            kwargs.update(get_thinking_disable_kwargs(self.model))
-        if self.response_format and not is_claude(self.model):  # Anthropic 兼容层收 json_object 会 400
-            kwargs["response_format"] = self.response_format
+        kwargs: Dict[str, Any] = {"messages": messages}
         if self.enable_tools:
             kwargs["tools"] = TOOL_DEFINITIONS
             kwargs["tool_choice"] = "auto"

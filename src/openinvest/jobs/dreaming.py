@@ -358,7 +358,7 @@ def _llm_verify_candidates(
     )
 
     # 统一从 utils.llm 读 LLM 配置（默认 DeepSeek，可通过 LLM_* env 换千问/智谱）
-    from openinvest.utils.llm import get_llm_config_safe, json_object_kwargs, needs_thinking_disabled, sampling_kwargs
+    from openinvest.utils.llm import create_chat_completion, get_llm_config_safe
     api_key, base_url, model, _provider = get_llm_config_safe()
     if not api_key:
         log.warning("LLM_API_KEY / DEEPSEEK_API_KEY 未设，跳过 LLM 验伪 (全部 KEEP)")
@@ -367,21 +367,16 @@ def _llm_verify_candidates(
     try:
         from openai import OpenAI
         client = OpenAI(api_key=api_key, base_url=base_url)
-        # DeepSeek v4 默认 thinking 模式且不兼容 response_format，需 disable thinking；
-        # 千问/智谱/OpenAI 等不需要这个 extra_body
-        extra_body = {}
-        if needs_thinking_disabled(model):
-            extra_body["thinking"] = {"type": "disabled"}
-        response = client.chat.completions.create(
+        response, _ = create_chat_completion(
+            client,
             model=model,
             messages=[
                 {"role": "system", "content": LLM_VERIFY_SYSTEM_PROMPT},
                 {"role": "user", "content": user_payload},
             ],
-            **sampling_kwargs(model, 0.1),  # 验伪要稳定，不要发散
+            temperature=0.1,  # 验伪要稳定，不要发散
             timeout=60,
-            **json_object_kwargs(model),
-            extra_body=extra_body or None,
+            response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content or "{}"
         parsed = json.loads(raw)

@@ -16,8 +16,12 @@
 """
 from __future__ import annotations
 
+import logging
 import os
-from typing import Optional, Tuple
+import re
+from typing import Any, Optional, Tuple
+
+log = logging.getLogger(__name__)
 
 # 默认值常量（多处可能引用，集中一处方便审计）
 _DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -175,6 +179,72 @@ def json_object_kwargs(model: Optional[str]) -> dict:
     2026-10-18）。claude-* 不传，靠 prompt 要求纯 JSON——实测 Sonnet 5.5 吐裸 JSON 可直接 loads。
     """
     return {} if is_claude(model) else {"response_format": {"type": "json_object"}}
+
+
+
+# 额度/计费类失败：重试无用、换 provider 有用。Anthropic 额度耗尽 = 400
+# "Your credit balance is too low to access the Anthropic API…"；402 按定义就是计费。
+_BILLING_ERR = re.compile(
+    r"credit balance|billing|spend[_ ]limit|insufficient[_ ](?:credit|balance|quota)|exceeded your current quota",
+    re.IGNORECASE,
+)
+
+
+def is_billing_error(exc: BaseException) -> bool:
+    return getattr(exc, "status_code", None) == 402 or bool(_BILLING_ERR.search(str(exc)))
+
+
+def get_fallback_llm_config() -> Optional[Tuple[str, str, str]]:
+    """主 LLM（``LLM_*``）计费失败时的回落：``DEEPSEEK_*``。返回 (api_key, base_url, model)。
+
+    没配 ``DEEPSEEK_API_KEY``、或主 LLM 本来就是它（LLM_API_KEY 空/相同）→ None，不回落。
+    """
+    key = os.getenv("DEEPSEEK_API_KEY")
+    if not key or (os.getenv("LLM_API_KEY") or key) == key:
+        return None
+    return (
+        key,
+        os.getenv("DEEPSEEK_BASE_URL") or _DEFAULT_BASE_URL,
+        os.getenv("DEEPSEEK_MODEL") or _DEFAULT_MODEL,
+    )
+
+
+def create_chat_completion(
+    client: Any,
+    *,
+    model: str,
+    messages: list,
+    temperature: float,
+    response_format: Optional[dict] = None,
+    disable_thinking: bool = True,
+    **kwargs: Any,
+) -> Tuple[Any, str]:
+    """直连 ``chat.completions.create`` 的唯一入口，返回 (response, 实际服务的 model)。
+
+    - 按模型拼参数：temperature / response_format / thinking 关闭（各 provider 规则见上面的 helper）。
+    - 主 LLM 计费/额度失败（如 Claude 月度额度用完）→ 用 ``DEEPSEEK_*`` 重发这一次。
+      不回落的话这类失败会被委员会吞成 [WORKER_UNAVAILABLE] → 静默 HOLD。
+      不设门闩：每次都先试主 LLM，额度刷新后自动回到主模型（失败的 400 秒回、不计费）。
+    """
+    def _kw(m: str) -> dict:
+        kw = {"model": m, "messages": messages, **sampling_kwargs(m, temperature), **kwargs}
+        if response_format and not is_claude(m):
+            kw["response_format"] = response_format
+        if disable_thinking:
+            kw.update(get_thinking_disable_kwargs(m))
+        return kw
+
+    try:
+        return client.chat.completions.create(**_kw(model)), model
+    except Exception as e:
+        fb = get_fallback_llm_config()
+        if not fb or not is_billing_error(e):
+            raise
+        fb_key, fb_base, fb_model = fb
+        log.warning("主 LLM %s 计费/额度失败（%s）→ 本次回落 %s", model, str(e)[:160], fb_model)
+        from openai import OpenAI
+        fb_client = OpenAI(api_key=fb_key, base_url=fb_base)
+        return fb_client.chat.completions.create(**_kw(fb_model)), fb_model
 
 
 # NOTE 2026-05-19: 之前有个 needs_reasoning_carry(model) helper 按 model 名嗅探
