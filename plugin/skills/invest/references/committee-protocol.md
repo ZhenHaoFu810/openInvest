@@ -201,6 +201,13 @@ Lands in `memory/.committee/<date>/<asset>.md`, with exactly the same schema as 
 DeepSeek cron path, just tagged `Provider: claude (skill mode)` so Dreaming can later
 distinguish the transcripts of the two paths.
 
+**No shell? Hand in over MCP instead.** If you ran Stage 1 through the MCP tool
+`prepare_committee` (or cannot run `run.sh`), call `submit_committee(symbol, transcript,
+provider, model)` with the same `=== MACRO === … === CIO ===` transcript as the `transcript`
+string, within 6 hours of `prepare_committee`. It writes the same archive and the same Input
+Health block (the backend applies its own saved facts, `facts_source: prepare`); the CLI and
+MCP hand-ins are interchangeable, never do both for one run.
+
 **Always pass `--model <the model that actually plays the 4 roles>`** (the name of the model
 your subagents / you run on, e.g. `claude-sonnet-5-5`). The Coordinator path has no global LLM
 config to read, so the host is the only one who knows. It lands in the transcript's Input Health
