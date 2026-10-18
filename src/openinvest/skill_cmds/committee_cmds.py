@@ -107,12 +107,14 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
     # 输出的 transcript_path 字段就是空字符串（Fresh Claude 端到端测试发现）
     safe_sym = safe_symbol(args.symbol)
     transcript_path = ROOT / "memory" / ".committee" / today / f"{safe_sym}.md"
-    if transcript_path.exists() and not args.force:
+    from openinvest.core.decision_ledger import llm_failure_reason, parse_committee_file
+    cached_parsed = parse_committee_file(transcript_path) if transcript_path.exists() else None
+    # LLM 没跑成的记录（UNCLEAR / 有角色没产出）不当缓存，直接重跑
+    if transcript_path.exists() and not args.force and not llm_failure_reason(cached_parsed):
         from openinvest.capabilities.committee.i18n import bilingual
-        from openinvest.core.decision_ledger import parse_committee_file
         from openinvest.jobs.review_calc import confidence_display
         from openinvest.jobs.verdict_review import load_confidence_lookup
-        parsed = parse_committee_file(transcript_path)
+        parsed = cached_parsed
         _print_json({
             "status": "cached",
             "reason": bilingual(
@@ -161,6 +163,17 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     verdict = asset_result.get("verdict", {})
+    failure = llm_failure_reason(
+        parse_committee_file(transcript_path)
+        or {"verdict": str((verdict or {}).get("verdict") or "").upper()})
+    if failure and str((verdict or {}).get("verdict") or "").upper() == "UNCLEAR":
+        _print_json({
+            "status": "error",
+            "error": f"委员会没跑成：{failure}",
+            "hint": "多半是 LLM 调用失败（key / 额度 / 参数），先跑 doctor；失败记录已存档但不会当缓存。",
+            "transcript_path": str(transcript_path) if transcript_path.exists() else "",
+        })
+        sys.exit(1)
     report = asset_result.get("report")
     cio_memo = report.cio_memo if report is not None else ""
     from openinvest.capabilities.committee.i18n import get_invest_lang
@@ -206,6 +219,8 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
         "cio_memo": cio_memo,
         "transcript_path": str(transcript_path) if transcript_path.exists() else "",
         "next_step": next_step,
+        # 有角色没产出、CIO 被强制 HOLD：照给，但要让 agent 看见并转告用户
+        **({"degraded": failure} if failure else {}),
     })
 
 

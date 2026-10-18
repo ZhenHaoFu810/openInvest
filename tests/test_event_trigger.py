@@ -131,7 +131,7 @@ def _run_watch(monkeypatch, events, holdings, targets=None):
     monkeypatch.setattr(event_watch, "load_feeds", lambda: [])
     items = [ne.raw_item for ne in events]
     monkeypatch.setattr(event_watch, "fetch_all", lambda **kw: items)
-    monkeypatch.setattr(event_watch, "normalize", lambda its: events)
+    monkeypatch.setattr(event_watch, "normalize", lambda its, **kw: events)
     return event_watch.run()
 
 

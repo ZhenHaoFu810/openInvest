@@ -10,6 +10,9 @@
   (c) zero_fetch event_watch 最近 6 次成功运行 fetched 全为 0（新闻源全挂也是"成功"）
   (d) silent_src 单个新闻源曾经抓到过、最近一轮仍在抓，但已连续 24h 抓到 0 条
                 （2026-10 yfinance 新闻接口 404 被吞成 []，其他源照常 → (c) 看不见，断了 13 天）
+  (f) norm_fail  event_watch 连续 2 次运行有归一化失败批（缺 key / 额度用完 / 解析失败）——
+                抓到了新闻却没入库，job 照样 success（2026-10-19 Claude 回复带尾巴整批丢，无人知道）
+  (g) verdict    今天/昨天的委员会记录里有 LLM 没跑成的（UNCLEAR / 有角色没产出被强制 HOLD）
   (e) timeout    runner 的 per-job 墙钟超时（jobs/*.yml timeout_minutes）把 job_runs 标成
                 'timeout'：24h 内每条各报一次。超时后 runner 放弃该线程让下次触发进得来，
                 所以最新一行可能已是 success——不能只看最后一行，否则"超时了又恢复"没人知道
@@ -32,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from apscheduler.triggers.cron import CronTrigger
 
+from openinvest.core.decision_ledger import llm_failure_reason, parse_committee_file
 from openinvest.core.memory_store import MemoryStore
 from openinvest.scheduler.cron import SCHEDULED_SINCE, crontab_trigger
 from openinvest.services.discord_notify import send_discord_alert
@@ -43,11 +47,13 @@ log = logging.getLogger(__name__)
 GRACE = timedelta(minutes=15)
 HUNG_FLOOR = timedelta(minutes=60)
 ZERO_FETCH_RUNS = 6
+NORMALIZE_FAIL_RUNS = 2
 SOURCE_SILENT = timedelta(hours=24)
 TIMEOUT_LOOKBACK = timedelta(hours=24)
 _STATE = "job_watchdog_alerts"
 # runner 把 job 返回的 dict 以 str(result) 落进 output_excerpt（Python repr，不是 JSON）
 _FETCHED_RE = re.compile(r"""['"]fetched['"]:\s*(\d+)""")
+_NORM_FAILED_RE = re.compile(r"""['"]normalize_failed['"]:\s*(\d+)""")
 
 
 def _ts(s: str) -> datetime:
@@ -152,6 +158,46 @@ def find_problems(
                 "text": (f"`event_watch` 连续 {len(streak)} 次成功运行 fetched=0"
                          f"（自 {streak[-1][1]}）——新闻源可能全挂，job 照样报 success。"),
             })
+        # 归一化失败连击：没走到归一化的轮次（无新新闻）不带该字段，跳过不算断；看最近 20 轮
+        fails: List[Tuple[int, str, int]] = []
+        for rid, s_at, output in conn.execute(
+            "SELECT id, started_at, output_excerpt FROM job_runs "
+            "WHERE job_name = 'event_watch' AND status = 'success' ORDER BY id DESC LIMIT 20"
+        ):
+            m = _NORM_FAILED_RE.search(output or "")
+            if not m:
+                continue
+            if int(m.group(1)) == 0:
+                break
+            fails.append((rid, s_at, int(m.group(1))))
+        if len(fails) >= NORMALIZE_FAIL_RUNS:
+            out.append({
+                "key": f"event_watch:normalize_failed:{fails[-1][0]}",
+                "since": _ts(fails[-NORMALIZE_FAIL_RUNS][1]),
+                "text": (f"`event_watch` 连续 {len(fails)} 次运行新闻归一化有失败批"
+                         f"（最近一次失败 {fails[0][2]} 批，自 {fails[-1][1]}）——抓到的新闻没入库，"
+                         f"job 照样报 success。多半是 LLM 不可用（key / 额度 / 参数），看 logs/invest.log。"),
+            })
+    return out
+
+
+def find_failed_verdicts(committee_dir: Any, now: datetime) -> List[Dict[str, Any]]:
+    """今天/昨天落盘的委员会记录里 LLM 没跑成的（纯读盘）。重跑成功会覆盖当天文件 → 自然消警。"""
+    out: List[Dict[str, Any]] = []
+    for day in sorted({now.date(), (now - timedelta(days=1)).date()}):
+        d = committee_dir / day.isoformat()
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.md")):
+            reason = llm_failure_reason(parse_committee_file(p))
+            if not reason:
+                continue
+            out.append({
+                "key": f"verdict_failed:{day}/{p.stem}",
+                "since": datetime.fromtimestamp(p.stat().st_mtime).astimezone(),
+                "text": (f"委员会 `{day}/{p.stem}` 没跑成：{reason}。多半是 LLM 调用失败"
+                         f"（key / 额度 / 参数），这份裁决不能当真；修好后用 force 重跑。"),
+            })
     return out
 
 
@@ -222,6 +268,7 @@ def run(now: Optional[datetime] = None) -> Dict[str, Any]:
     store = MemoryStore()
     if any(name == "event_watch" for name, _, _ in jobs):
         findings += find_silent_sources(store.state_get(SOURCE_HEALTH_STATE) or {})
+    findings += find_failed_verdicts(store.root / ".committee", now)
     for f in findings:
         log.warning(f"[job_watchdog] {f['text']}")
 

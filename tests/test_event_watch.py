@@ -62,7 +62,7 @@ def test_run_no_trigger_when_neutral_or_low(tmp_event_db, monkeypatch):
         RawNewsItem(src_name="r", title="t2", url="https://r.co/2", snippet="s"),
     ])
     monkeypatch.setattr(event_watch, "load_feeds", lambda: [])
-    monkeypatch.setattr(event_watch, "normalize", lambda items: [
+    monkeypatch.setattr(event_watch, "normalize", lambda items, **kw: [
         _ne(0, "low risk claim", "risk", "low", ["NDQ.AX"]),
         _ne(1, "neutral", "neutral", "high", ["NDQ.AX"]),
     ])
@@ -89,7 +89,7 @@ def test_run_triggers_when_affected_high_risk(tmp_event_db, monkeypatch):
         RawNewsItem(src_name="r", title="t1", url="https://r.co/1", snippet="s"),
     ])
     monkeypatch.setattr(event_watch, "load_feeds", lambda: [])
-    monkeypatch.setattr(event_watch, "normalize", lambda items: [
+    monkeypatch.setattr(event_watch, "normalize", lambda items, **kw: [
         _ne(0, "Nvidia miss", "risk", "high", ["NDQ.AX"]),
     ])
     monkeypatch.setattr(event_trigger, "_holdings_snapshot", lambda syms: {})
@@ -116,7 +116,7 @@ def test_run_dry_run_skips_email_and_committee(tmp_event_db, monkeypatch):
         RawNewsItem(src_name="r", title="t", url="https://r.co/1", snippet="s"),
     ])
     monkeypatch.setattr(event_watch, "load_feeds", lambda: [])
-    monkeypatch.setattr(event_watch, "normalize", lambda items: [
+    monkeypatch.setattr(event_watch, "normalize", lambda items, **kw: [
         _ne(0, "Nvidia miss", "risk", "high", ["NDQ.AX"]),
     ])
     trigger = MagicMock()
@@ -140,7 +140,7 @@ def test_run_skips_duplicated_urls(tmp_event_db, monkeypatch):
 
     items = [RawNewsItem(src_name="r", title="t", url="https://r.co/0", snippet="s")]
     monkeypatch.setattr(event_watch, "fetch_all", lambda **kw: items)
-    monkeypatch.setattr(event_watch, "normalize", lambda its: [
+    monkeypatch.setattr(event_watch, "normalize", lambda its, **kw: [
         _ne(0, "evt-x", "risk", "high", ["NDQ.AX"]),
     ])
     monkeypatch.setattr(event_trigger, "_trigger_committee", lambda **kw: "t1")

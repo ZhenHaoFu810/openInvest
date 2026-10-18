@@ -46,6 +46,24 @@ def parse_committee_file(path: Path) -> Optional[Dict[str, Any]]:
     return parse_committee_text(path.read_text(encoding="utf-8"))
 
 
+def llm_failure_reason(parsed: Optional[Dict[str, Any]]) -> Optional[str]:
+    """这份委员会记录是不是"LLM 没跑成"的产物；是 → 人话原因，否则 None。
+
+    UNCLEAR（CIO 没出裁决）与"有角色没产出、被强制 HOLD"都算：这类记录不能当结果、
+    不能当当日缓存（2026-10-18 起失败要响亮——此前 402 被当成功缓存一整天）。
+    老存档没有 Input Health 块时只能看 verdict。
+    """
+    if not parsed:
+        return None
+    h = parsed.get("input_health") or {}
+    bad = h.get("worker_unavailable") or []
+    if parsed.get("verdict") == "UNCLEAR" or h.get("cio_unclear"):
+        return f"CIO 没给出裁决（UNCLEAR）；没产出的角色：{', '.join(bad) or '无'}"
+    if bad:
+        return f"这些角色没产出：{', '.join(bad)}（裁决被强制 HOLD，不可当真）"
+    return None
+
+
 def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
     """parse_committee_file 的文本版——远端模式拿到的是 hub 回传的 md 正文。"""
     verdict_m = re.search(r"\*\*Verdict\*\*:\s*(\w+)\s*\(confidence\s+([\d.]+)\)", text)

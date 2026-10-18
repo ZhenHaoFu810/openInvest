@@ -198,3 +198,50 @@ def test_mcp_cached_run_committee_carries_memo_and_input_health(monkeypatch, tmp
     assert out["cached"] is True and out["verdict"] == "ACCUMULATE"
     assert out["input_health"]["rewritten"] == ["single_invest_cap"]
     assert out["cio_memo"].startswith("VERDICT: ACCUMULATE") and "钳制" in out["cio_memo"]
+
+
+UNCLEAR_MD = PERSIST_MD.replace("**Verdict**: ACCUMULATE (confidence 0.70)", "**Verdict**: UNCLEAR (confidence 0.00)").replace(
+    '{"empty_inputs": ["event_brief"], "rewritten": ["single_invest_cap"]}',
+    '{"worker_unavailable": ["macro", "quant", "risk", "cio"], "cio_unclear": true}')
+
+
+def _call_mcp(args):
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from openinvest.connectors.mcp_server import mcp
+
+    async def go():
+        async with create_connected_server_and_client_session(mcp) as client:
+            return await client.call_tool("run_committee", args)
+    return asyncio.run(go())
+
+
+def test_mcp_failed_transcript_is_not_served_as_cache(monkeypatch, tmp_path):
+    """当天已有 UNCLEAR 记录（LLM 没跑成）→ 不当缓存，重跑。"""
+    _seed(tmp_path, monkeypatch, text=UNCLEAR_MD)
+    monkeypatch.setattr("openinvest.jobs.verdict_review.load_confidence_lookup", lambda: {})
+    calls = []
+
+    def fake_session(**kw):
+        calls.append(kw)
+        p = tmp_path / "memory" / ".committee" / datetime.now().strftime("%Y-%m-%d") / "AAPL.md"
+        p.write_text(PERSIST_MD, encoding="utf-8")   # 重跑成功落盘
+        return {"asset_committees": {"AAPL": {"verdict": {"verdict": "ACCUMULATE", "confidence": 0.7}}}}
+
+    monkeypatch.setattr("openinvest.core.committee_runner.run_committee_session", fake_session)
+    res = _call_mcp({"symbol": "AAPL"})
+    assert not res.isError and len(calls) == 1
+    out = res.structuredContent
+    out = out.get("result", out)
+    assert out["cached"] is False and out["verdict"]["verdict"] == "ACCUMULATE" and "degraded" not in out
+
+
+def test_mcp_fresh_unclear_is_an_error(monkeypatch, tmp_path):
+    """没跑成（UNCLEAR）→ isError，不再当成功结果返回（2026-10-09 Codex 实测 402 时 isError=false）。"""
+    _seed(tmp_path, monkeypatch, text=UNCLEAR_MD)
+    monkeypatch.setattr("openinvest.jobs.verdict_review.load_confidence_lookup", lambda: {})
+    monkeypatch.setattr("openinvest.core.committee_runner.run_committee_session",
+                        lambda **kw: {"asset_committees": {"AAPL": {"verdict": {"verdict": "UNCLEAR", "confidence": 0}}}})
+    res = _call_mcp({"symbol": "AAPL", "force": True})
+    assert res.isError
+    assert "没跑成" in res.content[0].text and "doctor" in res.content[0].text
