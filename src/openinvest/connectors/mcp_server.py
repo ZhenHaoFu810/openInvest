@@ -1057,7 +1057,7 @@ async def run_committee(
     """
     import json
     from mcp.server.fastmcp.exceptions import ToolError
-    from openinvest.core.decision_ledger import llm_failure_reason, parse_committee_file
+    from openinvest.core.decision_ledger import is_unclear, llm_failure_reason, parse_committee_file
     from openinvest.core.memory_store import MemoryStore
     from openinvest.jobs.review_calc import confidence_display
     from openinvest.jobs.verdict_review import load_confidence_lookup
@@ -1068,14 +1068,16 @@ async def run_committee(
         safe = safe_symbol(symbol)
         cached = MemoryStore().root / ".committee" / today / f"{safe}.md"
         parsed = parse_committee_file(cached)
-        # LLM 没跑成的记录不当缓存（UNCLEAR / 有角色没产出）——直接重跑
-        if parsed and not llm_failure_reason(parsed):
+        # CIO 没出裁决（UNCLEAR）的记录不当缓存，直接重跑；部分角色失败的照常命中但带 degraded
+        # （单个角色持续失败时不至于每次调用都重跑整轮委员会）
+        if parsed and not is_unclear(parsed):
             return {"cached": True, "decision_id": f"{today}/{symbol}",
                     **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny", "alloc_currency")},
                     "confidence_lookup": confidence_display(parsed, load_confidence_lookup(),
                                                             with_raw=False),
                     # 与 CLI 同款：缓存命中也带 memo 与 Input Health，agent 不必再 explain_decision
-                    "cio_memo": parsed["cio_memo"], "input_health": parsed["input_health"]}
+                    "cio_memo": parsed["cio_memo"], "input_health": parsed["input_health"],
+                    **({"degraded": llm_failure_reason(parsed)} if llm_failure_reason(parsed) else {})}
 
     from openinvest.core.committee_runner import run_committee_session
 

@@ -246,9 +246,15 @@ def _parse_events_json(raw_text: str, *, expected_size: int, offset: int) -> Lis
         raise ValueError(f"normalize 返回里没有 events 列表: raw[:200]={raw_text[:200]}")
 
     out: List[NormalizedEvent] = []
+    seen_idx = set()
     for raw in raw_events:
         if not isinstance(raw, dict):
             continue
+        # 多段 JSON 可能把同一组 events 吐两遍：同 idx 只留第一次（省一次 embedding，计数不虚高）
+        if raw.get("idx") is not None:
+            if raw["idx"] in seen_idx:
+                continue
+            seen_idx.add(raw["idx"])
         try:
             ne = _sanitize_event(raw, offset=offset)
         except Exception as e:

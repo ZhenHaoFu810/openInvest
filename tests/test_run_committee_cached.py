@@ -245,3 +245,77 @@ def test_mcp_fresh_unclear_is_an_error(monkeypatch, tmp_path):
     res = _call_mcp({"symbol": "AAPL", "force": True})
     assert res.isError
     assert "没跑成" in res.content[0].text and "doctor" in res.content[0].text
+
+
+DEGRADED_MD = PERSIST_MD.replace(
+    '{"empty_inputs": ["event_brief"], "rewritten": ["single_invest_cap"]}',
+    '{"worker_unavailable": ["risk"], "forced_hold": false}')
+
+
+def test_mcp_degraded_transcript_still_served_from_cache_with_flag(monkeypatch, tmp_path):
+    """部分角色失败的记录照常命中缓存（不每次重跑整轮），但带 degraded 让 agent 转告用户。"""
+    _seed(tmp_path, monkeypatch, text=DEGRADED_MD)
+    monkeypatch.setattr("openinvest.jobs.verdict_review.load_confidence_lookup", lambda: {})
+    monkeypatch.setattr("openinvest.core.committee_runner.run_committee_session",
+                        lambda **kw: pytest.fail("degraded 记录不该触发重跑"))
+    res = _call_mcp({"symbol": "AAPL"})
+    out = res.structuredContent
+    out = out.get("result", out)
+    assert not res.isError and out["cached"] is True
+    assert "risk" in out["degraded"] and "存疑" in out["degraded"]
+
+
+def test_mcp_fresh_degraded_returns_verdict_with_flag(monkeypatch, tmp_path):
+    p = _seed(tmp_path, monkeypatch, text=UNCLEAR_MD)
+    monkeypatch.setattr("openinvest.jobs.verdict_review.load_confidence_lookup", lambda: {})
+
+    def fake_session(**kw):
+        p.write_text(DEGRADED_MD, encoding="utf-8")
+        return {"asset_committees": {"AAPL": {"verdict": {"verdict": "ACCUMULATE", "confidence": 0.7}}}}
+
+    monkeypatch.setattr("openinvest.core.committee_runner.run_committee_session", fake_session)
+    res = _call_mcp({"symbol": "AAPL", "force": True})
+    out = res.structuredContent
+    out = out.get("result", out)
+    assert not res.isError and out["verdict"]["verdict"] == "ACCUMULATE" and "risk" in out["degraded"]
+
+
+def _cli_env(monkeypatch, tmp_path, text):
+    from openinvest.skill_cmds import committee_cmds as cc
+
+    class FakePM:
+        strategy = {"target_assets": [{"symbol": "AAPL", "target_pct": 1.0}]}
+
+    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setattr(cc, "ROOT", tmp_path)
+    monkeypatch.setattr("openinvest.core.portfolio_manager.PortfolioManager", lambda: FakePM())
+    monkeypatch.setattr("openinvest.jobs.verdict_review.load_confidence_lookup", lambda: {})
+    md = tmp_path / "memory" / ".committee" / datetime.now().strftime("%Y-%m-%d") / "AAPL.md"
+    md.parent.mkdir(parents=True)
+    md.write_text(text, encoding="utf-8")
+    return cc, md
+
+
+def test_cli_unclear_cache_reruns_and_fresh_unclear_exits_1(monkeypatch, capfd, tmp_path):
+    cc, md = _cli_env(monkeypatch, tmp_path, UNCLEAR_MD)
+    calls = []
+
+    def fake_session(**kw):
+        calls.append(kw)
+        return {"asset_committees": {"AAPL": {"verdict": {"verdict": "UNCLEAR", "confidence": 0}}}}
+
+    monkeypatch.setattr("openinvest.core.committee_runner.run_committee_session", fake_session)
+    with pytest.raises(SystemExit) as e:
+        cc.cmd_run_committee(argparse.Namespace(symbol="AAPL", force=False, max_rounds=1))
+    assert e.value.code == 1 and len(calls) == 1          # UNCLEAR 缓存没被命中，重跑了
+    out = json.loads(capfd.readouterr().out)
+    assert out["status"] == "error" and "没跑成" in out["error"]
+
+
+def test_cli_degraded_cache_hit_carries_flag(monkeypatch, capfd, tmp_path):
+    cc, md = _cli_env(monkeypatch, tmp_path, DEGRADED_MD)
+    monkeypatch.setattr("openinvest.core.committee_runner.run_committee_session",
+                        lambda **kw: pytest.fail("degraded 记录不该触发重跑"))
+    cc.cmd_run_committee(argparse.Namespace(symbol="AAPL", force=False, max_rounds=1))
+    out = json.loads(capfd.readouterr().out)
+    assert out["status"] == "cached" and "risk" in out["degraded"]

@@ -158,11 +158,12 @@ def find_problems(
                 "text": (f"`event_watch` 连续 {len(streak)} 次成功运行 fetched=0"
                          f"（自 {streak[-1][1]}）——新闻源可能全挂，job 照样报 success。"),
             })
-        # 归一化失败连击：没走到归一化的轮次（无新新闻）不带该字段，跳过不算断；看最近 20 轮
+        # 归一化失败连击：没走到归一化的轮次（无新新闻）不带该字段，跳过不算断。
+        # 不设窗口上限：连击起点固定 → 去重 key 稳定（窗口滑动会让 key 每轮都变、每 30 分钟重报）
         fails: List[Tuple[int, str, int]] = []
         for rid, s_at, output in conn.execute(
             "SELECT id, started_at, output_excerpt FROM job_runs "
-            "WHERE job_name = 'event_watch' AND status = 'success' ORDER BY id DESC LIMIT 20"
+            "WHERE job_name = 'event_watch' AND status = 'success' ORDER BY id DESC"
         ):
             m = _NORM_FAILED_RE.search(output or "")
             if not m:
@@ -196,7 +197,8 @@ def find_failed_verdicts(committee_dir: Any, now: datetime) -> List[Dict[str, An
                 "key": f"verdict_failed:{day}/{p.stem}",
                 "since": datetime.fromtimestamp(p.stat().st_mtime).astimezone(),
                 "text": (f"委员会 `{day}/{p.stem}` 没跑成：{reason}。多半是 LLM 调用失败"
-                         f"（key / 额度 / 参数），这份裁决不能当真；修好后用 force 重跑。"),
+                         f"（key / 额度 / 参数），这份裁决不能当真；修好后直接重跑"
+                         f"（UNCLEAR 记录不当缓存，不需要 force）。"),
             })
     return out
 

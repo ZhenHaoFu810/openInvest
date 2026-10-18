@@ -62,6 +62,8 @@ def test_parse_events_json_merges_objects_and_ignores_tail():
     out = _parse_events_json(text, expected_size=2, offset=0)
     assert [x.event["one_line_claim"] for x in out] == ["c0", "c1"]
     assert _parse_events_json('{"events": []}', expected_size=1, offset=0) == []  # 真没事件 = 空，不抛
+    dup = json.dumps({"events": [e(0)]}) + json.dumps({"events": [e(0)]})   # 同一组吐两遍
+    assert len(_parse_events_json(dup, expected_size=1, offset=0)) == 1
 
 
 def test_normalize_counts_failed_batches(monkeypatch):

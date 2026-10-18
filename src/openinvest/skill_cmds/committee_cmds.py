@@ -107,10 +107,10 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
     # 输出的 transcript_path 字段就是空字符串（Fresh Claude 端到端测试发现）
     safe_sym = safe_symbol(args.symbol)
     transcript_path = ROOT / "memory" / ".committee" / today / f"{safe_sym}.md"
-    from openinvest.core.decision_ledger import llm_failure_reason, parse_committee_file
+    from openinvest.core.decision_ledger import is_unclear, llm_failure_reason, parse_committee_file
     cached_parsed = parse_committee_file(transcript_path) if transcript_path.exists() else None
-    # LLM 没跑成的记录（UNCLEAR / 有角色没产出）不当缓存，直接重跑
-    if transcript_path.exists() and not args.force and not llm_failure_reason(cached_parsed):
+    # CIO 没出裁决（UNCLEAR）的记录不当缓存，直接重跑；部分角色失败的照常命中但带 degraded
+    if transcript_path.exists() and not args.force and not is_unclear(cached_parsed):
         from openinvest.capabilities.committee.i18n import bilingual
         from openinvest.jobs.review_calc import confidence_display
         from openinvest.jobs.verdict_review import load_confidence_lookup
@@ -126,6 +126,7 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
             # 与 fresh 路径 / MCP run_committee cached 同款
             "confidence_lookup": (confidence_display(parsed, load_confidence_lookup(), with_raw=False)
                                   if parsed else None),
+            **({"degraded": llm_failure_reason(parsed)} if llm_failure_reason(parsed) else {}),
         })
         return
 

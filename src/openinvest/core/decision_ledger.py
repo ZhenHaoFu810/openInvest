@@ -60,8 +60,15 @@ def llm_failure_reason(parsed: Optional[Dict[str, Any]]) -> Optional[str]:
     if parsed.get("verdict") == "UNCLEAR" or h.get("cio_unclear"):
         return f"CIO 没给出裁决（UNCLEAR）；没产出的角色：{', '.join(bad) or '无'}"
     if bad:
-        return f"这些角色没产出：{', '.join(bad)}（裁决被强制 HOLD，不可当真）"
+        verdict_note = "裁决被强制 HOLD" if h.get("forced_hold") else "裁决可信度存疑"
+        return f"这些角色没产出：{', '.join(bad)}（{verdict_note}）"
     return None
+
+
+def is_unclear(parsed: Optional[Dict[str, Any]]) -> bool:
+    """CIO 没给出裁决——只有这种记录不当缓存；部分角色失败的仍命中缓存但带 degraded。"""
+    return bool(parsed) and (parsed.get("verdict") == "UNCLEAR"
+                             or bool((parsed.get("input_health") or {}).get("cio_unclear")))
 
 
 def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
