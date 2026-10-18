@@ -8,12 +8,14 @@
 5. 数据停滞（闭市）跳过；disabled 短路
 """
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from openinvest.jobs import price_sentinel as ps
+from openinvest.services.event_notifier import send_event_alert as _REAL_SEND
 
 
 # ---------- 纯函数 ----------
@@ -256,6 +258,249 @@ class TestRun:
         monkeypatch.setattr(EventStore, "upsert_event", real_upsert)
         out2 = ps.run(dry_run=False)
         assert "AAA" not in out2["symbols"]
+
+
+# ---------- 用户自设报警线（C8） ----------
+
+class TestUserAlerts:
+    """target_assets[].alerts 每个 tick 判一次：命中 → 24h 原子冷却 → 入库(price_alert) → 同通道报警。
+    只入库不触发委员会；INVEST_EVENT_ALERT 总开关关着时只入库不发。"""
+
+    @pytest.fixture
+    def env(self, tmp_path, monkeypatch):
+        from openinvest.utils.quotes import QuoteSnapshot
+
+        monkeypatch.setattr("openinvest.db.event_store.DB_PATH", str(tmp_path / "events.sqlite"))
+        from openinvest.core import memory_store as ms_mod
+        monkeypatch.setattr(ms_mod, "MEMORY_ROOT", tmp_path / "memory")
+        # ATR 路径本测试不关心：没有标的、没有 5m 数据
+        monkeypatch.setattr("openinvest.jobs.event_watch._load_user_context",
+                            lambda: {"holdings": ["GC=F"], "watching": ["GC=F"], "macro_tags": [], "queries": []})
+        monkeypatch.setattr(ps, "_fetch_frames", lambda sym: None)
+        monkeypatch.setattr(ps, "_latest_verdict", lambda sym, committee_root=None: "近期无委员会 verdict")
+
+        e = SimpleNamespace(
+            targets=[{"symbol": "GC=F", "alerts": {"price_below": 900.0}, "holding": None}],
+            quote=QuoteSnapshot(symbol="GC=F", price=880.0, currency="CNY", unit="克", extra={}),
+            alert=MagicMock(), trigger=MagicMock(), snapshot=MagicMock(return_value={}))
+        monkeypatch.setattr(ps, "_alert_targets", lambda: e.targets)
+        monkeypatch.setattr("openinvest.services.price_alerts.fetch_quote", lambda sym, holding=None: e.quote)
+        monkeypatch.setattr("openinvest.services.event_notifier.send_event_alert", e.alert)
+        monkeypatch.setattr("openinvest.services.event_trigger._trigger_committee", e.trigger)
+        monkeypatch.setattr("openinvest.services.event_trigger._holdings_snapshot", lambda syms: e.snapshot(syms))
+        return e
+
+    @staticmethod
+    def _events():
+        from openinvest.db.event_store import EventStore
+        rows = EventStore().conn.execute(
+            "SELECT event_type, severity, stance, affected_symbols_json, committee_task_id, one_line_claim FROM events").fetchall()
+        return [tuple(r) for r in rows]
+
+    def test_price_below_fires_records_event_and_alerts_without_committee(self, env):
+        out = ps.run(dry_run=False)
+        assert out["price_alerts"] == ["GC=F:price_below"] and out["alerted"] == 0  # alerted 仍只计 ATR
+        env.alert.assert_called_once()
+        evs = env.alert.call_args.args[0]
+        assert evs[0]["event_type"] == "price_alert" and evs[0]["affected_symbols"] == ["GC=F"]
+        assert "已触及 price_below 900" in evs[0]["one_line_claim"] and "880.00 CNY" in evs[0]["one_line_claim"]
+        (et, sev, stance, syms, task, _), = self._events()
+        assert (et, sev, stance, task) == ("price_alert", 1, "risk", None)
+        env.trigger.assert_not_called()  # 只入库不触发委员会
+
+    def test_price_above_crossing_up(self, env):
+        env.targets[0]["alerts"] = {"price_above": 1000.0}
+        env.quote.price = 1010.0
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:price_above"]
+        assert self._events()[0][2] == "opportunity"
+
+    def test_day_drop_uses_quote_day_change(self, env):
+        env.targets[0]["alerts"] = {"day_drop_pct": 3.0}
+        env.quote.price, env.quote.extra, env.quote.last_updated = 1000.0, {"day_change_pct": -3.4}, "2026-10-16"
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:day_drop_pct"]
+        assert "（2026-10-16 当日 -3.40%）" in env.alert.call_args.args[0][0]["one_line_claim"]  # 不写成「今日」
+        env.quote.extra = {"day_change_pct": -1.0}  # 没到线
+        env.alert.reset_mock()
+        assert ps.run(dry_run=False)["price_alerts"] == []
+        env.alert.assert_not_called()
+
+    def test_day_rule_same_trading_day_not_re_reported_after_24h(self, env):
+        """评审必改项：休市日行情停在上一交易日那根线上，day_* 按 24h 判会把周五的跌幅周六、周日各再报一遍。
+        同一根日线只报一次；换了交易日（周一又跌）才能再报。"""
+        from openinvest.core.memory_store import MemoryStore
+        env.targets[0]["alerts"] = {"day_drop_pct": 3.0}
+        env.quote.price, env.quote.extra, env.quote.last_updated = 1000.0, {"day_change_pct": -3.4}, "2026-10-16"
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:day_drop_pct"]  # 周五
+        # 周六、周日：24h 滚动冷却早已过期，行情仍是周五那根线
+        ms = MemoryStore()
+        past = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat(timespec="seconds")
+        ms.state_set(ps._ALERT_STATE_NAME, {"GC=F:day_drop_pct": {"bar": "2026-10-16", "ts": past}})
+        assert ps.run(dry_run=False)["price_alerts"] == []
+        assert env.alert.call_count == 1 and len(self._events()) == 1
+        # 周一新的一根线又跌 → 新交易日，可以再报
+        env.quote.last_updated = "2026-10-19"
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:day_drop_pct"]
+        assert env.alert.call_count == 2 and len(self._events()) == 2
+
+    def test_claim_alert_day_rule_keyed_by_bar_not_clock(self, env):
+        from openinvest.core.memory_store import MemoryStore
+        ms, now = MemoryStore(), datetime.now(timezone.utc)
+        assert ps._claim_alert(ms, "GC=F", "day_drop_pct", now, "2026-10-16") is not None
+        assert ps._claim_alert(ms, "GC=F", "day_drop_pct", now + timedelta(hours=49), "2026-10-16") is None
+        assert ps._claim_alert(ms, "GC=F", "day_drop_pct", now + timedelta(hours=1), "2026-10-19") is not None
+        # 价格线仍是 24h 滚动，与日涨跌线的键互不影响
+        assert ps._claim_alert(ms, "GC=F", "price_below", now) is not None
+        assert ps._claim_alert(ms, "GC=F", "price_below", now + timedelta(hours=23)) is None
+        assert ps._claim_alert(ms, "GC=F", "price_below", now + timedelta(hours=25)) is not None
+
+    def test_day_rule_gold_gram_uses_proxy_daily_bar_date(self, env, monkeypatch):
+        """克价黄金的 quote 没有 day_change_pct / last_updated：取行情代理最近两根日线算涨跌，
+        日期取最后一根线的日期——休市日去重一样生效。"""
+        import pandas as pd
+        df = pd.DataFrame({"Close": [100.0, 96.0]}, index=pd.to_datetime(["2026-10-15", "2026-10-16"]))
+        monkeypatch.setattr("openinvest.utils.exchange_fee.get_history_data", lambda sym, period: df)
+        env.targets[0]["alerts"] = {"day_drop_pct": 3.0}
+        env.quote.extra, env.quote.last_updated = {}, None
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:day_drop_pct"]
+        assert "（2026-10-16 当日 -4.00%）" in env.alert.call_args.args[0][0]["one_line_claim"]
+        assert ps.run(dry_run=False)["price_alerts"] == []  # 同一根线
+
+    def test_drawdown_from_cost_needs_a_held_position(self, env):
+        env.targets[0]["alerts"] = {"drawdown_from_cost_pct": 15.0}
+        env.quote.price = 80.0
+        env.targets[0]["holding"] = {"symbol": "GC=F", "units": 10.0, "avg_cost": 100.0}  # -20% < -15%
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:drawdown_from_cost_pct"]
+        # 同一价格但没有持仓（只跟踪）→ 无成本可比，不报
+        env.targets[0]["holding"] = None
+        assert ps.run(dry_run=False)["price_alerts"] == []
+
+    def test_cooldown_24h_is_atomic_and_expires(self, env):
+        from openinvest.core.memory_store import MemoryStore
+        ms = MemoryStore()
+        now = datetime.now(timezone.utc)
+        # 同一刻两个实例抢同一条：只有一个抢到
+        assert ps._claim_alert(ms, "GC=F", "price_below", now) is not None
+        assert ps._claim_alert(ms, "GC=F", "price_below", now) is None
+        assert ps._claim_alert(ms, "GC=F", "day_drop_pct", now) is not None  # 另一条规则互不影响
+        # 端到端：已在冷却内 → run 不再入库不再报
+        out = ps.run(dry_run=False)
+        assert out["price_alerts"] == [] and self._events() == []
+        env.alert.assert_not_called()
+        # 25h 前盖的章 → 过期，可再报；再跑一次又在冷却内
+        ms.state_set(ps._ALERT_STATE_NAME, {"GC=F:price_below": (now - timedelta(hours=25)).isoformat()})
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:price_below"]
+        assert ps.run(dry_run=False)["price_alerts"] == []
+        assert env.alert.call_count == 1 and len(self._events()) == 1
+
+    def test_repeat_hit_next_day_is_a_new_event_row(self, env, monkeypatch):
+        """claim_to_event_id 会剥掉 claim 里的 ISO 日期：同价同线隔天命中若走默认 id 会被并成一行。
+        哨兵显式给 event_id（标的 + 规则 + 盖章时刻），每次命中一行。"""
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:price_below"]
+
+        class Later(datetime):  # 时钟拨快 25h：冷却过期，价格没变
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(tz) + timedelta(hours=25)
+
+        monkeypatch.setattr(ps, "datetime", Later)
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:price_below"]
+        assert len(self._events()) == 2
+
+    def test_stance_research_scripts_skip_price_alerts(self, env, tmp_path):
+        """price_alert 的 stance 是价格已动之后才打的，混进 stance 命中率研究会带回看偏差。"""
+        import sqlite3
+
+        from experiments import event_stance_baseline_study as baseline
+        from scripts.research import eval_event_stance as stance
+        from openinvest.db.event_store import EventStore
+        ps.run(dry_run=False)
+        EventStore().upsert_event({"one_line_claim": "GC=F 央行购金", "stance": "opportunity", "severity": "mid",
+                                   "affected_symbols": ["GC=F"], "ts": datetime.now(timezone.utc).isoformat()})
+        db = Path(EventStore().conn.execute("PRAGMA database_list").fetchone()[2])
+        assert sqlite3.connect(db).execute("SELECT count(*) FROM events").fetchone()[0] == 2
+        assert len(stance.load_events(db)) == 1
+        assert len(baseline.load_events(db)) == 1
+
+    def test_alert_master_switch_off_stores_event_but_sends_nothing(self, env, monkeypatch):
+        """INVEST_EVENT_ALERT 默认关：走真实 send_event_alert，Discord / 邮件出口一个都不能被调，
+        连持仓快照（要拉行情）都不算；事件照常入库、冷却照常盖章。"""
+        discord, email = MagicMock(), MagicMock()
+        monkeypatch.setattr("openinvest.services.event_notifier.send_event_alert", _REAL_SEND)
+        monkeypatch.setattr("openinvest.services.event_notifier.send_discord_alert", discord)
+        monkeypatch.setattr("openinvest.services.event_notifier.send_email_html", email)
+        out = ps.run(dry_run=False)
+        assert out["price_alerts"] == ["GC=F:price_below"]
+        assert len(self._events()) == 1
+        discord.assert_not_called()
+        email.assert_not_called()
+        env.snapshot.assert_not_called()
+        assert ps.run(dry_run=False)["price_alerts"] == []  # 冷却已盖章：开关关着也不会每 5 分钟入一条
+
+    def test_alert_master_switch_on_sends_via_same_channel(self, env, monkeypatch):
+        discord, email = MagicMock(), MagicMock()
+        monkeypatch.setattr("openinvest.services.event_notifier.send_event_alert", _REAL_SEND)
+        monkeypatch.setattr("openinvest.services.event_notifier.send_discord_alert", discord)
+        monkeypatch.setattr("openinvest.services.event_notifier.send_email_html", email)
+        monkeypatch.setenv("INVEST_EVENT_ALERT", "1")
+        ps.run(dry_run=False)
+        discord.assert_called_once()
+        assert "price_below" in discord.call_args.args[0]
+        email.assert_called_once()
+        env.snapshot.assert_called_once_with(["GC=F"])
+
+    def test_stale_quote_never_alerts(self, env):
+        env.quote.is_stale = True
+        assert ps.run(dry_run=False)["price_alerts"] == []
+        assert self._events() == []
+
+    def test_dry_run_has_no_side_effects(self, env):
+        out = ps.run(dry_run=True)
+        assert out["price_alerts"] == ["GC=F:price_below"]
+        assert self._events() == []
+        env.alert.assert_not_called()
+        from openinvest.core.memory_store import MemoryStore
+        assert MemoryStore().state_get(ps._ALERT_STATE_NAME) is None
+
+    def test_event_store_failure_releases_cooldown_for_retry(self, env, monkeypatch):
+        from openinvest.db.event_store import EventStore
+        real = EventStore.upsert_event
+        monkeypatch.setattr(EventStore, "upsert_event", lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
+        assert ps.run(dry_run=False)["price_alerts"] == []
+        env.alert.assert_not_called()
+        monkeypatch.setattr(EventStore, "upsert_event", real)
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:price_below"]  # 没被冷却吃掉
+
+    def test_event_store_failure_releases_day_rule_claim(self, env, monkeypatch):
+        from openinvest.db.event_store import EventStore
+        env.targets[0]["alerts"] = {"day_drop_pct": 3.0}
+        env.quote.price, env.quote.extra, env.quote.last_updated = 1000.0, {"day_change_pct": -3.4}, "2026-10-16"
+        real = EventStore.upsert_event
+        monkeypatch.setattr(EventStore, "upsert_event", lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
+        assert ps.run(dry_run=False)["price_alerts"] == []
+        monkeypatch.setattr(EventStore, "upsert_event", real)
+        assert ps.run(dry_run=False)["price_alerts"] == ["GC=F:day_drop_pct"]  # 这根线没被冷却吃掉
+
+    def test_alert_pass_failure_does_not_block_atr_sentinel(self, sentinel_env, monkeypatch):
+        monkeypatch.setattr(ps, "_check_user_alerts", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        out = ps.run(dry_run=False)
+        assert out["alerted"] == 1 and out["price_alerts"] == []
+
+    def test_price_alert_event_never_passes_the_committee_gate(self, env):
+        """severity=low：事件触发闸 / RAG 召回 / 日报资产事件的最低门槛都是 mid，用户的线进不了委员会论据。"""
+        from openinvest.services.event_trigger import is_triggerable
+        ps.run(dry_run=False)
+        ev = env.alert.call_args.args[0][0]
+        assert not is_triggerable(ev, ["gc=f"], "mid")
+        from openinvest.db.event_store import EventStore
+        store = EventStore()
+        assert store.recall("GC=F", time_window_days=7, min_severity="mid", top_k=10) == []
+        # 用户把 rag_min_severity 调成 low 也召不到：recall 对 price_alert 是硬排除，不靠 severity 默认值
+        assert store.recall("GC=F", time_window_days=7, min_severity="low", top_k=10) == []
+        assert store.conn.execute("SELECT count(*) FROM events WHERE event_type='price_alert'").fetchone()[0] == 1
+        # 排除不过宽：同标的同级别的普通（含 event_type 为 NULL 的）新闻事件照常召回
+        store.upsert_event({"one_line_claim": "GC=F 央行购金", "stance": "opportunity", "severity": "low",
+                            "affected_symbols": ["GC=F"], "ts": datetime.now(timezone.utc).isoformat()})
+        assert [e["one_line_claim"] for e in store.recall("GC=F", time_window_days=7, min_severity="low", top_k=10)] == ["GC=F 央行购金"]
 
 
 def test_fetch_frames_ignores_trailing_nan_bar(monkeypatch):
