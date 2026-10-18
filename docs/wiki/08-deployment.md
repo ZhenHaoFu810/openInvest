@@ -76,14 +76,15 @@ docker compose up -d --build                 # 本地构建（首次几分钟：
 docker compose pull && docker compose up -d
 ```
 
-验证：`curl http://localhost:8765/api/health`。
+验证：`curl http://localhost:8765/api/health`（探活不需要 token）。
 
 | 服务 | 作用 | 端口 |
 |------|------|------|
 | `invest-web` | FastAPI（deprecated，仅 hub 转发 + 内部触发）| 宿主 `127.0.0.1:8765`（默认只绑 loopback）|
 | `invest-agent` | scheduler：跑 `jobs/*.yml`（daily_report / pnl_snapshot…）| 无 |
 
-- **暴露到 LAN/公网**：把 `invest-web` 的 `ports` 改成 `"8765:8765"` 并设 `INVEST_API_TOKEN`；或保持 loopback、前面挂 Caddy + CF Access（见下文第 1–2 节）。
+- **`INVEST_API_TOKEN` 必填**：容器内 `invest-web` 必须绑 `0.0.0.0`（宿主端口映射才进得来），而 `openinvest-web` 入口的守卫规定"非 loopback 绑定 + 无 token = 拒绝启动"。compose 在起进程前先查这个变量，缺了直接给提示退出（不再靠 `127.0.0.1:8765` 端口映射兜底一个无鉴权的 API）。在 `.env` 加 `INVEST_API_TOKEN=$(openssl rand -hex 32)` 的结果；设了之后 `/api/*` 都要带 `Authorization: Bearer <token>`（`/api/health` 探活豁免）。`docker compose run --rm invest-web openinvest init` 这类一次性命令会替换启动命令，不受影响。
+- **暴露到 LAN/公网**：把 `invest-web` 的 `ports` 改成 `"8765:8765"`（token 已是必填）；或保持 loopback、前面挂 Caddy + CF Access（见下文第 1–2 节）。
 - **数据持久化**：`memory/`（账本，必挂）/ `db/` / `cache_data/` / `logs/` 都 bind-mount 到宿主，容器重建不丢。
 - **镜像可见性**：GHCR 包首发是 private——要 `docker compose pull` 匿名拉，须在 GitHub Packages 把它设为 Public（或 `docker login ghcr.io`）。
 
@@ -117,8 +118,11 @@ openinvest init                 # onboarding 建 memory/
 ```ini
 Environment=INVEST_HOME=%h/openInvest
 EnvironmentFile=%h/openInvest/.env
-ExecStart=%h/.local/bin/openinvest-web
+Environment=INVEST_WEB_HOST=127.0.0.1
+Environment=INVEST_WEB_PORT=8765
+ExecStart=%h/.local/bin/uv run --no-sync openinvest-web
 # host/port 走 env：INVEST_WEB_HOST（默认 127.0.0.1）/ INVEST_WEB_PORT（默认 8765）
+# 必须走 openinvest-web 入口，不要裸 uvicorn——入口带"非 loopback 绑定必须设 INVEST_API_TOKEN"守卫
 Restart=on-failure
 ProtectSystem=strict
 ReadWritePaths=%h/openInvest
@@ -133,6 +137,7 @@ sudo systemctl status invest-web
 
 → 仅写 INVEST_HOME 目录（systemd 加固）。
 → Restart=on-failure：进程挂了自动起，但**升级包后必须手动 restart 拉新**。
+→ 端口已被占（比如旧进程没停干净）：`openinvest-web` 以**退出码 1**退出并打印提示，`Restart=on-failure`（compose 的 `restart: always` 同理）每 15 秒重试直到端口空出，不会静默停在 inactive。
 
 ### 1.4 Caddy 站点配置
 
@@ -280,20 +285,63 @@ INVEST_VERDICT_CONCENTRATION_LENS_ENABLED=true
 
 ## 6. systemd 服务清单
 
+仓库 `systemd/` 带三个 unit 模板（`%h` = 服务 `User=` 的 home，fork 用户只需改 `User=`/`Group=`，路径默认 `~/openInvest`）：
+
+| unit | 起什么 | 端口 | 备注 |
+|---|---|---|---|
+| `invest-web.service` | `openinvest-web`（FastAPI）| `127.0.0.1:8765` | REST，供 remote hub 转发 / 内部触发；走 `openinvest-web` 入口（带 token 守卫），别裸 uvicorn |
+| `invest-mcp.service` | `openinvest-mcp --http`（remote MCP）| `127.0.0.1:8766` | spoke agent 经 Caddy `/mcp` 直连；鉴权复用 `INVEST_API_TOKEN` |
+| `invest-scheduler.service` | `python -m openinvest.scheduler.runner` | 无 | 跑 `jobs/*.yml` 全部定时任务（event_watch / price_sentinel / pnl_snapshot / backup / job_watchdog…）；**没有它 job 一个都不跑** |
+
 ```bash
+# 三个一起装（User=ubuntu 先改成你的用户名；路径不是 ~/openInvest 的话改 INVEST_HOME 等 4 行）
+sudo cp systemd/invest-{web,mcp,scheduler}.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now invest-web invest-mcp invest-scheduler
 sudo systemctl list-units --type=service | grep invest
-# invest-web.service          uvicorn FastAPI :8765
-# invest-scheduler.service    APScheduler 跑所有 jobs/*.yml
 ```
 
-`invest-scheduler.service`（如果你跑 cron）unit 类似：
+升级包后三个都要手动 restart 才拉新代码：`sudo systemctl restart invest-web invest-mcp invest-scheduler`。
+调度器的失败面（job 卡死 / 进程死亡）见下面 §6.1；详见 `systemd/README.md` 和 `scheduler/README.md`。
 
-```ini
-ExecStart=%h/.local/bin/uv tool run --from openinvest python -m openinvest.scheduler.runner
-# 或 pip 安装环境里直接 python -m openinvest.scheduler.runner
+### 6.1 调度器防静默停摆：job 超时 + 外部心跳
+
+2026-07-30 起 `event_watch` 因新闻抓取线程池 join 卡死 21 天：APScheduler `max_instances=1` 把之后每次触发都跳过，`job_runs` 一行没有。两层防线：
+
+**① 每 job 墙钟超时（`jobs/*.yml` 的 `timeout_minutes`，默认 30）**
+
+- runner 在 daemon 线程里跑 job，超时 → `job_runs.status='timeout'`（附线程调用栈）→ 放弃该线程、释放 `max_instances=1` 槽位 → 下一次触发正常进入；`job_watchdog` 把 timeout 当失败告警。
+- 线程杀不掉，所以有上限：同一 job 累计 3 个超时线程未退出时 runner 拒绝再启动它，看门狗转报"停摆"，`sudo systemctl restart invest-scheduler` 清空。
+- 字段说明与各 job 默认值见 `src/openinvest/jobs/README.md`。改了要重启调度器。
+
+**② 外部心跳（dead-man switch，可选）**
+
+看门狗自己跑在调度器里——调度进程死了它也哑。配一个外部"死人开关"服务，调度器每 5 分钟（启动时先一次）GET 它的 ping URL；ping 断了由外部服务告警：
+
+1. 在 [healthchecks.io](https://healthchecks.io)（免费档够用）建一个 check：Period = 5 minutes，Grace = 10 minutes，通知渠道自选；复制它的 ping URL（`https://hc-ping.com/<uuid>`）。
+2. 写进 `.env`（URL 是凭据，别提交进仓库）：
+   ```bash
+   INVEST_SCHEDULER_HEARTBEAT_URL=https://hc-ping.com/<uuid>
+   ```
+   也可写 `core/config/defaults.yaml` 的 `scheduler.heartbeat_url`（git clone 形态）。留空 = 不发。
+3. `sudo systemctl restart invest-scheduler`，日志里没有 `[heartbeat] ping 失败` 即通；healthchecks.io 面板应在 1 分钟内变绿。
+
+ping 失败只记 `WARNING [heartbeat] ping 失败…`，永远不影响调度。心跳本身是调度器线程池里的一个内部任务（不进 `job_runs`），所以进程死亡**和**线程池被全部占满都会让 ping 断掉。
+
+### 6.2 `memory/` 清理：`*.bak.<时间戳>` 与遗留 `*.lock`
+
+- `memory/portfolio.md.bak.<ts>`：`openinvest init`（含被"已有真实持仓"守卫**拒绝**的那次）/ `migrate_profile` / `migrate_portfolio_to_holdings` 覆盖前各留一份，从无清理（生产实测 247 份，其中 107 份内容逐字相同）。自动备份 job 排除 `*.bak.*`，它们不在任何轮转里。
+- `*.lock`：`memory_store` 的 sidecar 锁文件。当前版本用后即删（取锁后核对 inode 再 unlink，并发安全）；升级前遗留的（生产实测 158 个）用下面的命令清。
+
+```bash
+openinvest maintenance cleanup                 # 默认 dry-run：只打印将删除的数量，不动任何文件
+openinvest maintenance cleanup --apply         # 确认数量后真删
+openinvest maintenance cleanup --keep 30 --days 14   # 调保留策略
 ```
 
-详见 `systemd/README.md` 和 `scheduler/README.md`。
+保留策略（宁多留）：每个 family（如 `portfolio.md`）**最新 20 份，或** mtime 在 7 天内的——并集保留，其余才删。`*.lock` 只删当前无人持有的（非阻塞 flock 探测，与正在跑的进程不抢锁）。该命令永远只操作本机数据目录，不会被 `INVEST_API_BASE` 转发走。
+
+> **顺序**：先升级并重启 web / mcp / scheduler 到带 inode 核对的新版本，再 `--apply`。旧版本进程取锁后不核对 inode，与清理动作的毫秒级时序重叠时理论上可能和新进程同时进临界区；先 dry-run 看数量，没问题再 apply。
 
 ---
 
