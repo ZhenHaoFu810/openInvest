@@ -221,6 +221,7 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
     _save_brief_facts(target["symbol"], {
         "regime_brief": regime_brief, "sentiment_brief": sentiment_brief,
         "path_profile": path_profile, "atr_pct": metrics.get("atr_pct"),
+        "path_reference": reentry_reference,
     })
 
     return {
@@ -455,6 +456,24 @@ def save_committee_transcript(
                                 facts["path_profile"])
         except Exception as e:  # noqa: BLE001
             log.warning(f"save_committee path 快照失败 graceful：{e}")
+    # 日报（agent 模式）直接读这份：完整的规则后裁决 + 各角色正文 + 路径参考，不再自己重跑委员会
+    sidecar = out_dir / f"{safe_sym}_committee.json"
+    try:
+        sidecar.unlink(missing_ok=True)   # 重交写失败时不能留下上一次的旧裁决
+        sidecar.write_text(json.dumps({
+            "symbol": symbol, "saved_at": now.isoformat(timespec="seconds"), "provider": provider,
+            "verdict": verdict,
+            "macro_view": sections.get("MACRO", ""),
+            "quant_view": sections.get("QUANT_R2") or sections.get("QUANT_R1") or sections.get("QUANT", ""),
+            "risk_view": sections.get("RISK_R2") or sections.get("RISK_R1") or sections.get("RISK", ""),
+            "cio_memo": sections.get("CIO", cio_text),
+            "path_reference": (facts or {}).get("path_reference") or "",
+            "path_profile": (facts or {}).get("path_profile"),
+        # numpy 标量转回原生数（default=str 会把 confidence / alloc 存成字符串，日报格式化时炸）
+        }, ensure_ascii=False, default=lambda o: o.item() if hasattr(o, "item") else str(o)),
+            encoding="utf-8")
+    except Exception as e:  # noqa: BLE001  写不下 → 日报把该标的列为缺卷（响亮），不阻断收卷
+        log.warning(f"save_committee 日报侧文件写入失败：{e}")
     record_intervention(symbol, regime or "", current_price, verdict, atr_defense_on)
     store.dream_event({
         "phase": "committee_finished_skill",
@@ -466,9 +485,33 @@ def save_committee_transcript(
     })
     return {"saved": str(path), "verdict": verdict}
 
+def load_submitted_committee(symbol: str, day: str) -> Optional[Dict[str, Any]]:
+    """读某天 Agent 交卷时写的日报侧文件 → daily_report 的 asset_committees 单项结构。没有 → None。"""
+    from openinvest.core.memory_store import MemoryStore
+    path = MemoryStore().root / ".committee" / day / f"{safe_symbol(symbol)}_committee.json"
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict) or not isinstance(rec.get("verdict"), dict):
+        return None   # 格式不对按缺卷处理（日报响亮列出），不让整份日报挂掉
+    return {
+        "verdict": rec["verdict"],
+        "report": CommitteeReport(
+            asset={"symbol": symbol, "display_name": symbol},
+            macro_view=rec.get("macro_view", ""), quant_view=rec.get("quant_view", ""),
+            risk_view=rec.get("risk_view", ""), cio_memo=rec.get("cio_memo", ""),
+        ),
+        "path_reference": rec.get("path_reference") or "",
+        "path_profile": rec.get("path_profile"),
+        "macro_view": rec.get("macro_view", ""),
+    }
+
+
 __all__ = [
     "_COMMITTEE_SECTION_RE",
     "_safe_close_latest",
     "prepare_committee_brief",
     "save_committee_transcript",
+    "load_submitted_committee",
 ]

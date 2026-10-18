@@ -279,7 +279,7 @@ record_execution / ingest_event / buy / record_existing_position / sell / deposi
 record_dividend / record_fee / record_split / record_return_of_capital /
 place_fund_order / confirm_fund_order / cancel_fund_order /
 set_allocations / track_asset / untrack_asset / news_sources / add_news_source / remove_news_source /
-run_committee / prepare_committee / submit_committee / pending_news / pending_committees — schemas auto-discovered; call them directly, no table lookup needed.
+run_committee / prepare_committee / submit_committee / pending_news / pending_committees / daily_report — schemas auto-discovered; call them directly, no table lookup needed.
 **Agent-run committee over MCP (no backend LLM key):** `prepare_committee` returns the data blocks, the 6 role
 prompts and `instructions`; play Macro / Quant / Risk (cheap subagents are fine), write the CIO memo yourself,
 then `submit_committee(symbol, transcript, provider, model)` within 6 hours (`provider` = your brand, `model` = the model that
@@ -288,6 +288,10 @@ defense / regime rules and rejects a CIO section with no parseable verdict (fix 
 **Keyless backend (agent mode):** the backend queues work it would otherwise send to a model. `pending_news` lists
 fetched news — `ingest_event` the relevant items with `one_line_claim` / `stance` / `severity` / `affected_symbols`,
 pass the rest as `dismiss_urls`. `pending_committees` lists triggered re-runs — prepare, run, submit each.
+Daily report in agent mode: submit a verdict for every target asset first, then `daily_report` returns the
+report Markdown to deliver; anything in `missing_verdicts` is a failure to report, never something to skip.
+Do the submissions and the `daily_report` call in the same run (it reads today's local date — splitting them
+across midnight makes every asset show as missing).
 `track_asset` takes an optional `target_pct` (0–1 share of total assets, read by `rebalance_plan`) and
 `set_allocations` a `target_pcts` map — use them instead of editing strategy.md; the weights must sum
 to ≤ `target_allocation_stock` (a write that exceeds it is rejected with the current sum).

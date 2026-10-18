@@ -9,7 +9,7 @@
 
 写安全与 CLI / web API 并存同一模型（with_portfolio_tx fcntl 锁）。
 
-工具刻意克制在高频能力（现 35 个）（80+ REST 端点全暴露会撑爆 agent context），
+工具刻意克制在高频能力（现 36 个）（80+ REST 端点全暴露会撑爆 agent context），
 全部复用 service 层 / PortfolioManager / decision_ledger——与 CLI、REST 同源，
 防三 adapter 漂移。委员会 Coordinator 的出题/收卷（prepare_committee /
 submit_committee）2026-10-18 起也在此暴露：方向改为"插件不持模型 key、推理由宿主
@@ -500,6 +500,25 @@ def pending_news(
     _check_advisory()
     from openinvest.services.agent_queue import pending_news as _pending
     return _pending(limit=limit, dismiss_urls=dismiss_urls or [])
+
+
+# 不标幂等：每调一次都往当天 daily 记录追加一段委员会摘要
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def daily_report() -> Dict[str, Any]:
+    """Assemble today's daily report (portfolio, verdicts, performance,
+    holdings digest) and return it as `full_report` Markdown for you to deliver.
+
+    Agent mode (keyless backend): run prepare_committee → roles →
+    submit_committee for every target asset FIRST; this tool then only reads
+    today's submitted verdicts — nothing is re-run by a backend model. Assets
+    without a submitted verdict are listed in `missing_verdicts`: treat any
+    entry there as a failure and report it. Backend mode: runs the backend
+    committee itself (needs a backend LLM key, takes minutes).
+    """
+    _check_advisory()
+    from openinvest.jobs.daily_report import run
+    return json.loads(json.dumps(run(send_email=False, include_report=True),
+                                 ensure_ascii=False, default=str))
 
 
 @_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
