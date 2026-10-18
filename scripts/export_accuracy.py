@@ -16,6 +16,10 @@
   n<30 / direction_hit_rate 被抑制 / 0<n_excluded<30 时数字置 null（计数保留）。
   原因：base_rate_brier = p(1−p) 会泄露整体命中率，与 direction_hit_rate 相减能逆算被排除的那几行的命中
 
+- 每个窗口附 by_model {<model_era>: 同上一份窗口聚合}：换模型后新旧账分开算（model_era = "谁跑的:模型名"，如
+  direct:claude-sonnet-5-5 / hermes:claude-haiku-5-5；模型名不算敏感）。每个模型各自按 n<30 抑制；另外
+  只要有模型子样本 0<n<30（被抑制），其余模型的数字也一并置 null（互补抑制：窗口合计 − 其余模型 = 被抑制那几行）
+
 用法：
     python scripts/export_accuracy.py
     python scripts/export_accuracy.py --jsonl path/to/custom.jsonl
@@ -35,7 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from openinvest.calc.symbols import is_closed_weekend
-from openinvest.jobs.review_calc import calibration_from_pairs, wilson_ci
+from openinvest.jobs.review_calc import calibration_from_pairs, model_era_of, wilson_ci
 
 ROOT = Path(__file__).parent.parent
 
@@ -308,6 +312,40 @@ def _suppress_small_samples(window: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _mask_numbers(window: Dict[str, Any]) -> Dict[str, Any]:
+    """整份窗口聚合只留计数（sample_size / total / n），数字全置 None——互补抑制用（见 _by_model）。"""
+    out = dict(window)
+    out["direction_hit_rate"] = None
+    out["by_direction"] = {
+        b: (dict(c) if b == "unclear" else {k: (v if k == "total" else None) for k, v in c.items()})
+        for b, c in (window.get("by_direction") or {}).items()}
+    keep = ("n", "n_excluded", "n_zero_conf")
+    out["calibration"] = {k: (v if k in keep else None) for k, v in (window.get("calibration") or {}).items()}
+    out["base_rate"] = {k: (v if k == "n" else None) for k, v in (window.get("base_rate") or {}).items()}
+    return out
+
+
+def _by_model(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """窗口内按 model_era 分模型聚合（每个模型 = 一份 _aggregate + 红线 #2 抑制）。
+
+    model_era 取行里的字段；老 jsonl 没有就按同一个纯函数从 input_health + date 重算。
+
+    互补抑制：窗口合计（direction_hit_rate / by_direction / calibration / base_rate）是公开的，
+    若某模型子样本 0<n<30 被抑制，别的模型的数字 + 窗口合计相减就能还原那几行的命中——
+    所以被抑制模型的 sample_size 合计落在 (0, 30) 时，其余模型也只留计数（同 _suppress_small_samples
+    对方向桶的纪律；合计 0 条没有可还原的东西，≥30 条不单点可还原）。
+    """
+    by_era: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        era = str(r.get("model_era") or "") or model_era_of(r.get("input_health"), str(r.get("date") or ""))
+        by_era.setdefault(era, []).append(r)
+    agg = {era: _suppress_small_samples(_aggregate(rs)) for era, rs in sorted(by_era.items())}
+    small = [e for e, a in agg.items() if 0 < int(a["sample_size"]) < MIN_SAMPLE_FOR_PUBLIC]
+    if small and sum(int(agg[e]["sample_size"]) for e in small) < MIN_SAMPLE_FOR_PUBLIC:
+        agg = {e: (a if e in small else _mask_numbers(a)) for e, a in agg.items()}
+    return agg
+
+
 def _filter_by_window(
     rows: List[Dict[str, Any]],
     days: Optional[int],
@@ -351,7 +389,7 @@ def build_summary(jsonl_path: Path) -> Dict[str, Any]:
         "windows": {
             # 红线 #2：公开输出抹掉小样本命中率（_aggregate 仍算原始统计，
             # 抑制只发生在对外这一层）
-            name: _suppress_small_samples(_aggregate(subset))
+            name: {**_suppress_small_samples(_aggregate(subset)), "by_model": _by_model(subset)}
             for name, subset in windows.items()
         },
     }

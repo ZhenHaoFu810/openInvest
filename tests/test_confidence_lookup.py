@@ -116,10 +116,10 @@ def test_bundled_default_is_fleet_only_aggregate():
     """随包默认表：只用舰队（n_live 恒 0），只有聚合数，没有标的（CI 红线 grep 同一份）。"""
     from openinvest.jobs.verdict_review import DEFAULT_LOOKUP_PATH
     data = json.loads(DEFAULT_LOOKUP_PATH.read_text(encoding="utf-8"))
-    assert data["source"] == "fleet"
+    assert data["source"] == "fleet" and data["model"] == "deepseek-v4-flash"
     cells = list(data["by_verdict"].values()) + [data["market_flat"]]
     assert cells and all(c["n_live"] == 0 and c["n"] == c["n_fleet"] for c in cells)
-    assert set(data) <= {"source", "window", "min_n", "by_verdict", "market_flat", "generated_on"}
+    assert set(data) <= {"source", "model", "window", "min_n", "by_verdict", "market_flat", "generated_on"}
 
 
 def test_daily_verdict_review_refreshes_lookup(tmp_path, monkeypatch):

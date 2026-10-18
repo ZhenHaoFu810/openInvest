@@ -50,6 +50,7 @@ from openinvest.jobs.review_calc import (  # noqa: F401
     roundtrip_cost_rate,
     _bucket_lines,
     _calibration_lines,
+    _model_lines,
     _neutrality_lines,
     _flat_band,
     build_confidence_lookup,
@@ -533,9 +534,12 @@ def write_report(reviews: List[VerdictReview], summary: Dict[str, Any]) -> Path:
     lines += _bucket_lines("Holdout（干净业绩 · cutoff 之后）", holdout)
     lines += _bucket_lines("Contaminated（记忆穿越 · cutoff 及之前）", contaminated,
                            note=contaminated.get("note"))
-    # A5：自报置信度校准 + 裁决中性度（live 干净样本，聚合表，不含逐行数据）
-    lines += _calibration_lines(summary["calibration"])
-    lines += _neutrality_lines(summary["neutrality"])
+    # 换模型后新旧账分开算（model_era）：按模型一节在全局校准 / 中性度之前
+    lines += _model_lines(holdout.get("by_model") or {})
+    # A5：自报置信度校准 + 裁决中性度（live 干净样本，聚合表，不含逐行数据）。这两节是全部模型合并的；
+    # 分模型的在上面「按模型」里
+    lines += _calibration_lines(summary["calibration"], " · 全部模型合并")
+    lines += _neutrality_lines(summary["neutrality"], " · 全部模型合并")
 
     # 诚实解读：仅基于 holdout（真业绩）。holdout 被 sub30 抑制或无方向性样本时退化提示。
     lines.append("\n## 诚实解读（仅基于 holdout 干净样本）\n")
@@ -726,7 +730,10 @@ DEFAULT_LOOKUP_PATH = Path(__file__).with_name("confidence_lookup_default.json")
 
 def write_confidence_lookup(reviews: List[VerdictReview]) -> Path:
     """每日复盘尾巴顺手刷新展示查表（纯算术）。样本 = live + 前瞻舰队。邮件/事件提醒/API 读它。"""
-    data = {**build_confidence_lookup(reviews, review_fleet()),
+    from openinvest.utils.llm import get_llm_config_safe
+    # 只用与当前 config 的模型同口径的样本（换模型后旧模型的 30d 命中率不能冒充新模型的）；
+    # 不够 30 的 verdict 在 load_confidence_lookup 里退回包内默认表并注明
+    data = {**build_confidence_lookup(reviews, review_fleet(), model=get_llm_config_safe()[2]),
             "generated_at": datetime.now().isoformat(timespec="seconds")}
     return MemoryStore().write_dream_state(CONFIDENCE_LOOKUP, data)
 
