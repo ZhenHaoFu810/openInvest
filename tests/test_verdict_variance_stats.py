@@ -70,11 +70,12 @@ def test_public_summary_is_anonymous_and_aggregate_only():
               "runs": [_run("HOLD", 0.6, 0)] * 3},
              {"date": "2030-01-04", "symbol": "BBB.AX", "orig": {"verdict": "HOLD"},
               "runs": [_run("HOLD", 0.6, 0)] * 3}]
-    pub = rv.public_summary(items, {"n": 3, "limit": 3, "max_rounds": 1, "generated_at": "2030-01-05T00:00:00+00:00"})
+    pub = rv.public_summary(items, {"n": 3, "limit": 3, "max_rounds": 1, "model": "claude-sonnet-5-5",
+                                 "generated_at": "2030-01-05T00:00:00+00:00"})
     text = json.dumps(pub, ensure_ascii=False)
     for forbidden in ("AAA.HK", "BBB", "2030-", "777", '"items"', '"runs"', '"date"', '"alloc"', "generated_at"):
         assert forbidden not in text, forbidden
-    assert pub["meta"] == {"n": 3, "limit": 3, "max_rounds": 1}
+    assert pub["meta"] == {"n": 3, "limit": 3, "max_rounds": 1, "model": "claude-sonnet-5-5"}   # 模型名不敏感，换模型要并排比
     by = pub["summary"]["by_symbol"]
     assert list(by) == ["A", "B"] and by["A"]["n_runs"] == 6 and by["B"]["n_runs"] == 3   # 重跑数降序
     assert by["B"]["verdict_counts"] == {"ACCUMULATE": 1, "HOLD": 2}

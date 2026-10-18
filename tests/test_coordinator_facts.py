@@ -94,11 +94,23 @@ def _call_mcp(name, args):
 
 def test_mcp_submit_committee(env):
     co._save_brief_facts("TESTSYM", {"regime_brief": REGIME_BRIEF, "sentiment_brief": SENTIMENT_BRIEF})
-    res = _call_mcp("submit_committee", {"symbol": "TESTSYM", "transcript": RAW, "provider": "hermes"})
+    res = _call_mcp("submit_committee", {"symbol": "TESTSYM", "transcript": RAW, "provider": "hermes",
+                                         "model": "claude-haiku-5-5"})
     assert not res.isError
     out = res.structuredContent
     out = out.get("result", out)
     assert out["facts_source"] == "prepare" and out["decision_id"].endswith("/TESTSYM")
+    # 传入的模型名落进存档 Input Health（复盘 model_era = provider:model）；没传记 unknown，不猜
+    from pathlib import Path
+
+    from openinvest.jobs.review_calc import model_era_of
+    h = parse_committee_text(Path(out["saved"]).read_text(encoding="utf-8"))["input_health"]
+    assert h["model"] == "claude-haiku-5-5" and model_era_of(h, "2026-10-20") == "hermes:claude-haiku-5-5"
+    res2 = _call_mcp("submit_committee", {"symbol": "TESTSYM2", "transcript": RAW, "provider": "hermes"})
+    out2 = res2.structuredContent
+    out2 = out2.get("result", out2)
+    h2 = parse_committee_text(Path(out2["saved"]).read_text(encoding="utf-8"))["input_health"]
+    assert h2["model"] == "unknown" and model_era_of(h2, "2026-10-20") == "hermes:unknown"
     bad = _call_mcp("submit_committee", {"symbol": "TESTSYM", "transcript": "=== CIO ===\n还行\n"})
     assert bad.isError and "UNCLEAR" in bad.content[0].text
 

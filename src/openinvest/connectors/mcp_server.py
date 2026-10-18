@@ -1168,6 +1168,7 @@ def submit_committee(
     symbol: Annotated[str, Field(description="Same symbol you passed to prepare_committee.")],
     transcript: Annotated[str, Field(description="All sections, each starting with its separator line: === MACRO ===, === QUANT_R1 ===, === RISK_R1 ===, === QUANT_R2 ===, === RISK_R2 ===, === CIO ===.")],
     provider: Annotated[str, Field(description="Which agent played the roles, e.g. 'hermes', 'claude', 'codex'.")] = "agent",
+    model: Annotated[str, Field(description="Model that actually played the roles, e.g. 'claude-sonnet-5-5'; omitted -> recorded as 'unknown'. The scorecard buckets verdicts by provider:model.")] = "",
 ) -> Dict[str, Any]:
     """Step 2 of the agent-run committee: hand in the transcript you produced
     from `prepare_committee`. The backend parses the CIO memo, applies the same
@@ -1191,7 +1192,7 @@ def submit_committee(
     if not transcript.strip():
         raise ToolError("transcript is empty")
     try:
-        res = save_committee_transcript(symbol, transcript, provider=provider)
+        res = save_committee_transcript(symbol, transcript, provider=provider, model=model)
     except ValueError as e:
         raise ToolError(str(e)) from e
     from pathlib import Path

@@ -58,7 +58,10 @@ All three paths share the **same foundation** — the same prompts, the same dat
 preparation (regime classification + probability framing + deterministic fact
 block), and the same on-disk format
 (`memory/.committee/<date>/<asset>.md`; both Coordinator variants must call `save_committee`
-with `--provider <your-brand>` so the transcript is not mislabeled as claude). The only
+with `--provider <your-brand>` so the transcript is not mislabeled as claude, and
+`--model <the model that plays the 4 roles>`, e.g. `claude-haiku-5-5` — omitted is recorded as
+`unknown`, and the scorecard buckets verdicts per `<provider>:<model>`, so a model swap never
+mixes old and new track records). The only
 difference is "who plays the 4 LLM roles": on Coordinator you play them yourself
 (the model the user already subscribes to); on Direct the configured LLM (billed
 per token) plays them. Verdicts may differ (different models — useful for
@@ -279,7 +282,8 @@ set_allocations / track_asset / untrack_asset / news_sources / add_news_source /
 run_committee / prepare_committee / submit_committee — schemas auto-discovered; call them directly, no table lookup needed.
 **Agent-run committee over MCP (no backend LLM key):** `prepare_committee` returns the data blocks, the 6 role
 prompts and `instructions`; play Macro / Quant / Risk (cheap subagents are fine), write the CIO memo yourself,
-then `submit_committee(symbol, transcript)` within 6 hours. The backend applies its own saved facts for the
+then `submit_committee(symbol, transcript, provider, model)` within 6 hours (`provider` = your brand, `model` = the model that
+plays the roles, e.g. `claude-haiku-5-5`; omitted is recorded as `unknown` and the scorecard buckets by `provider:model`). The backend applies its own saved facts for the
 defense / regime rules and rejects a CIO section with no parseable verdict (fix it and resubmit).
 `track_asset` takes an optional `target_pct` (0–1 share of total assets, read by `rebalance_plan`) and
 `set_allocations` a `target_pcts` map — use them instead of editing strategy.md; the weights must sum

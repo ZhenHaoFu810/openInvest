@@ -285,14 +285,16 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
             "请依次扮演 6 段输出，用以下分隔符：\n"
             "=== MACRO ===\n=== QUANT_R1 ===\n=== RISK_R1 ===\n"
             "=== QUANT_R2 ===\n=== RISK_R2 ===\n=== CIO ===\n"
-            f"全部完成后交卷：MCP 调 submit_committee(symbol, transcript)，"
-            f"或命令行 stdin 喂给 save_command（插件 run.sh；pip 安装用 openinvest save_committee {symbol}）"
+            f"全部完成后交卷：MCP 调 submit_committee(symbol, transcript, provider, model)，"
+            f"或命令行 stdin 喂给 save_command 加 --provider <你的品牌> --model <实际扮演角色的模型名>"
+            f"（插件 run.sh；pip 安装用 openinvest save_committee {symbol}）。"
+            "模型名只有你知道；不传记 unknown，复盘按 provider:model 分桶"
         ),
     }
 
 
 def save_committee_transcript(
-    symbol: str, raw: str, *, provider: str = "claude",
+    symbol: str, raw: str, *, provider: str = "claude", model: str = "",
 ) -> Dict[str, Any]:
     """把 coordinator 模式产出的 6 段 transcript 落到 memory/.committee/<date>/<asset>.md
 
@@ -307,6 +309,10 @@ def save_committee_transcript(
             "claude (skill mode)"，不管谁调用；Hermes Coordinator 协议接入后
             如果不分开标注，Dreaming 按 provider 分桶的模式挖掘、事后排障
             都会把 Hermes 跑的 transcript 误判成 Claude 产出。
+        model: 实际扮演 4 角色的**模型名**（host 传进来，如 Hermes 的 "claude-haiku-5-5"），
+            写进 Input Health 的 `model`。Coordinator 没有 Direct 路径那个全局 LLM 配置可读，
+            host 不说就没人知道——复盘按 model_era（"<provider>:<model>"）分桶，换模型后新旧账
+            不混。没传 / 空白 → 记 "unknown"（宁可显式 unknown，也不拿 Direct 的配置冒充）。
     """
     from datetime import datetime
 
@@ -396,7 +402,8 @@ def save_committee_transcript(
     )
     health = build_input_health(
         report_like, verdict, None,
-        {"entry": "coordinator", "provider": provider, "has_df": bool(has_df),
+        {"entry": "coordinator", "provider": provider, "model": (model or "").strip() or "unknown",
+         "has_df": bool(has_df),
          # prepare = 防御/regime 用后端存的事实；transcript = 没有可用快照，退回解析 agent 文字
          "facts_source": "prepare" if facts else "transcript"},
     )

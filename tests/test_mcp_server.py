@@ -204,7 +204,7 @@ CLI_ALIASES = {
     "record_existing_position": ("buy", "--existing-position"),
     "add_news_source": ("news_sources", "--add"),
     "remove_news_source": ("news_sources", "--remove"),
-    "submit_committee": ("save_committee", None),
+    "submit_committee": ("save_committee", "--model"),   # MCP 的 model 参数 ↔ CLI --model（复盘按 provider:model 分桶）
 }
 
 

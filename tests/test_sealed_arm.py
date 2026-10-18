@@ -204,7 +204,10 @@ def test_control_arm_transcript_format_is_unchanged(monkeypatch, tmp_path):
     assert out["macro_view"] == "MACRO-VIEW-FROM-CONTROL"      # 供下一臂借用
     text = (tmp_path / "memory" / ".backtest" / DAY / "AAPL.md").read_text(encoding="utf-8")
     h = parse_committee_text(text)["input_health"]
-    assert "arm" not in h and "votes" not in h and "model" not in h
+    assert "arm" not in h and "votes" not in h
+    # 唯一新增的健康位：模型名（舰队的模型要能在 transcript 里核对）；决策内容与其余格式不变
+    from openinvest.utils.llm import get_llm_config_safe
+    assert h["model"] == get_llm_config_safe()[2]
     assert "**Debate**" not in text
 
 

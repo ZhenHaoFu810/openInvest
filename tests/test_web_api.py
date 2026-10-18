@@ -1231,6 +1231,26 @@ def test_committee_save_roundtrip(skill_client, tmp_store):
     assert "verdict" in b["verdict"] and "confidence" in b["verdict"]
 
 
+def test_committee_save_records_provider_and_model(skill_client, tmp_store):
+    """hub 的 persist RPC 也要把 host 的 provider / model 落进 Input Health（复盘 model_era = provider:model）；
+    不传 = claude:unknown。"""
+    import json as _json
+    import re
+    from pathlib import Path
+    transcript = "=== CIO ===\nverdict: HOLD\nconfidence: 0.55\nalloc_cny: 0\n"
+
+    def _health(body):
+        r = skill_client.post("/api/committee/save", json={"symbol": "NDQ.AX", "transcript": transcript, **body})
+        assert r.status_code == 200
+        text = Path(r.json()["saved"]).read_text(encoding="utf-8")
+        return _json.loads(re.search(r"## Input Health.*?```json\n(.*?)\n```", text, re.S).group(1))
+
+    h = _health({"provider": "hermes", "model": "claude-haiku-5-5"})
+    assert (h["provider"], h["model"]) == ("hermes", "claude-haiku-5-5")
+    h = _health({})
+    assert (h["provider"], h["model"]) == ("claude", "unknown")
+
+
 def test_committee_save_empty_transcript_400(skill_client):
     r = skill_client.post("/api/committee/save", json={
         "symbol": "NDQ.AX", "transcript": "   \n",

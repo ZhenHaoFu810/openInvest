@@ -352,6 +352,21 @@ SUGGESTED_ALLOC_CNY: 0
 """
 
 
+def test_coordinator_save_records_model_and_era(mem_root):
+    """host 传的模型名进 Input Health；没传记 "unknown"（不拿 Direct 的全局配置冒充）。
+    复盘 model_era = "<provider>:<model>"。"""
+    from openinvest.core.runner.coordinator import save_committee_transcript
+    from openinvest.jobs.review_calc import model_era_of
+    r = save_committee_transcript("TESTSYM", _COORD_RAW, provider="hermes", model=" claude-haiku-5-5 ")
+    h = parse_committee_text(Path(r["saved"]).read_text(encoding="utf-8"))["input_health"]
+    assert h["model"] == "claude-haiku-5-5"
+    assert model_era_of(h, "2026-10-20") == "hermes:claude-haiku-5-5"
+    time.sleep(0.01)
+    r = save_committee_transcript("TESTSYM2", _COORD_RAW)
+    h = parse_committee_text(Path(r["saved"]).read_text(encoding="utf-8"))["input_health"]
+    assert h["model"] == "unknown" and model_era_of(h, "2026-10-20") == "claude:unknown"
+
+
 def test_coordinator_save_writes_health_block_and_archives(mem_root, monkeypatch):
     from openinvest.core.runner.coordinator import save_committee_transcript
     r1 = save_committee_transcript("TESTSYM", _COORD_RAW, provider="hermes")

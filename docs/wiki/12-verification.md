@@ -459,6 +459,86 @@ ACCUMULATE（备忘录逐字执行“不否决 + 折扣”），其余臂与 #46
 
 结果：**未出**（判读日前不写任何数字）。
 
+### 8.4 换模型后实验怎么延续（#483，2026-10-18 起）
+
+> 一句话翻译：复盘页和公开数据现在**按模型分开算**，换模型不会把新旧账混在一起；
+> 新模型（Sonnet 5.5）的账从 2026-10-19 起另开一本，数够了才出数字，在此之前旧模型的数字不受影响。
+
+2026-10-18 生产委员会的 LLM 从 `deepseek-v4-flash` 换成 `claude-sonnet-5-5`（[#483](https://github.com/longsizhuo/openInvest/pull/483)）。
+8 / 8.1 / 8.2 的计分板、校准、中性度、反事实账本、置信度查表此前都把两种模型的裁决混在一起算——
+换模型后实验没法继续（新模型的 n=0 被旧模型的 n=300 淹没，看不出变没变）。现在每条裁决带一个派生字段
+`model_era = "<谁跑的>:<模型名>"`（`review_calc.model_era_of`，单一可信源；落进 `verdict_review.jsonl`）：
+
+| 人群 | 谁在跑 | 模型 | model_era | 备注 |
+|---|---|---|---|---|
+| live Direct（日报 cron / `run_committee`） | 后端 Direct 路径 | `claude-sonnet-5-5`（2026-10-19 起的 transcript） | `direct:claude-sonnet-5-5` | Input Health 的 `model` = 落盘时刻的全局 LLM 配置 |
+| Hermes Coordinator | Hermes 的 `delegate_task` 子代理 | Claude Haiku（如 `claude-haiku-5-5`） | `hermes:claude-haiku-5-5` | **host 必须传** `save_committee --model <名>`（MCP：`submit_committee(..., model=<名>)`）；没传记 `unknown`（`hermes:unknown` / `claude:unknown`），不猜 |
+| 纸面舰队 + B4 四臂 | 后端 Direct 路径（cron 钉 DeepSeek） | `deepseek-v4-flash` | `direct:deepseek-v4-flash` | 舰队继续钉 DeepSeek，见下。对照臂 / T2 臂的 transcript 自 2026-10-18 起在 Input Health 记 `model`；更早的行没记，是 `direct:unknown`（复盘的“不止一个模型”警告不把 unknown 当一个模型） |
+| 老存档（没有 Input Health 块） | — | 决议日 ≤ 2026-10-18 的 Direct 行一律 DeepSeek | `direct:deepseek-v4-flash(pre-health)` | 10-18 之后没块的 → `unknown`（不猜）。transcript 有 `**Provider**: X (skill mode)` 行的是 Coordinator 老存档（模型名当时不落盘），归 `X:unknown`，不混进 DeepSeek 基线（live 里目前 6 条 claude） |
+
+**哪些数字按模型分开了**（只测量 / 展示，裁决逻辑一个字没动）：
+
+- **复盘页**（`docs/verdict_accuracy.md`）新增「按模型」一节：holdout 内按 `model_era` 分子桶，各自 n、命中、同尺子基率 / 提升 / CI、反事实账本、校准、中性度；
+  原来的全局校准 / 中性度节标明「全部模型合并」。
+- **公开 JSON**（`docs/accuracy_summary.json`）每个窗口加 `by_model: {<model_era>: {sample_size, direction_hit_rate, ...}}`（同一份窗口聚合 + 同一套 n<30 抑制；模型名不算敏感）。
+  **互补抑制**：窗口合计是公开的，而命中数、命中总数、Brier×n、市场标签数这些量跨模型都是可加的——某个模型的某个量因 n<30 被藏、窗口合计和其余模型的同一个量都公开，
+  「窗口 − 其余模型」就能精确还原那几行。所以**按量族逐个检查**（命中总数 / 各方向桶的命中·提升·CI / 各桶超额 / 校准 / 市场基率 / 各桶 base_rate）：
+  某族在某模型里"有数据却被藏"且窗口该族公开 → 其余模型的同一族也置 null（计数保留）。方向桶粒度也算（评审 #497 的复现：
+  A 看涨 35 条 + B 看涨 5 条，窗口桶 − A 的桶 = B 的 4/5）。同时，方向桶里的 `base_rate`（口径与命中同尺子，HOLD 桶的 base_rate 就是命中率）在样本 <30 时一律抹掉。
+  实际效果：新模型 30d 还没有成熟样本（sample_size=0）时旧模型数字照出；新模型成熟到 1–29 条、或某个方向桶还小的那一段，旧模型对应的 `by_model` 数字也暂时置 null，到 ≥30 条两边一起出。
+- **置信度查表**（邮件 / 事件提醒 / API 里「同类 HOLD 之后 30 天……」那串字）只用与**当前 config 的模型**同口径的样本；
+  某个 verdict 同模型样本不足 30 → 退回包内默认表（只含舰队 DeepSeek 样本），并注明
+  「默认表，deepseek-v4-flash 舰队样本，当前 claude-sonnet-5-5 样本不足」。**所以 Sonnet 期里查表显示的是 DeepSeek 默认表的数**，不是 Sonnet 的；这是有意的，要等同模型样本 ≥30。
+  **只用 Coordinator 的用户**（没有 Direct 配置）同理：过滤用的是 `LLM_MODEL`（没配时取默认 `deepseek-v4-flash`），而他们自己的 live 行是 `claude:unknown` / `hermes:<model>`，
+  对不上，本机表是空的、全部退到默认表，展示串只写「默认表」（默认表的模型和他们“当前配置”都是 deepseek，不加“当前模型样本不足”那段）。
+  这是行为变化：合入前这些行进本机表，合入后不进。想继续用自己的 Coordinator 样本，就把 `LLM_MODEL` 设成 host 传给 `--model` 的那个名字。
+- **B4 四臂报告**（`docs/verdict_accuracy_arms.md`）的臂一览加「模型」列；臂间 / 臂与对照臂用了不止一个模型时报告里直接警告。
+
+**子桶的闸按「30d 已成熟可评分行数」，不是总行数**：Sonnet 期的行要等 30 个日历日才有 `hits["30d"]`，
+总行数先到 30 并不意味着有可展示的数。n<30 的子桶报告页只给 n（含 `n_matured_30d`）。
+
+**Sonnet 期什么时候有数字**：生产每个工作日约 4 条 live 裁决（周末休市资产的周末决议被剔除）。
+总行数到 30 约在 2026-10-28；但 30d 成熟要到决议日 +30 天，所以 30d 命中 / 校准 / 中性度的 n≥30 最早在 **2026-11-27 前后**（不是 11 月中）。
+在那之前「按模型」一节里 Sonnet 那行只有 n。看进度（只读、不写）：
+
+```bash
+# Sonnet 期 live 裁决条数与 30d 已成熟条数（model_era = direct:claude-sonnet-5-5）
+uv run python - <<'PY'
+import json, pathlib
+rows = [json.loads(l) for l in pathlib.Path("memory/.dreams/verdict_review.jsonl").read_text().splitlines()]
+s = [r for r in rows if r.get("model_era") == "direct:claude-sonnet-5-5" and r.get("source") == "live"]
+print("sonnet rows", len(s), "matured 30d", sum(1 for r in s if "30d" in r.get("hits", {})))
+PY
+```
+
+**舰队四臂继续钉 DeepSeek，判读日 2026-12-22 不变。** 8.3 回答的是"结构"问题（投票 / 辩论 / macro-soft 有没有用），
+需要的是各臂之间只差一个变量；中途把舰队换成 Sonnet 会让臂内数据一半 DeepSeek 一半 Sonnet，对照臂也要跟着换，等于重开实验。
+所以 Sonnet 的账只从 live Direct 这一本里长，舰队这本不动。四臂报告现在标模型，若有人改了舰队的 `LLM_MODEL`，报告会直接警告。
+
+**#461 宏观否决要在 Sonnet 跑满一周后重看 Macro 信号分布。** #461 的前提是"Macro 恒为 risk_off、把 Quant 看多的行全压成 HOLD"，
+这是在 DeepSeek 上观察到的；换模型后 Macro 的 SIGNAL 分布可能不是同一个样子。Sonnet 期满一周（2026-10-26 前后）后，统计 `memory/.committee` 近 7 天的 Macro SIGNAL，
+并和换模型前的同长度窗口比（只看分布，不改判据）：
+
+```bash
+# 近 7 个有裁决的日期目录里，Macro Strategist 段的 SIGNAL 分布（live；Sonnet 期）
+cd memory/.committee && for d in $(ls -d 20??-??-?? | tail -7); do for f in $d/*.md; do
+  awk '/^## Macro Strategist/{m=1;next} m&&/^SIGNAL:/{print $2; exit}' "$f"; done; done | sort | uniq -c | sort -rn
+# 换模型前同长度窗口（DeepSeek 期）：把 tail -7 换成 tail -14 | head -7
+```
+
+**Sonnet 方差基线**（A4 在 Sonnet 上重测）见 [`experiments/verdict_variance/README.md`](../../experiments/verdict_variance/README.md) 的「Sonnet 5.5 基线」一节。
+DeepSeek 基线（26.7% / 自报分恒 0.62）不能直接外推到 Sonnet，所以同一天、同一批 30 条上两个模型各重跑 90 次（Sonnet ¥55.68，DeepSeek ¥0.60）：
+
+| | DeepSeek 同日对照 | Sonnet 5.5 |
+|---|---|---|
+| 方向翻转率（30 条） | 20.0%（6/30，区间 9.5–37%） | 6.7%（2/30，区间 1.8–21%） |
+| 自报置信度 | 90/90 = 0.62，标准差 0 | 不是常数：0.55–0.62，68% 恰好 0.60，条内标准差均值 0.010 |
+| 建议金额变异（有非 0 的条） | 6 条，CV 均值 1.33 | 2 条（CV=√3），另 28 条三次全 0 |
+| 裁决分布（90 次） | ACCUMULATE 9 / HOLD 81 | HOLD 88 / TRIM 2 / ACCUMULATE 0 |
+
+读法：Sonnet 方向上更稳（原来抛硬币的那个标的 18/18 全 HOLD），但稳是几乎不动换来的；有效样本只有 4 个输入，两个翻转率的区间重叠，别写成“显著更稳”。
+自报置信度不再是常数，但是否带信息要等 Sonnet 期的校准样本（上面的进度命令）。
+
 ---
 
 ## 局限性 / 不能宣称的事

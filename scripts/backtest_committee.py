@@ -402,7 +402,10 @@ def run_one_day(decision_date: str, asset_symbols: List[str],
                     regime_brief=regime_brief,  # 注入确定性 regime（与 live 一致）
                     persist_to_memory=False,  # 我们手动 persist 到 .backtest/
                 )
-                persist_extra: Dict[str, Any] = {}
+                # 对照臂 / T2 臂（单次抽样、不传 debate_meta）：Input Health 只记模型名一个键——否则舰队的模型在 transcript
+                # 里无从核对（复盘 model_era 会是 direct:unknown），换模型 / 误配 LLM_* 也看不出来。其余键与决策内容不变。
+                from openinvest.utils.llm import get_llm_config_safe
+                persist_extra: Dict[str, Any] = {"input_health": {"model": get_llm_config_safe()[2]}}
                 agg = None
                 if votes > 1:
                     # 密封投票臂：同一份输入独立抽样 votes 次（rounds=1：Quant/Risk 互不可见），

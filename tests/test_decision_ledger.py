@@ -39,6 +39,7 @@ def test_parse_committee_file(tmp_path):
         "alloc_cny": -5000.0,
         "alloc_currency": "CNY",
         "input_health": {},   # 老存档无 Input Health 块 → {}（不猜）
+        "provider": None,     # 只有 Coordinator 落盘的 "**Provider**: X (skill mode)" 行才有（复盘认老 Coordinator 存档用）
         "run_at": None,
         "cio_memo": None,     # MD 样本无 CIO Memo 节
     }

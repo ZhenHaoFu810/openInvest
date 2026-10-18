@@ -50,6 +50,47 @@ UNCLEAR_DIRECTION = "none"
 VERDICT_BUCKETS = ["BUY", "ACCUMULATE", "HOLD", "TRIM", "SELL", "UNCLEAR"]
 
 
+# ---- 模型分桶（model_era）：换模型后新旧账分开算 ----
+# 2026-10-18 生产委员会 LLM 从 deepseek-v4-flash 换成 claude-sonnet-5-5（#483）。复盘页 / 公开 JSON /
+# 校准 / 反事实把两种模型的裁决混在一起算 → 实验在换模型后没法继续。model_era = "<谁跑的>:<模型名>"：
+#   Direct 路径 → "direct:<模型>"（Input Health 的 model，落盘时刻的全局 LLM 配置）
+#   Coordinator → "<provider>:<模型>"（Input Health 的 provider + host 传给 save_committee 的 model，
+#                 没传就是 "<provider>:unknown"，如 "hermes:claude-haiku-5-5" / "claude:unknown"）
+#   老存档没有 Input Health 块 → 只能按日期归：决议日 ≤ MODEL_ERA_CUTOFF = 换模型前唯一的 DeepSeek，
+#                 否则 "unknown"（不猜）
+# 单一可信源在这里：verdict_review（写 jsonl）与 scripts/export_accuracy（读 jsonl，老行没有 model_era 字段时重算）共用。
+MODEL_ERA_CUTOFF = "2026-10-18"
+PRE_HEALTH_ERA = "direct:deepseek-v4-flash(pre-health)"
+UNKNOWN_ERA = "unknown"
+MODEL_ERA_MIN_N = 30      # 红线 #2 同阈值：子桶 30d 已成熟可评分 < 30 只给 n
+DEFAULT_LOOKUP_MODEL = "deepseek-v4-flash"   # 包内默认查表只含舰队样本，舰队钉 DeepSeek（docs/wiki/12 8.4）
+
+
+def model_era_of(input_health: Optional[Dict[str, Any]], date: str, provider: Optional[str] = None) -> str:
+    """(Input Health, 决议日[, Coordinator 的 Provider 行]) → model_era。纯函数。
+
+    provider：老存档没有 Input Health 块、但 transcript 有 "**Provider**: X (skill mode)" 行 = Coordinator（X 扮演角色，
+    模型名当时不落盘）→ "X:unknown"，不能按日期算成 DeepSeek（评审 #497：否则它们混进 Sonnet 前的“旧模型”基线）。"""
+    h = input_health or {}
+    if not h:
+        if provider:
+            return f"{str(provider).strip().lower()}:unknown"
+        return PRE_HEALTH_ERA if str(date or "") <= MODEL_ERA_CUTOFF else UNKNOWN_ERA
+    who = (str(h.get("provider") or "").strip().lower() or "coordinator") \
+        if h.get("entry") == "coordinator" else "direct"
+    return f"{who}:{str(h.get('model') or '').strip() or 'unknown'}"
+
+
+def model_key(name: Optional[str]) -> str:
+    """模型名 → 比较用的键（小写，去掉 "(pre-health)" 后缀）。config 里的原始模型名也走它（可能自带 ":"，不能当 era 拆）。"""
+    return str(name or "").strip().removesuffix("(pre-health)").strip().lower()
+
+
+def era_model(era: str) -> str:
+    """model_era → 模型键（去掉 "<谁>:" 前缀）。查表同口径、四臂混模型提示用。"""
+    return model_key(era.split(":", 1)[1] if ":" in era else era)
+
+
 @dataclass
 class VerdictReview:
     """单次 verdict 的事后评估"""
@@ -76,6 +117,13 @@ class VerdictReview:
     excess_returns: Dict[str, float] = field(default_factory=dict)     # 标的 − 基准（verdict 无关）
     followed_pnl: Dict[str, float] = field(default_factory=dict)       # 照做 vs 现金的净损益（基准币种）
     cost_rate: float = 0.0                 # 该市场往返成本率（小数）
+    # 派生字段：谁用哪个模型跑的这条裁决（见上 model_era_of）。构造时留空即按 input_health + date 派生；
+    # 落进 jsonl 供下游分桶（export_accuracy 读老 jsonl 没有此键时按同一函数重算）。
+    model_era: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.model_era:
+            self.model_era = model_era_of(self.input_health, self.date)
 
 
 # HOLD "没动" 的判定阈值 = K_FLAT × 资产日波动(atr_pct) × sqrt(窗口天数)，再封顶。
@@ -317,6 +365,31 @@ def _summarize_bucket(reviews: List[VerdictReview], *, suppress_rates: bool) -> 
     return bucket
 
 
+def summarize_by_model(reviews: List[VerdictReview], *, min_n: int = MODEL_ERA_MIN_N) -> Dict[str, Any]:
+    """按 model_era 分子桶（给 holdout 用）：各自 n、命中、基率/提升/CI、反事实（=_summarize_bucket）+ 校准 + 中性度。
+
+    换了模型，新模型的账不该和旧模型的账混成一个命中率。子桶的闸按**30d 已成熟可评分行数**（有 hits["30d"]）：
+    < min_n 的子桶**只给 n**（不出命中/基率/反事实/校准/中性度——红线 #2；注意总行数 ≥30 但还没成熟时
+    同样没有可展示的数，所以闸不能只看总行数）。校准 / 中性度只用该子桶的 live 行（与全局口径一致）。
+    子桶按最早决议日排序（旧模型在前）。
+    """
+    out: Dict[str, Any] = {}
+    eras = sorted({r.model_era for r in reviews},
+                  key=lambda e: (min(r.date for r in reviews if r.model_era == e), e))
+    for era in eras:
+        rows = [r for r in reviews if r.model_era == era]
+        n_mat = sum(1 for r in rows if "30d" in r.hits)
+        if n_mat < min_n:
+            out[era] = {"n": len(rows), "n_matured_30d": n_mat, "rates_suppressed_sub30": True,
+                        "live_count": sum(1 for r in rows if r.source == "live"),
+                        "backtest_count": sum(1 for r in rows if r.source == "backtest")}
+            continue
+        live = [r for r in rows if r.source == "live"]
+        out[era] = {**_summarize_bucket(rows, suppress_rates=False), "n_matured_30d": n_mat,
+                    "calibration": calibration_summary(live), "neutrality": neutrality_summary(live)}
+    return out
+
+
 def summarize_verdict_reviews(reviews: List[VerdictReview]) -> Dict[str, Any]:
     """按 contaminated（决议日 ≤ CONTAMINATION_CUTOFF）**强制分桶**聚合。
 
@@ -341,7 +414,8 @@ def summarize_verdict_reviews(reviews: List[VerdictReview]) -> Dict[str, Any]:
         "cutoff": CONTAMINATION_CUTOFF,
         "calibration": calibration_summary(live_holdout),
         "neutrality": neutrality_summary(live_holdout),
-        "holdout": _summarize_bucket(holdout, suppress_rates=len(holdout) < 30),
+        "holdout": {**_summarize_bucket(holdout, suppress_rates=len(holdout) < 30),
+                    "by_model": summarize_by_model(holdout)},
         "contaminated": {
             **_summarize_bucket(contaminated, suppress_rates=False),
             "note": "含记忆穿越,非业绩",
@@ -429,6 +503,36 @@ def _bucket_lines(title: str, bucket: Dict[str, Any], *, note: Optional[str] = N
     )
     return lines
 
+
+
+def _model_lines(by_model: Dict[str, Any]) -> List[str]:
+    """报告页「按模型」一节：先一张索引表（每个 model_era 一行），再给数够的子桶各出一份完整分节。
+    n<30 的子桶只给 n（summarize_by_model 已把数字剥掉）。"""
+    lines = ["\n## 按模型（holdout 内按 model_era 分桶；换模型后新旧账分开算，不混）\n",
+             "> model_era = 谁跑的:模型名。direct = Direct 路径（模型 = 落盘时刻的全局 LLM 配置）；"
+             "hermes / claude 等 = Coordinator 的 host（模型名由 host 传给 save_committee，没传 = unknown）；"
+             "`(pre-health)` = 老存档没有 Input Health 块，按决议日 ≤ "
+             f"{MODEL_ERA_CUTOFF} 归 DeepSeek（有 `Provider: X (skill mode)` 行的是 Coordinator，归 X:unknown）。30d 已成熟可评分 < {MODEL_ERA_MIN_N} 的子桶只给 n（红线 #2）。\n",
+             "| model_era | N | 30d 已成熟 | 30d 命中率 | 95% CI |", "|---|---|---|---|---|"]
+    for era, b in by_model.items():
+        if b.get("rates_suppressed_sub30"):
+            lines.append(f"| {era} | {b['n']} | {b['n_matured_30d']} | n<{MODEL_ERA_MIN_N} 只给 n | — |")
+            continue
+        w = b["by_window"].get("30d", {})
+        lines.append(f"| {era} | {b['n']} | {b['n_matured_30d']} | {_fmt_pct(w.get('hit_rate'))} | "
+                     f"{_fmt_ci(w.get('ci95'))} |")
+    if len(by_model) < 2:
+        return lines + ["\n_只有一个 model_era，细节同上 Holdout 一节。_\n"]
+    for era, b in by_model.items():
+        if b.get("rates_suppressed_sub30"):
+            continue
+        scope = f" · {era}"
+        lines += _bucket_lines(f"按模型 · {era}", b)
+        lines += _calibration_lines(b["calibration"], scope)
+        neu = b["neutrality"]
+        lines += (_neutrality_lines(neu, scope) if neu["n"] >= MODEL_ERA_MIN_N
+                  else [f"\n## 裁决中性度（{era}）\n", f"📊 live 样本量 {neu['n']} < {MODEL_ERA_MIN_N} —— 只给 n。\n"])
+    return lines
 
 
 # =====================================================================
@@ -537,8 +641,8 @@ def neutrality_summary(reviews: List[VerdictReview], window: str = "30d", *,
     return out
 
 
-def _calibration_lines(cal: Dict[str, Any]) -> List[str]:
-    lines = [f"\n## 置信度校准（CIO 自报 vs {cal.get('window', '30d')} 实际命中 · live 干净样本 n={cal['n']}）\n"]
+def _calibration_lines(cal: Dict[str, Any], scope: str = "") -> List[str]:
+    lines = [f"\n## 置信度校准（CIO 自报 vs {cal.get('window', '30d')} 实际命中 · live 干净样本 n={cal['n']}{scope}）\n"]
     zero = (f"另有 {cal['n_zero_conf']} 条自报恰为 0.0（解析失败兜底），不计入。\n"
             if cal.get("n_zero_conf") else "")
     if cal["n"] == 0:
@@ -561,8 +665,8 @@ def _calibration_lines(cal: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _neutrality_lines(neu: Dict[str, Any]) -> List[str]:
-    lines = [f"\n## 裁决中性度（裁决分布 vs 同样本市场 {neu.get('window', '30d')} 实际方向 · live 干净样本 n={neu['n']}）\n"]
+def _neutrality_lines(neu: Dict[str, Any], scope: str = "") -> List[str]:
+    lines = [f"\n## 裁决中性度（裁决分布 vs 同样本市场 {neu.get('window', '30d')} 实际方向 · live 干净样本 n={neu['n']}{scope}）\n"]
     if neu["n"] == 0:
         return lines + ["_无样本_\n"]
     pct = lambda c: "—" if c["share"] is None else f"{c['share']:.0%}"  # noqa: E731
@@ -591,15 +695,23 @@ LOOKUP_FORCED_CONF = 0.4
 
 
 def build_confidence_lookup(live: List[VerdictReview],
-                            fleet: List[VerdictReview] = ()) -> Dict[str, Any]:
+                            fleet: List[VerdictReview] = (), *,
+                            model: Optional[str] = None) -> Dict[str, Any]:
     """按 verdict 的 30d 查表。样本 = live（source=="live"）+ 舰队，都要非污染、30d 已成熟、
     非周末重复（is_closed_weekend），不按自报分剔除（≤0.4 只在展示时打标）。HOLD 的 rate =
     30 天涨跌留在 flat band 内的比例（= hits["30d"]）；有方向的 = 方向判对比例。
     market_flat = 同一批样本（不分 verdict）30 天落在 flat band 内的比例，给 HOLD 当基率对照。
-    每格带来源构成 n_live / n_fleet。n<30 → rate=None。"""
+    每格带来源构成 n_live / n_fleet。n<30 → rate=None。
+
+    model（当前 config 的模型名）给了 → 只收 era_model(model_era) == model 的行：换模型后，旧模型的
+    30d 命中率不能当新模型的"同类决议之后怎样"给用户看。不够 30 的格子照旧 rate=None，由
+    merge_confidence_lookup 退回默认表并注明。None → 不过滤（默认表生成器 / 老调用方）。"""
+    want = model_key(model)
+
     def _ok(r: VerdictReview) -> bool:
         return (not r.contaminated and "30d" in r.hits and r.verdict in EXPECTED_DIRECTION
-                and not is_closed_weekend(r.asset, r.date))
+                and not is_closed_weekend(r.asset, r.date)
+                and (not want or era_model(r.model_era) == want))
 
     pools = {"live": [r for r in live if r.source == "live" and _ok(r)],
              "fleet": [r for r in fleet if _ok(r)]}
@@ -614,6 +726,7 @@ def build_confidence_lookup(live: List[VerdictReview],
     verdicts = sorted({r.verdict for rows in pools.values() for r in rows})
     return {
         "source": "live+fleet", "window": "30d", "min_n": LOOKUP_MIN_N,
+        **({"model": model} if want else {}),
         "by_verdict": {v: _cell(lambda r: r.hits["30d"], lambda r, v=v: r.verdict == v)
                        for v in verdicts},
         "market_flat": _cell(lambda r: r.directions.get("30d") == "flat"),
@@ -638,7 +751,11 @@ def merge_confidence_lookup(local: Optional[Dict[str, Any]],
         else:
             n = int(((tables["local"].get("by_verdict") or {}).get(v) or {}).get("n") or 0)
             out[v] = {"n": n, "rate": None, "from": "local"}
-    return {"by_verdict": out}
+    # 本机表是按哪个模型建的（build_confidence_lookup 的 model）+ 默认表（只含舰队，舰队钉 DeepSeek）是哪个模型：
+    # 退到默认表时展示端据此注明"不是当前模型的样本"。本机表没标模型（老文件 / 测试）→ 不注明，行为不变。
+    meta = {k: v for k, v in (("model", tables["local"].get("model")),
+                              ("default_model", tables["default"].get("model") or DEFAULT_LOOKUP_MODEL)) if v}
+    return {"by_verdict": out, **(meta if meta.get("model") else {})}
 
 
 def is_forced_or_low_confidence(v: Dict[str, Any]) -> bool:
@@ -669,8 +786,12 @@ def confidence_display(v: Dict[str, Any], lookup: Optional[Dict[str, Any]],
     n, rate = int(cell.get("n") or 0), cell.get("rate")
     if rate is None or n < LOOKUP_MIN_N:
         return f"样本不足（n={n}）{raw_txt}"
-    note = ("默认表" if cell.get("from") == "default"
-            else "含纸面舰队样本" if cell.get("n_fleet") else "本机样本")
+    model, dmodel = (lookup or {}).get("model"), (lookup or {}).get("default_model")
+    if cell.get("from") == "default":
+        note = (f"默认表，{dmodel} 舰队样本，当前 {model} 样本不足"
+                if model and dmodel and model_key(model) != model_key(dmodel) else "默认表")
+    else:
+        note = "含纸面舰队样本" if cell.get("n_fleet") else "本机样本"
     if verdict == "HOLD":
         mk = cell.get("market_flat") or {}
         base = f"；同期市场横盘基率 {mk['rate']:.0%}" if mk.get("rate") is not None else ""
@@ -1088,6 +1209,12 @@ def arm_report_lines(name: str, cmp_: Dict[str, Any], stab: Optional[Dict[str, A
     return lines
 
 
+def _era_counts(rows: List[VerdictReview]) -> str:
+    """一批行的 model_era 计数（"direct:xxx × 12、direct:yyy × 3"）。"""
+    c = Counter(r.model_era for r in rows)
+    return "、".join(f"{e} × {n}" for e, n in sorted(c.items())) or "—"
+
+
 def arms_report_lines(arms: Dict[str, List[VerdictReview]], control: List[VerdictReview], *,
                       min_n: int = ARM_MIN_N) -> List[str]:
     """全部实验臂的复盘报告（markdown 行）：臂一览 → 四臂并排 → 每臂 vs 对照臂 → debate 轮数 → macro-soft H3。
@@ -1095,9 +1222,19 @@ def arms_report_lines(arms: Dict[str, List[VerdictReview]], control: List[Verdic
     names = [n for n in ARM_ORDER if n in arms]
     sb = side_by_side(control, {n: arms[n] for n in names}, min_n=min_n)
     cols = ["control"] + names
-    lines = ["## 臂一览\n", "| 臂 | 配置 | 臂内行数 | macro 与对照不是同一份而剔除的行 |", "|---|---|---|---|",
-             f"| control | {ARM_LABELS['control']} | {sum(1 for r in control if _arm_row_ok(r))} | — |"]
-    lines += [f"| {n} | {ARM_LABELS[n]} | {len(arms[n])} | {macro_unshared_count(arms[n])} |" for n in names]
+    ctl = [r for r in control if _arm_row_ok(r)]
+    lines = ["## 臂一览\n", "| 臂 | 配置 | 模型（model_era × 行数） | 臂内行数 | macro 与对照不是同一份而剔除的行 |",
+             "|---|---|---|---|---|",
+             f"| control | {ARM_LABELS['control']} | {_era_counts(ctl)} | {len(ctl)} | — |"]
+    lines += [f"| {n} | {ARM_LABELS[n]} | {_era_counts(arms[n])} | {len(arms[n])} | {macro_unshared_count(arms[n])} |"
+              for n in names]
+    all_models = [era_model(r.model_era) for rows in [ctl, *arms.values()] for r in rows]
+    models = set(all_models) - {"unknown"}      # 没记录模型的行（模型名落盘前的老存档）不算一个“模型”
+    if len(models) > 1:
+        lines.append("\n> ⚠️ 臂内 / 臂间用了不止一个模型（" + "、".join(sorted(models)) + "）：同日同标的配对里模型不同 = 多了一个混淆变量，"
+                     "判读时按上表分开看，别把它们当同一臂读。\n")
+    if "unknown" in all_models:
+        lines.append(f"\n> 另有 {all_models.count('unknown')} 行没有记录模型（老存档 / host 没传），上表标 unknown，不参与上面的混用判断。\n")
     lines += [
         f"\n## 并排（所有在场的臂同时具备的 {sb['keys']} 个 标的×日；同一批输入、同一批市场结果）\n",
         "| | " + " | ".join(c for c in cols) + " |", "|---|" + "---|" * len(cols)]
@@ -1268,7 +1405,9 @@ __all__ = [
     "ROUNDTRIP_COST_BPS", "DEFAULT_ROUNDTRIP_COST_BPS", "roundtrip_cost_rate", "counterfactual_pnl",
     "VerdictReview", "K_FLAT", "FLAT_CEILING_PCT",
     "_flat_band", "_is_hit", "_summarize_bucket",
-    "summarize_verdict_reviews", "_bucket_lines",
+    "summarize_verdict_reviews", "summarize_by_model", "_bucket_lines", "_model_lines",
+    "MODEL_ERA_CUTOFF", "PRE_HEALTH_ERA", "UNKNOWN_ERA", "MODEL_ERA_MIN_N", "DEFAULT_LOOKUP_MODEL",
+    "model_era_of", "era_model", "model_key",
     "CALIBRATION_BINS", "CALIBRATION_MIN_N", "calibration_from_pairs", "calibration_summary",
     "neutrality_summary", "_calibration_lines", "_neutrality_lines",
     "LOOKUP_MIN_N", "LOOKUP_FORCED_CONF", "build_confidence_lookup", "merge_confidence_lookup",

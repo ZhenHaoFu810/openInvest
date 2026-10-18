@@ -214,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="实际扮演 4 角色的 agent 品牌（claude/hermes/...），写进 transcript "
              "**Provider** 行。不传默认 claude（历史兼容）。",
     )
+    p.add_argument(
+        "--model", default=None,
+        help="实际扮演 4 角色的模型名（如 claude-haiku-5-5），写进 Input Health 的 model，"
+             "复盘按 provider:model 分桶。host 应该传；不传记 unknown。",
+    )
     p.set_defaults(func=cmd_save_committee)
 
     p = sub.add_parser(
