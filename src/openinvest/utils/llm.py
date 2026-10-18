@@ -153,8 +153,9 @@ def get_thinking_disable_kwargs(model: Optional[str] = None) -> dict:
 
 
 def is_claude(model: Optional[str] = None) -> bool:
-    # ponytail: 按名前缀判，老 Claude（≤4.6）也跟着走下面两条规则；真要钉老模型再细分
-    return (model or get_llm_config_safe()[2]).lower().startswith("claude")
+    # 子串判：覆盖网关前缀（anthropic/claude-…、anthropic.claude-…）。
+    # ponytail: 老 Claude（≤4.6）也跟着走下面两条规则；真要钉老模型再细分
+    return "claude" in (model or get_llm_config_safe()[2]).lower()
 
 
 def sampling_kwargs(model: Optional[str], temperature: float) -> dict:
