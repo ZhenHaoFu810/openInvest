@@ -281,10 +281,12 @@ def _h_save_committee(args: argparse.Namespace) -> None:
     if not raw.strip():
         _print_json({"error": "empty stdin"})   # 与本地行为一致（exit 0）
         return
-    _print_response_or_die(_request(
-        "POST", "/api/committee/save",
-        json_body={"symbol": args.symbol, "transcript": raw}, timeout=120,
-    ))
+    # provider / model 只在 host 传了才带（旧 hub 忽略未知字段；新 hub 缺省 = claude / unknown）
+    body = {"symbol": args.symbol, "transcript": raw}
+    for k in ("provider", "model"):
+        if getattr(args, k, None):
+            body[k] = getattr(args, k)
+    _print_response_or_die(_request("POST", "/api/committee/save", json_body=body, timeout=120))
 
 
 def _h_event_check(args: argparse.Namespace) -> None:

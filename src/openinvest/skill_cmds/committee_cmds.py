@@ -237,4 +237,5 @@ def cmd_save_committee(args: argparse.Namespace) -> None:
         return
     from openinvest.core.committee_runner import save_committee_transcript
     provider = getattr(args, "provider", None) or "claude"
-    _print_json(save_committee_transcript(args.symbol, raw, provider=provider))
+    model = getattr(args, "model", None) or ""
+    _print_json(save_committee_transcript(args.symbol, raw, provider=provider, model=model))

@@ -280,6 +280,16 @@ def test_save_committee_pipes_stdin(recorder, monkeypatch, capfd):
     assert _out_json(capfd)["verdict"]["verdict"] == "HOLD"
 
 
+def test_save_committee_forwards_provider_and_model(recorder, monkeypatch, capfd):
+    """host 传的 provider / model 要带到 hub（复盘按 provider:model 分桶）；没传就不带，旧 hub 行为不变。"""
+    monkeypatch.setattr(sys, "stdin", io.StringIO("=== CIO ===\nverdict: HOLD\n"))
+    recorder["routes"][f"POST {BASE}/api/committee/save"] = FakeResponse(200, {"saved": "x", "verdict": {}})
+    rd.maybe_dispatch_remote(Namespace(cmd="save_committee", symbol="NDQ.AX",
+                                       provider="hermes", model="claude-haiku-5-5"))
+    body = recorder["calls"][0]["json"]
+    assert body["provider"] == "hermes" and body["model"] == "claude-haiku-5-5"
+
+
 def test_save_committee_empty_stdin_no_http(recorder, monkeypatch, capfd):
     monkeypatch.setattr(sys, "stdin", io.StringIO("  \n"))
     assert rd.maybe_dispatch_remote(Namespace(cmd="save_committee", symbol="NDQ.AX")) is True
