@@ -276,11 +276,14 @@ record_execution / ingest_event / buy / record_existing_position / sell / deposi
 record_dividend / record_fee / record_split / record_return_of_capital /
 place_fund_order / confirm_fund_order / cancel_fund_order /
 set_allocations / track_asset / untrack_asset / news_sources / add_news_source / remove_news_source /
-run_committee / prepare_committee / submit_committee — schemas auto-discovered; call them directly, no table lookup needed.
+run_committee / prepare_committee / submit_committee / pending_news / pending_committees — schemas auto-discovered; call them directly, no table lookup needed.
 **Agent-run committee over MCP (no backend LLM key):** `prepare_committee` returns the data blocks, the 6 role
 prompts and `instructions`; play Macro / Quant / Risk (cheap subagents are fine), write the CIO memo yourself,
 then `submit_committee(symbol, transcript)` within 6 hours. The backend applies its own saved facts for the
 defense / regime rules and rejects a CIO section with no parseable verdict (fix it and resubmit).
+**Keyless backend (agent mode):** the backend queues work it would otherwise send to a model. `pending_news` lists
+fetched news — `ingest_event` the relevant items with `one_line_claim` / `stance` / `severity` / `affected_symbols`,
+pass the rest as `dismiss_urls`. `pending_committees` lists triggered re-runs — prepare, run, submit each.
 `track_asset` takes an optional `target_pct` (0–1 share of total assets, read by `rebalance_plan`) and
 `set_allocations` a `target_pcts` map — use them instead of editing strategy.md; the weights must sum
 to ≤ `target_allocation_stock` (a write that exceeds it is rejected with the current sum).
