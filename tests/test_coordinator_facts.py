@@ -101,3 +101,15 @@ def test_mcp_submit_committee(env):
     assert out["facts_source"] == "prepare" and out["decision_id"].endswith("/TESTSYM")
     bad = _call_mcp("submit_committee", {"symbol": "TESTSYM", "transcript": "=== CIO ===\n还行\n"})
     assert bad.isError and "UNCLEAR" in bad.content[0].text
+
+
+def test_resubmit_without_facts_drops_stale_path_snapshot(env):
+    mem, _ = env
+    co._save_brief_facts("TESTSYM", {"regime_brief": REGIME_BRIEF, "sentiment_brief": SENTIMENT_BRIEF,
+                                     "path_profile": {"p_down_30": 0.4}})
+    co.save_committee_transcript("TESTSYM", RAW)
+    snap = mem / ".committee" / datetime.now().strftime("%Y-%m-%d") / "TESTSYM_path.json"
+    assert snap.exists()
+    co._brief_facts_path("TESTSYM").unlink()                    # 快照没了 / 过期
+    co.save_committee_transcript("TESTSYM", RAW)
+    assert not snap.exists()                                     # 不留一份和新裁决对不上的路径快照

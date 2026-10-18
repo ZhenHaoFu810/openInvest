@@ -1162,8 +1162,8 @@ def prepare_committee(
     return json.loads(json.dumps(out, ensure_ascii=False, default=str))
 
 
-# 同一份 transcript 重交 = 当天同一份裁决（旧的归档进 runs/），按幂等写标注
-@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+# 不标幂等：重交会再记一条反事实干预与 dream 事件，客户端不该当成可放心自动重试的调用
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
 def submit_committee(
     symbol: Annotated[str, Field(description="Same symbol you passed to prepare_committee.")],
     transcript: Annotated[str, Field(description="All sections, each starting with its separator line: === MACRO ===, === QUANT_R1 ===, === RISK_R1 ===, === QUANT_R2 ===, === RISK_R2 ===, === CIO ===.")],

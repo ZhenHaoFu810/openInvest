@@ -249,7 +249,11 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
             "risk_round2_after_quant": build_risk_officer_prompt(target, "rebuttal"),
             "cio": build_cio_prompt(target),
         },
-        "save_command": f"openinvest save_committee {symbol}",
+        # 插件用户经 run.sh（uvx 拉后端，PATH 上不一定有 openinvest）；pip/uvx 装的直接
+        # `openinvest save_committee`；MCP agent 用 submit_committee 工具（三者同一入口）
+        "save_command": f"bash <plugin>/skills/invest/scripts/run.sh save_committee {symbol}",
+        "save_alternatives": [f"openinvest save_committee {symbol}",
+                              "MCP tool: submit_committee(symbol, transcript)"],
         "instructions": (
             "Claude: 这是 Investment Committee 的 3 轮流程：\n"
             "  Round 1 - 独立陈述: Macro (跨资产共享) + Quant + Risk Officer 各自看自己的数据\n"
@@ -282,7 +286,7 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
             "=== MACRO ===\n=== QUANT_R1 ===\n=== RISK_R1 ===\n"
             "=== QUANT_R2 ===\n=== RISK_R2 ===\n=== CIO ===\n"
             f"全部完成后交卷：MCP 调 submit_committee(symbol, transcript)，"
-            f"或命令行 stdin 喂给 openinvest save_committee {symbol}"
+            f"或命令行 stdin 喂给 save_command（插件 run.sh；pip 安装用 openinvest save_committee {symbol}）"
         ),
     }
 
@@ -434,7 +438,10 @@ def save_committee_transcript(
     path.write_text("\n".join(lines), encoding="utf-8")
     # 路径预测快照（path_review 闭环），与 Direct session 6.5 同一入口；顾问模式同样跳过
     from openinvest.utils.advisory import is_advisory_mode
-    if facts and facts.get("path_profile") and not is_advisory_mode():
+    if not facts:
+        # 没有出题快照的重交：别让当天早先那份 _path.json 和新裁决对不上
+        (out_dir / f"{safe_sym}_path.json").unlink(missing_ok=True)
+    elif facts.get("path_profile") and not is_advisory_mode():
         try:
             from openinvest.core.runner.intervention import _save_path_snapshot
             _save_path_snapshot(symbol, regime or "", current_price, facts.get("atr_pct"),

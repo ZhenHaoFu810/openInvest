@@ -67,6 +67,10 @@ MONEY_TOOLS = {"buy", "sell", "deposit", "withdraw", "record_existing_position",
                "untrack_asset", "remove_news_source"}
 
 
+# 写、非资金、但重复调用会累加记录（反事实干预 / dream 事件）
+NON_IDEMPOTENT_WRITES = {"submit_committee"}
+
+
 def test_tool_annotations():
     """危险等级标注精确契约：读工具 readOnlyHint、动钱工具 destructiveHint，
     一个都不能漏——client 的确认弹窗策略全靠这个（issue #133 merge 后差距 #1）。"""
@@ -79,6 +83,9 @@ def test_tool_annotations():
             assert ann.readOnlyHint is True, name
         elif name in MONEY_TOOLS:
             assert ann.readOnlyHint is False and ann.destructiveHint is True, name
+        elif name in NON_IDEMPOTENT_WRITES:
+            assert ann.readOnlyHint is False and ann.destructiveHint is False \
+                and ann.idempotentHint is False, name
         else:  # record_execution / run_committee / ingest_event：写但幂等
             assert ann.readOnlyHint is False and ann.destructiveHint is False \
                 and ann.idempotentHint is True, name
