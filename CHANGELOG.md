@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.56.0](https://github.com/longsizhuo/openInvest/compare/v0.55.0...v0.56.0) (2026-10-18)
+
+
+### Features
+
+* **fund:** 场外基金两段式——下单扣现金记在途，确认日按净值到账（ADR-027 PR3） ([#490](https://github.com/longsizhuo/openInvest/issues/490)) ([36e9e32](https://github.com/longsizhuo/openInvest/commit/36e9e32db2ecb25a7c0430df2c97c17427acdd13))
+
 ## [0.55.0](https://github.com/longsizhuo/openInvest/compare/v0.54.1...v0.55.0) (2026-10-18)
 
 
