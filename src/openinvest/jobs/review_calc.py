@@ -66,10 +66,15 @@ MODEL_ERA_MIN_N = 30      # 红线 #2 同阈值：子桶 30d 已成熟可评分 
 DEFAULT_LOOKUP_MODEL = "deepseek-v4-flash"   # 包内默认查表只含舰队样本，舰队钉 DeepSeek（docs/wiki/12 8.4）
 
 
-def model_era_of(input_health: Optional[Dict[str, Any]], date: str) -> str:
-    """(Input Health, 决议日) → model_era。纯函数。"""
+def model_era_of(input_health: Optional[Dict[str, Any]], date: str, provider: Optional[str] = None) -> str:
+    """(Input Health, 决议日[, Coordinator 的 Provider 行]) → model_era。纯函数。
+
+    provider：老存档没有 Input Health 块、但 transcript 有 "**Provider**: X (skill mode)" 行 = Coordinator（X 扮演角色，
+    模型名当时不落盘）→ "X:unknown"，不能按日期算成 DeepSeek（评审 #497：否则它们混进 Sonnet 前的“旧模型”基线）。"""
     h = input_health or {}
     if not h:
+        if provider:
+            return f"{str(provider).strip().lower()}:unknown"
         return PRE_HEALTH_ERA if str(date or "") <= MODEL_ERA_CUTOFF else UNKNOWN_ERA
     who = (str(h.get("provider") or "").strip().lower() or "coordinator") \
         if h.get("entry") == "coordinator" else "direct"
@@ -507,7 +512,7 @@ def _model_lines(by_model: Dict[str, Any]) -> List[str]:
              "> model_era = 谁跑的:模型名。direct = Direct 路径（模型 = 落盘时刻的全局 LLM 配置）；"
              "hermes / claude 等 = Coordinator 的 host（模型名由 host 传给 save_committee，没传 = unknown）；"
              "`(pre-health)` = 老存档没有 Input Health 块，按决议日 ≤ "
-             f"{MODEL_ERA_CUTOFF} 归 DeepSeek。30d 已成熟可评分 < {MODEL_ERA_MIN_N} 的子桶只给 n（红线 #2）。\n",
+             f"{MODEL_ERA_CUTOFF} 归 DeepSeek（有 `Provider: X (skill mode)` 行的是 Coordinator，归 X:unknown）。30d 已成熟可评分 < {MODEL_ERA_MIN_N} 的子桶只给 n（红线 #2）。\n",
              "| model_era | N | 30d 已成熟 | 30d 命中率 | 95% CI |", "|---|---|---|---|---|"]
     for era, b in by_model.items():
         if b.get("rates_suppressed_sub30"):

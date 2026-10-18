@@ -80,7 +80,7 @@
 <main>
   <div class="brand"><span>多空对照</span><a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openInvest</a></div>
   <form id="ask">
-    <input id="code" inputmode="numeric" autocomplete="off" maxlength="6" pattern="\d{6}" placeholder="6 位基金代码，例如 110011" aria-label="基金代码" required>
+    <input id="code" autocomplete="off" autocapitalize="characters" maxlength="10" pattern="[0-9A-Za-z.]{1,10}" placeholder="基金或股票代码，例如 110011、600519" aria-label="基金或股票代码" required>
     <button id="go" type="submit">复核</button>
   </form>
   <p class="hint" id="hint">网页为试用版：每人每天 3 次，约 30 秒。</p>
@@ -202,7 +202,7 @@ function drawDist(rows) {
 function showFacts(f, sample) {
   lastFacts = f;
   $("name").textContent = f.name;
-  $("meta").textContent = `${f.code}　净值 ${f.nav}　${f.nav_date}` + (sample ? "　今日示例，输入代码可换一只" : "");
+  $("meta").textContent = `${f.code}　${f.kind === "stock" ? "收盘" : "净值"} ${f.nav}　${f.nav_date}` + (sample ? "　今日示例，输入代码可换一只" : "");
   const chips = $("chips"); chips.textContent = ""; f.chips.forEach((c) => chips.append(el("span", null, c)));
   $("rep").hidden = false; startWait();
   drawChart(f.chart); drawDist(f.dist);

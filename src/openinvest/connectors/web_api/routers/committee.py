@@ -522,5 +522,8 @@ def committee_save(body: CommitteeSaveRequest = Body(...)) -> Dict[str, Any]:
     if not body.transcript.strip():
         raise HTTPException(status_code=400, detail="transcript 为空")
     from openinvest.core.committee_runner import save_committee_transcript
-    return save_committee_transcript(body.symbol, body.transcript,
-                                     provider=body.provider or "claude", model=body.model)
+    try:
+        return save_committee_transcript(body.symbol, body.transcript,
+                                         provider=body.provider or "claude", model=body.model)
+    except ValueError as e:   # CIO 解析不出裁决：不存档
+        raise HTTPException(status_code=422, detail=str(e)) from e

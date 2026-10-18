@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.57.0](https://github.com/longsizhuo/openInvest/compare/v0.56.1...v0.57.0) (2026-10-18)
+
+
+### Features
+
+* **committee:** agent-run committee over MCP with backend-held facts ([#495](https://github.com/longsizhuo/openInvest/issues/495)) ([164e5d2](https://github.com/longsizhuo/openInvest/commit/164e5d2e63980a0ae17f280ce1be549f821ed5e8))
+
+## [0.56.1](https://github.com/longsizhuo/openInvest/compare/v0.56.0...v0.56.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* make LLM failures loud instead of silent successes ([#489](https://github.com/longsizhuo/openInvest/issues/489)) ([4c96774](https://github.com/longsizhuo/openInvest/commit/4c96774c1c5be19056cbdf5cc7e83f7b7a9bc989))
+
 ## [0.56.0](https://github.com/longsizhuo/openInvest/compare/v0.55.0...v0.56.0) (2026-10-18)
 
 

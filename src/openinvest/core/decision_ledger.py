@@ -95,6 +95,9 @@ def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
         except json.JSONDecodeError:
             pass
     run_m = re.search(r"\*\*Run at\*\*:\s*(\S+)", text)
+    # Coordinator 落盘的 Provider 行形如 "**Provider**: claude (skill mode)"（Direct 路径没有这行）。
+    # 老存档没有 Input Health 块时，复盘靠它认出"Claude/Hermes 扮演角色"的 Coordinator 行，别按日期算成 DeepSeek。
+    prov_m = re.search(r"\*\*Provider\*\*:\s*(\S+)\s*\(skill mode\)", text)
     # CIO memo 正文：_persist 版 "## CIO Memo (Round 3)" 到下一个 "---\n\n## " 分节；
     # Coordinator 版 "### CIO" 到下一个 "### ROLE" 小节（任意全大写角色名，不写死——
     # 以后 CIO 后面加别的小节也不会被吞进 memo）。取不到 → None（缓存命中时让 agent 不必再 explain_decision）。
@@ -118,6 +121,7 @@ def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
         "alloc_cny": alloc,
         "alloc_currency": alloc_m.group(1) if alloc_m else None,
         "input_health": health,
+        "provider": prov_m.group(1).lower() if prov_m else None,
         "run_at": run_m.group(1) if run_m else None,
         "cio_memo": memo_m.group(1).strip() if memo_m else None,
     }

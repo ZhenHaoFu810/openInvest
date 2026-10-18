@@ -369,7 +369,7 @@ def test_committee_run_and_status_done(client, monkeypatch):
 
     # 等异步任务完成
     import time
-    deadline = time.time() + 5
+    deadline = time.time() + 15  # CI 慢机器上 5s 偶发不够（2026-10-18 #495 首跑 flake）
     final = None
     while time.time() < deadline:
         s = client.get(f"/api/committee/{task_id}")

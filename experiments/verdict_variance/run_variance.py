@@ -229,7 +229,8 @@ def main() -> None:
     from openinvest.utils.llm import get_llm_config_safe
     model = get_llm_config_safe()[2]          # 汇总里记模型名：换模型后要和旧基线并排比
     print(f"取到 {len(items)} 条最近 live 裁决，{len(syms)} 个不同标的 {syms}；计划重跑 {len(items) * a.n} 次委员会"
-          f"（模型 {model}；DeepSeek 单价≈¥{len(items) * a.n * 0.0067:.1f}，Sonnet≈¥0.08/次）", file=sys.stderr)
+          f"（模型 {model}；按实测单价：DeepSeek ≈¥0.0067/次 → ¥{len(items) * a.n * 0.0067:.1f}，"
+          f"Sonnet 5.5 ≈¥0.67/次 → ¥{len(items) * a.n * 0.67:.0f}）", file=sys.stderr)
     if a.dry_run:
         demo = [{"date": "d", "symbol": "X", "orig": {"verdict": "HOLD"},
                  "runs": [{"verdict": "HOLD", "confidence": 0.6, "alloc": 0},

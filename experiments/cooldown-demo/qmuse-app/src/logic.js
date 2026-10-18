@@ -78,7 +78,7 @@ function drawDist(rows) {
 function showFacts(f, sample) {
   lastFacts = f;
   $("name").textContent = f.name;
-  $("meta").textContent = `${f.code}　净值 ${f.nav}　${f.nav_date}` + (sample ? "　今日示例，输入代码可换一只" : "");
+  $("meta").textContent = `${f.code}　${f.kind === "stock" ? "收盘" : "净值"} ${f.nav}　${f.nav_date}` + (sample ? "　今日示例，输入代码可换一只" : "");
   const chips = $("chips"); chips.textContent = ""; f.chips.forEach((c) => chips.append(el("span", null, c)));
   $("rep").hidden = false; startWait();
   drawChart(f.chart); drawDist(f.dist);
