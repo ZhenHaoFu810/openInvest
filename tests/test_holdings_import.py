@@ -141,11 +141,6 @@ def test_commit_non_destructive():
     assert pm.reloaded
 
 
-if __name__ == "__main__":
-    import sys
-    sys.exit(pytest.main([__file__, "-q"]))
-
-
 def test_commit_rejects_usd_ounce_gold_but_keeps_other_rows():
     """#462：黄金按 USD/盎司解析 → 与 buy 同一道 gold_booking 闸拒收；整批不失败，其他行照常入账。"""
     pm = FakePM({"holdings": [], "cash": {}})
@@ -166,3 +161,8 @@ def test_commit_books_cny_gram_gold_with_proxy_kind():
     assert s["added_holdings"] == ["GC=F"] and s["rejected_holdings"] == {}
     gold = pm.state["holdings"][0]
     assert gold["proxy_kind"] == "gold_cny_per_gram" and gold["kind"] == "metal" and gold["unit_label"] == "克"
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(pytest.main([__file__, "-q"]))
