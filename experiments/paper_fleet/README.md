@@ -59,7 +59,7 @@ verdict_review / dreaming / #141 样本计数都只读 `.backtest`,碰不到它�
 | `--macro-soft-arm` | `memory/.backtest_macrosoft/<今天>/` | CIO 规则 2 换成“Macro risk_off 且 STRENGTH<8 时不否决、金额 ×(10−STRENGTH)/10”（#461；运行期 patch，live prompt 不变；锚点失效 → 只跳过这一臂） |
 
 落盘：Input Health 多 `arm` 标签（`sealed_n3` / `debate_r4` / `macrosoft_r1`）、`macro_signal` / `macro_strength` / `macro_shared`（这行的 macro 是否确是对照臂同日同标的那份，不是的复盘时剔掉），sealed 另有 `votes` / `flip` / `split`，
-debate 另有 `final_round` / `converged`；同日已落盘的标的跳过（断点续跑）；sealed 臂任一次抽样失败 → 该标的不落盘。对照臂、T2 臂、live 裁决一个字节都不变
+debate 另有 `final_round` / `converged`；同日已落盘的标的跳过（断点续跑）；sealed 臂任一次抽样失败 → 该标的不落盘。对照臂、T2 臂的决策内容、live 裁决一个字节都不变（对照臂 / T2 臂的 Input Health 自 2026-10-18 起多一个 `model` 键，复盘 model_era 据此认模型；更早的行没有，记 `direct:unknown`）
 （`tests/test_sealed_arm.py` 守）。
 
 - 复盘：`verdict_review` 每日 job 尾巴调 `run_arms()`，每臂写独立的 `memory/.dreams/verdict_review_<臂>.jsonl`，加一份

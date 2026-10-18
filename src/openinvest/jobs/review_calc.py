@@ -1223,10 +1223,13 @@ def arms_report_lines(arms: Dict[str, List[VerdictReview]], control: List[Verdic
              f"| control | {ARM_LABELS['control']} | {_era_counts(ctl)} | {len(ctl)} | — |"]
     lines += [f"| {n} | {ARM_LABELS[n]} | {_era_counts(arms[n])} | {len(arms[n])} | {macro_unshared_count(arms[n])} |"
               for n in names]
-    models = {era_model(r.model_era) for rows in [ctl, *arms.values()] for r in rows}
+    all_models = [era_model(r.model_era) for rows in [ctl, *arms.values()] for r in rows]
+    models = set(all_models) - {"unknown"}      # 没记录模型的行（模型名落盘前的老存档）不算一个“模型”
     if len(models) > 1:
         lines.append("\n> ⚠️ 臂内 / 臂间用了不止一个模型（" + "、".join(sorted(models)) + "）：同日同标的配对里模型不同 = 多了一个混淆变量，"
                      "判读时按上表分开看，别把它们当同一臂读。\n")
+    if "unknown" in all_models:
+        lines.append(f"\n> 另有 {all_models.count('unknown')} 行没有记录模型（老存档 / host 没传），上表标 unknown，不参与上面的混用判断。\n")
     lines += [
         f"\n## 并排（所有在场的臂同时具备的 {sb['keys']} 个 标的×日；同一批输入、同一批市场结果）\n",
         "| | " + " | ".join(c for c in cols) + " |", "|---|" + "---|" * len(cols)]

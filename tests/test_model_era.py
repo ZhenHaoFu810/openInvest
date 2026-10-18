@@ -252,3 +252,12 @@ def test_arm_report_labels_models_and_warns_on_mixed_models():
     mixed = "\n".join(rc.arms_report_lines(arm_mixed, ctl))
     assert "direct:claude-sonnet-5-5 × 1" in mixed and "不止一个模型" in mixed
     assert "claude-sonnet-5-5" in mixed.split("不止一个模型", 1)[1].split("\n", 1)[0]
+
+
+def test_arm_report_rows_without_recorded_model_are_not_a_second_model():
+    """舰队对照臂 / T2 臂 transcript 在记录模型之前是 direct:unknown：不能因此报“不止一个模型”，只提示有 N 行没记录。"""
+    ctl = [_rv(health={"schema": 1}, day="2026-10-12") for _ in range(2)]      # 块里没有 model
+    arm = {"sealed": [_rv(health={"schema": 1, "model": "deepseek-v4-flash", "arm": "sealed_n3"}, day="2026-10-12")]}
+    txt = "\n".join(rc.arms_report_lines(arm, ctl))
+    assert "direct:unknown × 2" in txt and "不止一个模型" not in txt
+    assert "另有 2 行没有记录模型" in txt
