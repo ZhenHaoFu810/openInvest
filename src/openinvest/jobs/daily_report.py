@@ -458,9 +458,27 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
     asset_committees: Dict[str, Dict[str, Any]] = {}
     macro_view = ""
     event_brief = ""
+    # agent 模式（后端不调模型）：委员会已由宿主 Agent 逐个 prepare → submit，这里只读当天交卷；
+    # 没交卷的标的列入 missing_verdicts（日报照出，但调用方必须当失败处理，绝不拿后端模型补跑）
+    from openinvest.utils.llm import reasoning_by_agent
+    agent_mode = reasoning_by_agent()
+    missing_verdicts: List[str] = []
 
     if not target_symbols_to_run:
         log.error("所有 target_assets 都因 staleness 被 skip; session 不跑")
+    elif agent_mode:
+        from openinvest.core.committee_runner import load_submitted_committee
+        for sym in target_symbols_to_run:
+            rec = load_submitted_committee(sym, today)
+            if rec is None:
+                missing_verdicts.append(sym)
+                skipped_assets.add(sym)
+                store.dream_event({"phase": "committee_missing", "symbol": sym, "date": today})
+                continue
+            asset_committees[sym] = rec
+        macro_view = next((r["macro_view"] for r in asset_committees.values() if r.get("macro_view")), "")
+        if missing_verdicts:
+            log.error("agent 模式：这些标的今天没有交卷 %s", missing_verdicts)
     else:
         from openinvest.core.committee_runner import run_committee_session
 
@@ -563,7 +581,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
             "path_lines": path_lines,
             "cio_memo": r["report"].cio_memo,
         })
-    if t_inputs:
+    if t_inputs and not agent_mode:   # agent 模式后端不调模型 → 用 builder 的确定性一句话
         # 只有 LLM 调用 + 输出解析在 graceful 守卫内（外部依赖才配 graceful）
         try:
             from openinvest.capabilities.sdk_agent import SDKAgent
@@ -637,10 +655,18 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         neutrality=neutrality,
     )
 
+    if missing_verdicts:
+        # 渲染层把 skipped 一律写成"数据缺失"——没交卷要单独、置顶说清楚
+        full_report = (f"> ⚠️ 今天这些标的没有委员会裁决（agent 模式下由宿主 Agent 交卷，未收到）："
+                       f"{', '.join(missing_verdicts)}。本日报不含它们的裁决。\n\n{full_report}")
+
     # 5) Append 给 Dreaming（被跳过的资产标 N/A）
     daily_block = f"**委员会摘要**\n\n- 宏观: {macro_view[:200]}\n\n**资产裁决**:"
     for a in target_assets:
         sym = a["symbol"]
+        if sym in missing_verdicts:
+            daily_block += f"\n- {a.get('display_name', sym)} ({sym}): MISSING（Agent 未交卷）"
+            continue
         if sym in skipped_assets:
             daily_block += f"\n- {a.get('display_name', sym)} ({sym}): SKIPPED（数据缺失）"
             continue
@@ -684,6 +710,8 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         "date": today,
         "assets": [a["symbol"] for a in target_assets],
         "skipped_assets": sorted(skipped_assets),
+        # agent 模式：目标标的里今天没交卷的（调用方必须当失败处理）
+        "missing_verdicts": missing_verdicts,
         "data_warnings": data_warnings,
         "email": email_status,
         "verdicts": {
