@@ -139,7 +139,7 @@ def anonymize_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def public_summary(items: List[Dict[str, Any]], meta: Dict[str, Any]) -> Dict[str, Any]:
-    return {"meta": {k: meta[k] for k in ("n", "limit", "max_rounds") if k in meta},
+    return {"meta": {k: meta[k] for k in ("n", "limit", "max_rounds", "model", "note") if k in meta},
             "summary": anonymize_summary(summarize(items))}
 
 
@@ -226,8 +226,10 @@ def main() -> None:
     a.summary_out = a.summary_out or a.out.with_name(f"summary_{day}.json")
     items = recent_live_items(home, a.limit)
     syms = sorted({it["symbol"] for it in items})
+    from openinvest.utils.llm import get_llm_config_safe
+    model = get_llm_config_safe()[2]          # 汇总里记模型名：换模型后要和旧基线并排比
     print(f"取到 {len(items)} 条最近 live 裁决，{len(syms)} 个不同标的 {syms}；计划重跑 {len(items) * a.n} 次委员会"
-          f"（≈¥{len(items) * a.n * 0.0067:.1f}）", file=sys.stderr)
+          f"（模型 {model}；DeepSeek 单价≈¥{len(items) * a.n * 0.0067:.1f}，Sonnet≈¥0.08/次）", file=sys.stderr)
     if a.dry_run:
         demo = [{"date": "d", "symbol": "X", "orig": {"verdict": "HOLD"},
                  "runs": [{"verdict": "HOLD", "confidence": 0.6, "alloc": 0},
@@ -252,7 +254,7 @@ def main() -> None:
     lock = Lock()
 
     def dump() -> None:
-        meta = {"n": a.n, "limit": a.limit, "max_rounds": a.max_rounds}
+        meta = {"n": a.n, "limit": a.limit, "max_rounds": a.max_rounds, "model": model}
         a.out.parent.mkdir(parents=True, exist_ok=True)
         a.out.write_text(json.dumps({
             "meta": {**meta, "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -276,7 +278,7 @@ def main() -> None:
         list(pool.map(work, syms))
     dump()
     print(f"明细 → {a.out}\n匿名汇总 → {a.summary_out}", file=sys.stderr)
-    print(json.dumps(public_summary(items, {"n": a.n, "limit": a.limit, "max_rounds": a.max_rounds}),
+    print(json.dumps(public_summary(items, {"n": a.n, "limit": a.limit, "max_rounds": a.max_rounds, "model": model}),
                      ensure_ascii=False, indent=2))
 
 

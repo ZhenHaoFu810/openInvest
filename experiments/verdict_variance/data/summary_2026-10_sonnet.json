@@ -1,0 +1,70 @@
+{
+ "meta": {
+  "n": 3,
+  "limit": 30,
+  "max_rounds": 1,
+  "model": "claude-sonnet-5-5",
+  "note": "PARTIAL: 6 of 30 planned items (18 of 90 planned reruns), stopped early on cost. Not a baseline yet - see README."
+ },
+ "summary": {
+  "n_items": 6,
+  "distinct_symbols": 4,
+  "n_runs": 16,
+  "direction_flip_rate": 0.0,
+  "direction_flip_ci95": [
+   0.0,
+   0.39
+  ],
+  "pair_flip_rate": 0.0,
+  "label_flip_rate": 0.0,
+  "conf_std_mean": 0.0085,
+  "conf_std_median": 0.0058,
+  "alloc_cv_mean": null,
+  "alloc_cv_median": null,
+  "alloc_cv_n_items": 0,
+  "alloc_all_zero_items": 6,
+  "rerun_vs_orig_direction_diff_rate": 0.125,
+  "by_symbol": {
+   "A": {
+    "n_items": 2,
+    "n_runs": 5,
+    "verdict_counts": {
+     "HOLD": 5
+    },
+    "pair_flip_rate": 0.0,
+    "conf_mean": 0.6,
+    "conf_std": 0.0
+   },
+   "B": {
+    "n_items": 2,
+    "n_runs": 5,
+    "verdict_counts": {
+     "HOLD": 5
+    },
+    "pair_flip_rate": 0.0,
+    "conf_mean": 0.608,
+    "conf_std": 0.011
+   },
+   "C": {
+    "n_items": 1,
+    "n_runs": 3,
+    "verdict_counts": {
+     "HOLD": 3
+    },
+    "pair_flip_rate": 0.0,
+    "conf_mean": 0.5767,
+    "conf_std": 0.0252
+   },
+   "D": {
+    "n_items": 1,
+    "n_runs": 3,
+    "verdict_counts": {
+     "HOLD": 3
+    },
+    "pair_flip_rate": 0.0,
+    "conf_mean": 0.6,
+    "conf_std": 0.0
+   }
+  }
+ }
+}
