@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Optional
 
 from openinvest.core.portfolio_manager import gold_booking
 
+# gold_booking 的示例是给现金买入写的；导入 / onboarding 的是已有仓位，照抄会再扣一次现金（CR #499）
+EXISTING_POSITION_HINT = ("（导入的是已有仓位：补录时用 buy --existing-position / "
+                          "MCP record_existing_position，不扣现金）")
+
 _HOLDINGS_PARSE_SYSTEM_PROMPT = """你是金融数据解析助手。把用户的自然语言持仓描述解析成严格 JSON。
 
 输出 schema（无 markdown 无解释）：
@@ -251,8 +255,7 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
             except ValueError as e:
                 # 只拒这一行，其余持仓照常入账。gold_booking 的示例是给现金买入写的；导入的是已有仓位，
                 # 照抄会再扣一次现金（CR #499），所以补一句走 existing-position 的提示
-                rejected[norm["symbol"]] = (f"{e}（导入的是已有仓位：补录时用 buy --existing-position / "
-                                           f"MCP record_existing_position，不扣现金）")
+                rejected[norm["symbol"]] = f"{e}{EXISTING_POSITION_HINT}"
                 continue
             holdings.append(norm)
             existing.add(norm["symbol"])
