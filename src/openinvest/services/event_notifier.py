@@ -101,7 +101,9 @@ def _build_discord_text(
         lines.append(f"{icon} {e.get('one_line_claim', '')} `[{syms}]`")
     if len(events) > 6:
         lines.append(f"…… 另有 {len(events) - 6} 条，见邮件")
-    if committee_task_id:
+    if committee_task_id and str(committee_task_id).startswith("queued:"):
+        lines.append("⚙️ 委员会重跑已排队，等宿主 Agent 来跑（后端不调模型）")
+    elif committee_task_id:
         lines.append(
             f"⚙️ 已自动触发委员会重跑：{api_base_url.rstrip('/')}/api/committee/{committee_task_id}"
         )
@@ -142,7 +144,10 @@ def _build_markdown(
     holdings_snapshot: Dict[str, Dict[str, Any]],
 ) -> str:
     lines: List[str] = ["# 事件预警 (Event Watch)"]
-    if committee_task_id:
+    if committee_task_id and str(committee_task_id).startswith("queued:"):
+        lines.append("\n> 投资委员会重跑已排队，等宿主 Agent 来跑（agent 模式，后端不调模型）；"
+                     "Agent 交卷后裁决照常进日报。")
+    elif committee_task_id:
         url = f"{api_base_url.rstrip('/')}/api/committee/{committee_task_id}"
         lines.append(
             f"\n> 已自动触发投资委员会重跑：[{committee_task_id}]({url})\n"

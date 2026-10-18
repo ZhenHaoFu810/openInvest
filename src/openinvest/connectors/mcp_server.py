@@ -9,7 +9,7 @@
 
 写安全与 CLI / web API 并存同一模型（with_portfolio_tx fcntl 锁）。
 
-工具刻意克制在高频能力（现 33 个）（80+ REST 端点全暴露会撑爆 agent context），
+工具刻意克制在高频能力（现 35 个）（80+ REST 端点全暴露会撑爆 agent context），
 全部复用 service 层 / PortfolioManager / decision_ledger——与 CLI、REST 同源，
 防三 adapter 漂移。委员会 Coordinator 的出题/收卷（prepare_committee /
 submit_committee）2026-10-18 起也在此暴露：方向改为"插件不持模型 key、推理由宿主
@@ -437,10 +437,22 @@ def ingest_event(
     source: Annotated[str, Field(description="Publisher name (e.g. 'Reuters') — the news outlet.")] = "",
     published_at: Annotated[Optional[str], Field(description="ISO 8601 publication time, if known.")] = None,
     ingested_by: Annotated[str, Field(description="Your own agent identity (e.g. 'hermes') for provenance; distinct from source.")] = "host-agent",
+    one_line_claim: Annotated[Optional[str], Field(description="Your one-sentence factual summary. Fill this (plus stance and severity) to ingest without any backend model — preferred.")] = None,
+    stance: Annotated[Optional[str], Field(description="For the holdings: 'risk', 'opportunity' or 'neutral'. Required with one_line_claim.")] = None,
+    severity: Annotated[Optional[str], Field(description="'low', 'mid' or 'high'. Required with one_line_claim.")] = None,
+    event_type: Annotated[Optional[str], Field(description="e.g. 'macro', 'policy', 'earnings', 'geopolitics', 'commodity', 'other'.")] = None,
+    affected_symbols: Annotated[Optional[List[str]], Field(description="yfinance tickers the event materially affects, e.g. ['GC=F'].")] = None,
+    entities: Annotated[Optional[List[str]], Field(description="Key entities (countries, companies, central banks), lowercase.")] = None,
 ) -> Dict[str, Any]:
     """Feed a finance news item you (the host agent) found into the event
-    ledger. The backend LLM normalizes it, grades severity, maps affected
-    symbols, and stores it for committee RAG recall.
+    ledger, graded and mapped to affected symbols, stored for committee RAG
+    recall.
+
+    Preferred: normalize it yourself — pass `one_line_claim`, `stance`,
+    `severity` (and ideally `affected_symbols`). The backend then only
+    validates and stores it; no backend model is involved. Without those
+    fields the backend model normalizes it, which fails when the backend runs
+    keyless (agent mode) — you get an error telling you which fields to add.
 
     You have far better search reach than the self-hosted crawler (including
     Chinese-language sources) — proactively feed news relevant to the user's
@@ -460,14 +472,46 @@ def ingest_event(
     Returns:
         Ingestion result with the normalized event id(s), dedup status, and
         `committee_task_id` — set when a new holding-relevant event (severity
-        ≥ mid, non-neutral) triggered a rate-limited committee re-run. This
-        tool is disabled in advisory mode.
+        ≥ mid, non-neutral) triggered a rate-limited committee re-run. In
+        agent mode it is "queued:<id>": the re-run waits for you in
+        `pending_committees`. This tool is disabled in advisory mode.
     """
     _check_advisory()
     from openinvest.services.event_ingest import ingest_events
     return ingest_events([{"title": title, "url": url, "snippet": snippet,
-                           "source": source, "published_at": published_at}],
+                           "source": source, "published_at": published_at,
+                           "one_line_claim": one_line_claim, "stance": stance, "severity": severity,
+                           "event_type": event_type, "affected_symbols": affected_symbols,
+                           "entities": entities}],
                          ingested_by=ingested_by)
+
+
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+def pending_news(
+    limit: Annotated[int, Field(description="Max items to return.", ge=1, le=100)] = 30,
+    dismiss_urls: Annotated[Optional[List[str]], Field(description="URLs you reviewed and judged irrelevant to the holdings; they won't be offered again.")] = None,
+) -> Dict[str, Any]:
+    """News the backend fetched but did not normalize because reasoning is
+    delegated to you (agent mode). For each relevant item call `ingest_event`
+    with `one_line_claim` / `stance` / `severity` / `affected_symbols`; pass
+    the irrelevant ones back here as `dismiss_urls`. Items leave the queue once
+    ingested or dismissed, and expire after 48h.
+    """
+    _check_advisory()
+    from openinvest.services.agent_queue import pending_news as _pending
+    return _pending(limit=limit, dismiss_urls=dismiss_urls or [])
+
+
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+def pending_committees() -> Dict[str, Any]:
+    """Committee re-runs that events or price moves requested while reasoning
+    is delegated to you (agent mode). For each item run `prepare_committee`,
+    the roles, then `submit_committee`; an item is done once a newer verdict
+    for that symbol is submitted. Requests expire after 24h.
+    """
+    _check_advisory()
+    from openinvest.services.agent_queue import pending_committees as _pending
+    return _pending()
 
 
 # ---------- 新闻源管理（用户级额外源，INVEST_HOME/rss_feeds.yml） ----------

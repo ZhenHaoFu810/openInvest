@@ -427,7 +427,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ts", help="事件时间 ISO 8601（可选）")
     p.add_argument("--ingested-by", dest="ingested_by", default="host-agent",
                    help="喂料 agent 身份（溯源，落 events.ingested_by；区别于 --source=新闻来源）")
+    p.add_argument("--claim", help="你自己写的一句话事实（带上它 + --stance + --severity 就不需要后端模型）")
+    p.add_argument("--stance", choices=["risk", "opportunity", "neutral"])
+    p.add_argument("--severity", choices=["low", "mid", "high"])
+    p.add_argument("--event-type", dest="event_type")
+    p.add_argument("--symbols", help="受影响的 ticker，逗号分隔（如 GC=F,NDQ.AX）")
+    p.add_argument("--entities", help="关键实体，逗号分隔")
     p.set_defaults(func=cmd_ingest_event)
+
+    p = sub.add_parser("pending_news",
+                       help="agent 模式：后端抓到但没归一化的新闻（等你结构化后 ingest_event）")
+    p.add_argument("--limit", type=int, default=30)
+    p.add_argument("--dismiss", nargs="*", default=[], metavar="URL", help="判定无关的 url，不再出现")
+    p.set_defaults(func=cmd_pending_news)
+
+    p = sub.add_parser("pending_committees",
+                       help="agent 模式：事件 / 价格触发、等你跑的委员会重跑请求")
+    p.set_defaults(func=cmd_pending_committees)
 
     p = sub.add_parser(
         "news_sources",

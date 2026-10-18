@@ -37,6 +37,9 @@ def _isolate_invest_env(monkeypatch):
     from openinvest.core.config import reset_config
     for key in [k for k in os.environ if k.startswith("INVEST_")] + list(OUTBOUND_KEYS):
         monkeypatch.delenv(key, raising=False)
+    # 测试环境没有 LLM key，reasoning_by_agent() 自动判会落到 agent 模式；既有测试断言的是
+    # backend 行为，默认钉 backend，测 agent 模式的测试在 body 里 setenv("…", "agent")
+    monkeypatch.setenv("INVEST_REASONING_BY", "backend")
     reset_config()
     yield
     reset_config()

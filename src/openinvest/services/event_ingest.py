@@ -23,13 +23,18 @@ log = logging.getLogger(__name__)
 # 宿主 agent 自报身份（落 events.ingested_by，之后渲染进 Macro brief 头行）只放行这几类字符，
 # 其余替换成 _ 并截到 32：防止用身份串伪造 brief 头行（"] [risk/high] [GC=F"、换行）
 _AGENT_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]")
+_STANCES = {"risk", "opportunity", "neutral"}
+_SEVERITIES = {"low", "mid", "high"}
 
 
 def ingest_events(items: List[Dict[str, Any]], *, ingested_by: str = "host-agent") -> Dict[str, Any]:
     """把 agent 提供的原始新闻批量走归一化管道入库。
 
     Args:
-        items: [{title(必填), url(必填), snippet?, source?, published_at?}, ...]
+        items: [{title(必填), url(必填), snippet?, source?, published_at?,
+                 one_line_claim?, stance?, severity?, event_type?, affected_symbols?, entities?}, ...]
+            带 one_line_claim（+ 合法 stance / severity）= Agent 已结构化，直接校验入库、不调模型；
+            不带 = 交后端 LLM 归一化（agent 模式下没有后端模型 → 报错让 Agent 自己结构化）
         ingested_by: 喂料 agent 身份（如 "hermes" / "claude-code"），落 events.ingested_by
             （溯源：坏 verdict 反查坏输入是谁喂的）。source 是**新闻来源**（落
             sources.src_name=agent:<source>），两者语义不同。
@@ -48,6 +53,7 @@ def ingest_events(items: List[Dict[str, Any]], *, ingested_by: str = "host-agent
     from openinvest.services.news_sources import RawNewsItem
 
     raw: List[RawNewsItem] = []
+    fields: Dict[str, Dict[str, Any]] = {}   # url → agent 自己给的结构化字段（有 one_line_claim 才算）
     for it in items:
         title = (it.get("title") or "").strip()
         url = (it.get("url") or "").strip()
@@ -62,6 +68,14 @@ def ingest_events(items: List[Dict[str, Any]], *, ingested_by: str = "host-agent
             snippet=(it.get("snippet") or "").strip(),
             published_at=it.get("published_at"),
         ))
+        if (it.get("one_line_claim") or "").strip():
+            stance = str(it.get("stance") or "").lower()
+            severity = str(it.get("severity") or "").lower()
+            if stance not in _STANCES or severity not in _SEVERITIES:
+                return {"status": "error",
+                        "error": f"结构化事件 stance 须为 {sorted(_STANCES)}、severity 须为 "
+                                 f"{sorted(_SEVERITIES)}，收到 stance={stance!r} severity={severity!r}"}
+            fields[url] = {**it, "stance": stance, "severity": severity}
 
     store = EventStore(embedding_dim=DEFAULT_DIM)
     unseen = [it for it in raw if not store.is_seen_url(it.url)]
@@ -70,17 +84,47 @@ def ingest_events(items: List[Dict[str, Any]], *, ingested_by: str = "host-agent
         return {"status": "ok", "ingested": 0, "duplicates": duplicates, "events": [],
                 "committee_task_id": None}
 
-    normalized = normalize(unseen)
-    if not normalized:
-        # normalize 空返回 = 缺 LLM key 或全批失败——对 agent 必须显式，不能装成功
-        from openinvest.utils.llm import get_llm_config_safe
-        ak, *_ = get_llm_config_safe()
-        if not ak:
+    # Agent 已结构化的：直接走归一化同一个校验器入库，不调模型
+    from openinvest.services.embeddings import embed_text
+    from openinvest.services.event_normalizer import _sanitize_event
+    normalized = []
+    for k, item in enumerate(i for i in unseen if i.url in fields):
+        f = fields[item.url]
+        ne = _sanitize_event({
+            "idx": k, "one_line_claim": f["one_line_claim"], "stance": f["stance"],
+            "severity": f["severity"], "event_type": f.get("event_type"),
+            "entities": f.get("entities") or [], "affected_symbols": f.get("affected_symbols") or [],
+            "ts": f.get("ts") or f.get("published_at") or "",
+        }, offset=0)
+        ne.raw_item = item
+        ne.embedding = embed_text(ne.event["one_line_claim"])
+        normalized.append(ne)
+    plain = [i for i in unseen if i.url not in fields]
+    rejected: List[str] = []
+    _hint = ("补 one_line_claim（一句话事实）、stance（risk/opportunity/neutral）、"
+             "severity（low/mid/high），可选 event_type / affected_symbols / entities")
+    from openinvest.utils.llm import reasoning_by_agent
+    if plain and reasoning_by_agent():
+        # 结构化的照常入库，只拒没结构化的（后端不调模型，没法替你归一化）
+        if not normalized:
             return {"status": "error",
-                    "error": "缺 LLM key，事件归一化不可用",
-                    "hint": "在 $INVEST_HOME/.env 配 DEEPSEEK_API_KEY（或 LLM_API_KEY），"
-                            "归一化/判级由后端 LLM 完成"}
-        return {"status": "error", "error": "归一化失败（LLM 调用异常），事件未入库"}
+                    "error": "后端不调模型（agent 模式）：这条新闻需要你先归一化再交",
+                    "hint": _hint}
+        rejected = [i.url for i in plain]
+        plain = []
+    if plain:
+        llm_events = normalize(plain)
+        if not llm_events:
+            # normalize 空返回 = 缺 LLM key 或全批失败——对 agent 必须显式，不能装成功
+            from openinvest.utils.llm import get_llm_config_safe
+            ak, *_ = get_llm_config_safe()
+            if not ak:
+                return {"status": "error",
+                        "error": "缺 LLM key，事件归一化不可用",
+                        "hint": "自己归一化后带 one_line_claim / stance / severity 再交（不需要后端 key），"
+                                "或在 $INVEST_HOME/.env 配 LLM_API_KEY 让后端归一化"}
+            return {"status": "error", "error": "归一化失败（LLM 调用异常），事件未入库"}
+        normalized.extend(llm_events)
 
     out = []
     new_events: List[Dict[str, Any]] = []
@@ -116,5 +160,8 @@ def ingest_events(items: List[Dict[str, Any]], *, ingested_by: str = "host-agent
         task_id = trigger_for_new_events(new_events, store=store)["committee_task_id"]
     except Exception as e:  # 事件已入库，触发失败不能让 agent 以为没喂进去
         log.warning(f"[event_ingest] 触发闸失败: {type(e).__name__}: {e}")
-    return {"status": "ok", "ingested": len(out), "duplicates": duplicates, "events": out,
-            "committee_task_id": task_id}
+    result = {"status": "ok", "ingested": len(out), "duplicates": duplicates, "events": out,
+              "committee_task_id": task_id}
+    if rejected:
+        result.update({"status": "partial", "rejected_urls": rejected, "hint": _hint})
+    return result

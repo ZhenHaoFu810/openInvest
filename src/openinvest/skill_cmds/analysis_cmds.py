@@ -36,6 +36,8 @@ __all__ = [
     "cmd_discipline",
     "cmd_event_check",
     "cmd_ingest_event",
+    "cmd_pending_news",
+    "cmd_pending_committees",
     "cmd_news_sources",
     "cmd_decisions",
     "cmd_explain_decision",
@@ -319,14 +321,32 @@ def cmd_record_execution(args: argparse.Namespace) -> None:
 def cmd_ingest_event(args) -> None:
     """agent 投喂新闻进事件账本（等价 MCP ingest_event，#153 方案①）"""
     from openinvest.services.event_ingest import ingest_events
+    def _csv(v):
+        return [x.strip() for x in (v or "").split(",") if x.strip()] or None
     result = ingest_events([{
         "title": args.title, "url": args.url,
         "snippet": args.snippet or "", "source": args.source or "",
         "published_at": args.ts,
+        "one_line_claim": getattr(args, "claim", None), "stance": getattr(args, "stance", None),
+        "severity": getattr(args, "severity", None), "event_type": getattr(args, "event_type", None),
+        "affected_symbols": _csv(getattr(args, "symbols", None)),
+        "entities": _csv(getattr(args, "entities", None)),
     }], ingested_by=getattr(args, "ingested_by", "host-agent") or "host-agent")
     _print_json(result)
     if result.get("status") == "error":
         sys.exit(1)
+
+
+def cmd_pending_news(args) -> None:
+    """agent 模式待办：等 Agent 归一化的新闻（等价 MCP pending_news）"""
+    from openinvest.services.agent_queue import pending_news
+    _print_json(pending_news(limit=args.limit, dismiss_urls=args.dismiss or []))
+
+
+def cmd_pending_committees(args) -> None:
+    """agent 模式待办：触发的委员会重跑请求（等价 MCP pending_committees）"""
+    from openinvest.services.agent_queue import pending_committees
+    _print_json(pending_committees())
 
 
 def cmd_news_sources(args) -> None:

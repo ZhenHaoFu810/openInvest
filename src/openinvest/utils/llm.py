@@ -79,6 +79,18 @@ def get_llm_config_safe(
     return api_key, base_url, model, provider
 
 
+
+def reasoning_by_agent() -> bool:
+    """需要推理的活由宿主 Agent 做（后端不调模型）？2026-10-18 插件不持 key（P2）。
+
+    `INVEST_REASONING_BY=agent|backend` 显式指定；不设时按有没有 LLM key 自动判：
+    没 key → agent（新闻排队、触发的委员会排队，等 Agent 来取），有 key → backend（旧行为）。
+    """
+    mode = os.getenv("INVEST_REASONING_BY", "").strip().lower()
+    if mode in ("agent", "backend"):
+        return mode == "agent"
+    return not get_llm_config_safe()[0]
+
 def supports_json_output(model: Optional[str] = None, base_url: Optional[str] = None) -> bool:
     """是否【尝试】response_format={"type":"json_object"}（DeepSeek JSON Output 是 GA，
     且 json_object 本就是 OpenAI 标准参数，多数兼容 provider 都支持）。
