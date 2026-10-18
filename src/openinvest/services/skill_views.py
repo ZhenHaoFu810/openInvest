@@ -379,7 +379,7 @@ def build_what_if_view(
             return {
                 "status": "error",
                 "error": f"{symbol} 不在持仓里",
-                "hint": f"用 `run.sh status` 看你有哪些持仓；或先用 GUI / `POST /api/holdings/{symbol}` 加进去再跑 what_if",
+                "hint": f"用 `run.sh status` 看你有哪些持仓。{symbol} 已在别处持有 → `run.sh buy {symbol} --existing-position …`（MCP：`record_existing_position`，不扣现金）；新买入才用 `run.sh buy`（MCP：`buy`）。记进去再跑 what_if",
             }
         if price is not None:
             new_prices[symbol] = float(price)

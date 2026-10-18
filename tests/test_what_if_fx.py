@@ -58,3 +58,25 @@ def test_other_currency_cash_is_counted(monkeypatch):
     out = skill_views.build_what_if_view()
     assert "excluded_from_total" not in out
     assert out["current_total_cny"] == 1700.0
+
+
+def test_missing_holding_hint_names_real_cli_subcommands(monkeypatch):
+    """CR #512：提示里引用的 `run.sh <子命令>` 必须真的存在于 CLI parser，且登记已有仓位的写法带 --existing-position
+    （不带会扣现金）。工具名写错不该靠人眼发现。"""
+    import argparse
+    import re
+
+    from openinvest.cli import build_parser
+
+    _seed({"CNY": 1000.0}, [_h("510300.SS", 100, "CNY")])
+    _wire(monkeypatch, {"510300.SS": 4.0}, rates={})
+    out = skill_views.build_what_if_view(symbol="ZZZ.X", pct=-5)
+    assert out["status"] == "error"
+    hint = out["hint"]
+
+    sub = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    cmds = re.findall(r"`run\.sh ([a-z_]+)", hint)
+    assert cmds and all(c in sub.choices for c in cmds), (cmds, sorted(sub.choices))
+    buy_opts = {o for a in sub.choices["buy"]._actions for o in a.option_strings}
+    assert "--existing-position" in buy_opts and "--existing-position" in hint
+    assert "record_existing_position" in hint   # MCP 侧同一条路的工具名
