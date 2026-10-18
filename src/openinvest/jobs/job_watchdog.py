@@ -13,6 +13,8 @@
   (f) norm_fail  event_watch 连续 2 次运行有归一化失败批（缺 key / 额度用完 / 解析失败）——
                 抓到了新闻却没入库，job 照样 success（2026-10-19 Claude 回复带尾巴整批丢，无人知道）
   (g) verdict    今天/昨天的委员会记录里有 LLM 没跑成的（UNCLEAR / 有角色没产出被强制 HOLD）
+  (h) backlog    agent 模式待办没人取：工作日 10 点后有待归一化新闻 / 待跑委员会，且宿主 Agent
+                超过 26h 没来取过（哨兵只在工作日跑，周末积压不报）
   (e) timeout    runner 的 per-job 墙钟超时（jobs/*.yml timeout_minutes）把 job_runs 标成
                 'timeout'：24h 内每条各报一次。超时后 runner 放弃该线程让下次触发进得来，
                 所以最新一行可能已是 success——不能只看最后一行，否则"超时了又恢复"没人知道
@@ -55,6 +57,7 @@ GRACE = timedelta(minutes=15)
 HUNG_FLOOR = timedelta(minutes=60)
 ZERO_FETCH_RUNS = 6
 NORMALIZE_FAIL_RUNS = 2
+AGENT_DRAIN_STALE = timedelta(hours=26)
 SOURCE_SILENT = timedelta(hours=24)
 TIMEOUT_LOOKBACK = timedelta(hours=24)
 _STATE = "job_watchdog_alerts"
@@ -206,6 +209,28 @@ def find_problems(
     return out
 
 
+def find_agent_backlog(now: datetime) -> List[Dict[str, Any]]:
+    """agent 模式：有待办、宿主 Agent 却超过 AGENT_DRAIN_STALE 没来取。backend 模式队列为空 → 不报。"""
+    if now.weekday() >= 5 or now.hour < 10:
+        return []
+    from openinvest.services import agent_queue as q
+    news, comm = q.pending_news_items(now), q.pending_committee_items(now)
+    if not news and not comm:
+        return []
+    last = q.last_drained()
+    if last is not None and now - last <= AGENT_DRAIN_STALE:
+        return []
+    anchor = last.isoformat(timespec="minutes") if last else "从未"
+    syms = ", ".join(c["symbol"] for c in comm) or "无"
+    return [{
+        "key": f"agent_backlog:{anchor}",
+        "since": (last + AGENT_DRAIN_STALE) if last else now,
+        "text": (f"Agent 待办没人取：{len(news)} 条新闻待归一化、{len(comm)} 个委员会重跑待跑"
+                 f"（{syms}），上次来取是 {anchor}——宿主 Agent（Hermes 哨兵 / 日报任务）可能停了，"
+                 f"后端不调模型，这些不会自己完成。"),
+    }]
+
+
 def find_failed_verdicts(committee_dir: Any, now: datetime) -> List[Dict[str, Any]]:
     """今天/昨天落盘的委员会记录里 LLM 没跑成的（纯读盘）。重跑成功会覆盖当天文件 → 自然消警。"""
     out: List[Dict[str, Any]] = []
@@ -294,6 +319,7 @@ def run(now: Optional[datetime] = None) -> Dict[str, Any]:
     if any(name == "event_watch" for name, _, _ in jobs):
         findings += find_silent_sources(store.state_get(SOURCE_HEALTH_STATE) or {})
     findings += find_failed_verdicts(store.root / ".committee", now)
+    findings += find_agent_backlog(now)
     for f in findings:
         log.warning(f"[job_watchdog] {f['text']}")
 

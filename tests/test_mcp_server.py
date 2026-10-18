@@ -14,6 +14,8 @@ EXPECTED_TOOLS = {
     "buy", "sell", "deposit", "withdraw", "run_committee",
     # Agent 自己编排委员会（Coordinator）：出题 / 收卷，后端不调模型（2026-10-18 插件不持 key）
     "prepare_committee", "submit_committee",
+    # agent 模式待办队列：后端不调模型时新闻 / 触发的重跑排队给 Agent
+    "pending_news", "pending_committees",
     # 再平衡清单：只出清单不下单（读持仓，顾问模式拒绝）
     "rebalance_plan",
     # 补录用系统前就持有的仓位（不扣现金）：独立工具，老 server 上 Unknown tool 而不是静默扣现金
@@ -163,6 +165,7 @@ def test_advisory_mode_blocks_non_whitelisted_tools(monkeypatch):
         "untrack_asset": {"symbol": "GC=F"},
         "prepare_committee": {"symbol": "GC=F"},
         "submit_committee": {"symbol": "GC=F", "transcript": "=== CIO ===\nVERDICT: HOLD"},
+        "pending_news": {}, "pending_committees": {},
         "record_execution": {"decision_id": "2026-01-01/GC=F", "executed": True},
         "ingest_event": {"title": "t", "url": "https://x.co/a"},
     }

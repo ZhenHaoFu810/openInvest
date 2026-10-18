@@ -150,6 +150,7 @@ jobs:
           uv run python -c "from openinvest.services.embeddings import embed_text, DEFAULT_DIM"
           uv run python -c "from openinvest.services.event_normalizer import normalize, NormalizedEvent"
           uv run python -c "from openinvest.services.event_ingest import ingest_events"
+          uv run python -c "from openinvest.services.agent_queue import pending_news, pending_committees, enqueue_news, enqueue_committee"
           uv run python -c "from openinvest.services.event_notifier import send_event_alert"
           uv run python -c "from openinvest.services.event_trigger import trigger_for_new_events, admit, is_triggerable"
           uv run python -c "from openinvest.services.news_sources import fetch_all, RawNewsItem"

@@ -175,9 +175,19 @@ def _holdings_snapshot(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
 
 
 def _trigger_committee(symbols: List[str], event_ids: List[str]) -> Optional[str]:
-    """调本机 web_api /api/committee/run 触发委员会重跑（web 路径走 run_committee_session）。返回 task_id"""
+    """触发委员会重跑，返回 task_id。
+
+    backend 模式：调本机 web_api /api/committee/run（走 run_committee_session，后端调模型）。
+    agent 模式：排进待办队列（"queued:<id>"），由宿主 Agent 经 pending_committees 取走、
+    prepare_committee → submit_committee 交卷——后端不调模型。
+    """
     if not symbols:
         return None
+    from openinvest.utils.llm import reasoning_by_agent
+    if reasoning_by_agent():
+        from openinvest.services.agent_queue import enqueue_committee
+        return enqueue_committee(symbols, event_ids,
+                                 reason=f"event_ids={','.join(event_ids[:4])}")
     import requests
     from openinvest.core.config import load_config
     base = os.getenv("INVEST_EVENT_API_URL", "http://127.0.0.1:8765")
