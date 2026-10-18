@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.52.0](https://github.com/longsizhuo/openInvest/compare/v0.51.1...v0.52.0) (2026-10-18)
+
+
+### Features
+
+* **daily_report:** 日报新增"今日持仓归因"段（C5） ([#468](https://github.com/longsizhuo/openInvest/issues/468)) ([8ef850b](https://github.com/longsizhuo/openInvest/commit/8ef850bcaf7d13a0db5860db9e894b4a03e7ef87))
+
 ## [0.51.1](https://github.com/longsizhuo/openInvest/compare/v0.51.0...v0.51.1) (2026-10-18)
 
 
