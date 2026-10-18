@@ -285,7 +285,8 @@ def _sanitize_event(raw: Dict[str, Any], *, offset: int) -> Optional[NormalizedE
     idx = raw.get("idx")
     if not isinstance(idx, int):
         return None
-    claim = (raw.get("one_line_claim") or "").strip()
+    # 换行 / 控制字符压成空格：claim 原样渲染进 Macro brief 的一行，不能借它造出额外的 brief 行
+    claim = re.sub(r"[\x00-\x1f\x7f]+", " ", str(raw.get("one_line_claim") or "")).strip()
     if not claim:
         return None
 

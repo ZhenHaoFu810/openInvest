@@ -16,10 +16,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from openinvest.core.memory_store import MemoryStore, append_jsonl
+from openinvest.core.memory_store import MemoryStore, _file_lock, append_jsonl
 from openinvest.utils.symbols import safe_symbol
 
 NEWS_TTL = timedelta(hours=48)
+COMPACT_ABOVE = 5000   # 行数超过它就在入队时压掉过期行
 COMMITTEE_TTL = timedelta(hours=24)
 LAST_DRAIN_STATE = "agent_queue_last_drain"
 
@@ -63,16 +64,42 @@ def last_drained() -> Optional[datetime]:
 # ---------- news ----------
 
 def enqueue_news(items: Iterable[Any]) -> int:
-    """event_watch 用：RawNewsItem 列表入队。"""
+    """event_watch 用：RawNewsItem 列表入队。已在队里（含已 dismiss）的 url 跳过——没入库的 url
+    每轮都会被 event_watch 当成 unseen 再交一遍，不跳过的话队列文件每 30 分钟整批重复增长。"""
+    _compact_news()
+    known = {r.get("url") for r in _read("news.jsonl")} | {r.get("url") for r in _read("news_dismissed.jsonl")}
     now = _now().isoformat(timespec="seconds")
     n = 0
     for it in items:
+        if it.url in known:
+            continue
+        known.add(it.url)
         append_jsonl(_dir() / "news.jsonl", {
             "url": it.url, "title": it.title, "snippet": it.snippet,
             "source": it.src_name, "published_at": it.published_at, "queued_at": now,
         })
         n += 1
     return n
+
+
+def _compact_news() -> None:
+    """news.jsonl 超过 COMPACT_ABOVE 行时，锁内重写只留未过期的行。"""
+    path = _dir() / "news.jsonl"
+    if not path.exists():
+        return
+    with _file_lock(path):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= COMPACT_ABOVE:
+            return
+        now = _now()
+        keep = []
+        for line in lines:
+            try:
+                if _age(json.loads(line), now) <= NEWS_TTL:
+                    keep.append(line)
+            except (ValueError, KeyError):
+                continue
+        path.write_text("".join(f"{line}\n" for line in keep), encoding="utf-8")
 
 
 def pending_news_items(now: Optional[datetime] = None) -> List[Dict[str, Any]]:

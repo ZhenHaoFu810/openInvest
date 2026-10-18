@@ -472,8 +472,9 @@ def ingest_event(
     Returns:
         Ingestion result with the normalized event id(s), dedup status, and
         `committee_task_id` — set when a new holding-relevant event (severity
-        ≥ mid, non-neutral) triggered a rate-limited committee re-run. This
-        tool is disabled in advisory mode.
+        ≥ mid, non-neutral) triggered a rate-limited committee re-run. In
+        agent mode it is "queued:<id>": the re-run waits for you in
+        `pending_committees`. This tool is disabled in advisory mode.
     """
     _check_advisory()
     from openinvest.services.event_ingest import ingest_events

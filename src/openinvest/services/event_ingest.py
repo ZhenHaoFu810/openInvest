@@ -100,13 +100,19 @@ def ingest_events(items: List[Dict[str, Any]], *, ingested_by: str = "host-agent
         ne.embedding = embed_text(ne.event["one_line_claim"])
         normalized.append(ne)
     plain = [i for i in unseen if i.url not in fields]
-    if plain:
-        from openinvest.utils.llm import reasoning_by_agent
-        if reasoning_by_agent():
+    rejected: List[str] = []
+    _hint = ("补 one_line_claim（一句话事实）、stance（risk/opportunity/neutral）、"
+             "severity（low/mid/high），可选 event_type / affected_symbols / entities")
+    from openinvest.utils.llm import reasoning_by_agent
+    if plain and reasoning_by_agent():
+        # 结构化的照常入库，只拒没结构化的（后端不调模型，没法替你归一化）
+        if not normalized:
             return {"status": "error",
                     "error": "后端不调模型（agent 模式）：这条新闻需要你先归一化再交",
-                    "hint": "补 one_line_claim（一句话事实）、stance（risk/opportunity/neutral）、"
-                            "severity（low/mid/high），可选 event_type / affected_symbols / entities"}
+                    "hint": _hint}
+        rejected = [i.url for i in plain]
+        plain = []
+    if plain:
         llm_events = normalize(plain)
         if not llm_events:
             # normalize 空返回 = 缺 LLM key 或全批失败——对 agent 必须显式，不能装成功
@@ -154,5 +160,8 @@ def ingest_events(items: List[Dict[str, Any]], *, ingested_by: str = "host-agent
         task_id = trigger_for_new_events(new_events, store=store)["committee_task_id"]
     except Exception as e:  # 事件已入库，触发失败不能让 agent 以为没喂进去
         log.warning(f"[event_ingest] 触发闸失败: {type(e).__name__}: {e}")
-    return {"status": "ok", "ingested": len(out), "duplicates": duplicates, "events": out,
-            "committee_task_id": task_id}
+    result = {"status": "ok", "ingested": len(out), "duplicates": duplicates, "events": out,
+              "committee_task_id": task_id}
+    if rejected:
+        result.update({"status": "partial", "rejected_urls": rejected, "hint": _hint})
+    return result

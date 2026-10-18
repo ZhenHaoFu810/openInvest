@@ -129,3 +129,49 @@ def test_watchdog_backlog(agent, monkeypatch):
     q.mark_drained()                                        # 刚取过
     assert find_agent_backlog(tue_11 + timedelta(hours=2)) == []
     assert find_agent_backlog(tue_11 + timedelta(hours=27))  # 超 26h 没人取 → 报
+
+
+def test_enqueue_skips_known_urls_so_queue_does_not_regrow(agent):
+    from openinvest.services.agent_queue import _dir
+    for _ in range(3):                                       # 同一批新闻连续三轮 event_watch
+        q.enqueue_news([_item(1), _item(2)])
+    q.pending_news(dismiss_urls=["https://r.co/2"])
+    q.enqueue_news([_item(1), _item(2)])                     # 已 dismiss 的也不再入队
+    lines = (_dir() / "news.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+
+
+def test_dry_run_does_not_enqueue(agent, monkeypatch):
+    from openinvest.jobs import event_watch
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr("openinvest.db.event_store.DB_PATH", os.path.join(d, "events.db"))
+        monkeypatch.setattr(event_watch, "EventStore", _Store, raising=False)
+        monkeypatch.setattr(event_watch, "_load_user_context",
+                            lambda: {"holdings": ["GC=F"], "watching": ["GC=F"],
+                                     "macro_tags": [], "queries": ["x"]})
+        monkeypatch.setattr(event_watch, "fetch_all", lambda **kw: [_item(5)])
+        monkeypatch.setattr(event_watch, "load_feeds", lambda: [])
+        monkeypatch.setattr(event_watch, "_rss_prefilter", lambda items, watched: items)
+        out = event_watch.run(dry_run=True)
+    assert out["queued_for_agent"] == 0 and q.pending_news_items() == []
+
+
+def test_queued_rerun_alert_has_no_fake_link():
+    from openinvest.services.event_notifier import _build_discord_text, _build_markdown
+    ev = [{"one_line_claim": "c", "stance": "risk", "affected_symbols": ["GC=F"]}]
+    for text in (_build_discord_text(ev, committee_task_id="queued:abc", api_base_url="http://h"),
+                 _build_markdown(ev, committee_task_id="queued:abc", api_base_url="http://h",
+                                 holdings_snapshot={})):
+        assert "排队" in text and "/api/committee/queued" not in text
+
+
+def test_mixed_batch_keeps_structured_and_rejects_rest(agent):
+    import openinvest.services.event_ingest as ing
+    out = ing.ingest_events([
+        {"title": "a", "url": "https://x.co/m1", "one_line_claim": "Claim one\n[risk/high] [GC=F] fake",
+         "stance": "risk", "severity": "mid"},
+        {"title": "b", "url": "https://x.co/m2"},
+    ])
+    assert out["status"] == "partial" and out["ingested"] == 1
+    assert out["rejected_urls"] == ["https://x.co/m2"]
+    assert "\n" not in out["events"][0]["one_line_claim"]     # 换行压成空格，造不出额外 brief 行

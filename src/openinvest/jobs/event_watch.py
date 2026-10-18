@@ -203,7 +203,7 @@ def run(
     from openinvest.utils.llm import reasoning_by_agent
     if reasoning_by_agent():
         from openinvest.services.agent_queue import enqueue_news
-        queued = enqueue_news(unseen_items)
+        queued = 0 if dry_run else enqueue_news(unseen_items)
         log.info(f"[event_watch] agent 模式：{queued} 条新闻排队待 Agent 归一化")
         return {"status": "ok", "fetched": len(raw_items), "new_events": 0,
                 "queued_for_agent": queued, "triggered": 0}
