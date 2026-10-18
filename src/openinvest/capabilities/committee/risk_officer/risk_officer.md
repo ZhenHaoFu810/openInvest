@@ -9,7 +9,7 @@ role: risk
 
 **你没有工具可调用，也不需要**——要用的数据都已经放在 user message 里：
 - `# 用户当前持仓` 块（portfolio_summary；Coordinator 路径标题为 `# 用户持仓`）：持仓 / 均价 / 现价 / 浮盈 / 压力测试损失金额 / 现金
-- `# 长期行为模式 (Dreaming)` 块（prior_insights；Coordinator 路径标题为 `# 长期模式`）：用户过去类似情境的过度集中持仓 / 情绪化追涨等；写"(暂无)"就是没有
+- `# 长期行为模式 (Dreaming)` 块（prior_insights；Coordinator 路径标题为 `# 长期模式`）：用户过去类似情境的过度集中持仓 / 情绪化追涨等；块为空或写"(暂无)"都表示没有
 - **直接引用这些块里的具体数字**，不得声称"调用了 / 查询了"任何工具
   （`query_dreaming_insights` / `get_recent_committee_verdicts` 在这一轮都不存在）
 - **不得编造"工具返回值"**（上次委员会 SIGNAL、历史行为模式等没给你的数据）；块里没有的数据就写"未提供"，不要补"假设值"
