@@ -902,11 +902,22 @@ def _arm_row_ok(r: VerdictReview) -> bool:
     与对照臂同日同标的那份不是同一份（Input Health 的 macro_shared 为 False：对照臂当天被续跑跳过、或中途失败重跑）
     就不是“同一份输入”的配对，剔掉并在臂一览里计数。没有这个键（对照臂行 / 早期存档）按未知保留。"""
     return (not r.contaminated and not is_closed_weekend(r.asset, r.date)
-            and (r.input_health or {}).get("macro_shared") is not False)
+            and (is_model_arm_row(r) or (r.input_health or {}).get("macro_shared") is not False))
+
+
+# 模型臂（B4 之外的第五类实验臂，--sonnet-arm）：同一批标的、live 配置，只把 LLM 换了。它的 Macro 视图由**那个模型自己**生成
+# （换模型的一部分），所以 macro_shared 恒为 False——但那是设计，不是“输入不是同一份”的事故，不能像其他臂那样按它剔行。
+# 比较口径：Macro 不共享，对照臂与模型臂的差 = 整条流水线换模型（Macro + Quant + Risk + CIO 全是新模型）的总效应。
+SONNET_ARM_TAG = "sonnet_live_cfg"   # Input Health 的 arm 标签；写侧 scripts/backtest_committee 与这里共用
+MODEL_ARM_TAGS = (SONNET_ARM_TAG,)
+
+
+def is_model_arm_row(r: VerdictReview) -> bool:
+    return (r.input_health or {}).get("arm") in MODEL_ARM_TAGS
 
 
 def macro_unshared_count(rows: List[VerdictReview]) -> int:
-    return sum(1 for r in rows if (r.input_health or {}).get("macro_shared") is False)
+    return sum(1 for r in rows if (r.input_health or {}).get("macro_shared") is False and not is_model_arm_row(r))
 
 
 def _side_summary(rows: List[VerdictReview], min_n: int) -> Dict[str, Any]:
@@ -1048,7 +1059,9 @@ ARM_LABELS = {
     "sealed": "sealed 1r×N票（密封投票）",
     "debate": "debate 4r×1（live 日报配置）",
     "macrosoft": "macro-soft 1r×1（CIO 规则 2 打折不否决）",
+    "sonnet": "sonnet 1r×1（live 配置，LLM 换 Sonnet；Macro 由 Sonnet 自己生成）",
 }
+MODEL_ARM = "sonnet"   # 模型臂：单列「模型对照」，不进四臂并排 / H1–H3
 DIRECTIONAL_BUY = ("BUY", "ACCUMULATE")
 
 
@@ -1129,7 +1142,13 @@ def side_by_side(control: List[VerdictReview], arms: Dict[str, List[VerdictRevie
     return out
 
 
-def arm_report_lines(name: str, cmp_: Dict[str, Any], stab: Optional[Dict[str, Any]]) -> List[str]:
+_SHARED_INPUT_NOTE = (
+    "> 对照臂 = 同日同标的的 `.backtest` 舰队行（rounds=1、单次抽样）。两臂的 market_data / regime / 中性持仓 / "
+    "macro_view 逐字相同，差别只在该臂自己的那个变量。基率口径同 live 命中率页（同侧样本里永远喊本行方向的傻瓜）。\n")
+
+
+def arm_report_lines(name: str, cmp_: Dict[str, Any], stab: Optional[Dict[str, Any]], *,
+                     input_note: str = _SHARED_INPUT_NOTE) -> List[str]:
     """单个实验臂 vs 对照臂的报告片段（markdown 行）。只含聚合，不含 symbol / 逐行裁决 / 金额。
     stab=None（debate / macro-soft 没有逐票记录）→ 不出臂内稳定度一节。"""
     A, C, P = cmp_["arm"], cmp_["control"], cmp_["paired_30d"]
@@ -1163,8 +1182,7 @@ def arm_report_lines(name: str, cmp_: Dict[str, Any], stab: Optional[Dict[str, A
     bench = "、".join(A.get("benchmark_symbols") or C.get("benchmark_symbols") or []) or "未配置"
     lines += [
         f"\n## 配对对照（{name} vs 对照臂 · 同日同标的 {cmp_['matched']} 个；臂共 {cmp_['arm_total']}、对照臂共 {cmp_['control_total']}）\n",
-        "> 对照臂 = 同日同标的的 `.backtest` 舰队行（rounds=1、单次抽样）。两臂的 market_data / regime / 中性持仓 / "
-        "macro_view 逐字相同，差别只在该臂自己的那个变量。基率口径同 live 命中率页（同侧样本里永远喊本行方向的傻瓜）。\n",
+        input_note,
         f"| | {name} | 对照臂 |", "|---|---|---|",
         f"| 行数 | {A['n_rows']} | {C['n_rows']} |",
         f"| 30d 成熟可评分 n | {A['n_scored_30d']} | {C['n_scored_30d']} |",
@@ -1215,7 +1233,7 @@ def arms_report_lines(arms: Dict[str, List[VerdictReview]], control: List[Verdic
     """全部实验臂的复盘报告（markdown 行）：臂一览 → 四臂并排 → 每臂 vs 对照臂 → debate 轮数 → macro-soft H3。
     arms: {"sealed": rows, "debate": rows, "macrosoft": rows}（没跑的臂不要放进来）。"""
     names = [n for n in ARM_ORDER if n in arms]
-    sb = side_by_side(control, {n: arms[n] for n in names}, min_n=min_n)
+    model_rows = arms.get(MODEL_ARM)   # 模型臂（--sonnet-arm）：不进四臂并排 / H1–H3，单列「模型对照」
     cols = ["control"] + names
     ctl = [r for r in control if _arm_row_ok(r)]
     lines = ["## 臂一览\n", "| 臂 | 配置 | 模型（model_era × 行数） | 臂内行数 | macro 与对照不是同一份而剔除的行 |",
@@ -1223,13 +1241,29 @@ def arms_report_lines(arms: Dict[str, List[VerdictReview]], control: List[Verdic
              f"| control | {ARM_LABELS['control']} | {_era_counts(ctl)} | {len(ctl)} | — |"]
     lines += [f"| {n} | {ARM_LABELS[n]} | {_era_counts(arms[n])} | {len(arms[n])} | {macro_unshared_count(arms[n])} |"
               for n in names]
-    all_models = [era_model(r.model_era) for rows in [ctl, *arms.values()] for r in rows]
+    if model_rows is not None:
+        lines.append(f"| {MODEL_ARM} | {ARM_LABELS[MODEL_ARM]} | {_era_counts(model_rows)} | {len(model_rows)} | "
+                     "n/a（模型臂的 Macro 本就由它自己生成，不按 macro_shared 剔行） |")
+    # 「不止一个模型」只看对照臂 + 四臂：模型臂换模型是它的设计变量，不算混用
+    all_models = [era_model(r.model_era) for rows in [ctl, *(arms[n] for n in names)] for r in rows]
     models = set(all_models) - {"unknown"}      # 没记录模型的行（模型名落盘前的老存档）不算一个“模型”
     if len(models) > 1:
         lines.append("\n> ⚠️ 臂内 / 臂间用了不止一个模型（" + "、".join(sorted(models)) + "）：同日同标的配对里模型不同 = 多了一个混淆变量，"
                      "判读时按上表分开看，别把它们当同一臂读。\n")
     if "unknown" in all_models:
         lines.append(f"\n> 另有 {all_models.count('unknown')} 行没有记录模型（老存档 / host 没传），上表标 unknown，不参与上面的混用判断。\n")
+    if names:
+        lines += _four_arm_lines(arms, control, names, cols, min_n)
+    if model_rows is not None:
+        lines += _model_arm_lines(model_rows, control, ctl, min_n)
+    return lines
+
+
+def _four_arm_lines(arms: Dict[str, List[VerdictReview]], control: List[VerdictReview],
+                    names: List[str], cols: List[str], min_n: int) -> List[str]:
+    """四臂并排 → 每臂 vs 对照臂 → debate 轮数 → macro-soft H3 → 判据脚注（原 arms_report_lines 主体，行为不变）。"""
+    sb = side_by_side(control, {n: arms[n] for n in names}, min_n=min_n)
+    lines: List[str] = []
     lines += [
         f"\n## 并排（所有在场的臂同时具备的 {sb['keys']} 个 标的×日；同一批输入、同一批市场结果）\n",
         "| | " + " | ".join(c for c in cols) + " |", "|---|" + "---|" * len(cols)]
@@ -1285,6 +1319,23 @@ def arms_report_lines(arms: Dict[str, List[VerdictReview]], control: List[Verdic
         "过其一才提 live 切换提案（另一个 PR，用户签字）。相邻交易日的 30d 窗口高度重叠、同日标的共享市场环境，"
         "真实独立样本远少于 n，CI 偏窄、p 偏小。\n")
     return lines
+
+
+def _model_arm_lines(rows: List[VerdictReview], control: List[VerdictReview],
+                     ctl: List[VerdictReview], min_n: int) -> List[str]:
+    """「模型对照」一节：模型臂 vs 对照臂，同日同标的配对（命中 / 超额 / HOLD 占比 / 照做净收益率）。"""
+    models = "、".join(sorted({era_model(r.model_era) for r in rows})) or "?"
+    ctl_models = "、".join(sorted({era_model(r.model_era) for r in ctl})) or "?"
+    note = (f"> 口径：模型臂 = 同一批标的、同一份 market_data / regime / 中性持仓、同一套 live 配置（rounds=1、单次抽样），"
+            f"只把 LLM 换成 {models}（对照臂 {ctl_models}）。**Macro 视图不共享**：模型臂的 Macro 由它自己的模型生成（换模型的一部分），"
+            "所以 Input Health 的 macro_shared 恒为 False——但本节**不因此剔行**（其余臂会剔）。"
+            "因此差异 = 整条流水线（Macro + Quant + Risk + CIO）一起换模型的总效应，不能拆给某一个角色。"
+            "基率口径同 live 命中率页。\n")
+    cmp_ = arm_vs_control(rows, control, min_n=min_n)
+    return ["", f"## 模型对照（{MODEL_ARM} 臂 vs 对照臂 · 换 LLM 的总效应）\n", note,
+            "臂内稳定度（逐票翻转 / 一致率 / 无多数）：**n/a**——模型臂是单次抽样（1 票），没有逐票记录；"
+            "下面「逐日方向翻转」是跨日配对口径，仍然适用。\n",
+            *arm_report_lines(MODEL_ARM, cmp_, None, input_note="")]
 
 
 # =====================================================================

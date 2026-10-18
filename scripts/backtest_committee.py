@@ -18,7 +18,8 @@
   python -m scripts.backtest_committee --days 30  # 简化：跑最近 30 天
   python -m scripts.backtest_committee --prospective --assets ... [--t2-confidence-arm] [--sealed-arm]
       # 前瞻舰队（cron）；可选试跑臂（均写独立目录，live 不变）：T2 置信度定义 / B4 sealed（每标的 N 次抽样取多数）/
-      # debate（rounds=4，= live 日报配置）/ macro-soft（CIO 规则 2：Macro 偏空打折不否决）
+      # debate（rounds=4，= live 日报配置）/ macro-soft（CIO 规则 2：Macro 偏空打折不否决）/
+      # sonnet（模型臂：live 配置，LLM 换成 config fleet.sonnet_arm 的模型，Macro 由它自己生成）
 
 注意：
 - 每日每资产 1 次 committee = 6 次 LLM 调用 = 30 天 × 2 资产 = 360 次 LLM call
@@ -31,6 +32,7 @@ import argparse
 import dataclasses
 import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
@@ -46,10 +48,10 @@ from openinvest.core.memory_store import MemoryStore  # noqa: E402
 # 污染 cutoff 单一可信源——落盘 `**Contaminated**` 标记与 verdict_review 分桶共用同一常量，
 # 不让 backtest 和聚合两处各自硬编码 "2024-12-31" 漂移（机器强制，见 CLAUDE.md）。
 from openinvest.jobs.verdict_review import (  # noqa: E402
-    CONTAMINATION_CUTOFF, DEBATE_ARM_SUBDIR, MACROSOFT_ARM_SUBDIR, SEALED_ARM_SUBDIR,
+    CONTAMINATION_CUTOFF, DEBATE_ARM_SUBDIR, MACROSOFT_ARM_SUBDIR, SEALED_ARM_SUBDIR, SONNET_ARM_SUBDIR,
 )
 # aggregate_votes 的多数判定只在 review_calc 定义一次（复盘侧 vote_stability 同用）；这里 re-export 保持 bc.aggregate_votes 可用
-from openinvest.jobs.review_calc import aggregate_votes  # noqa: E402,F401
+from openinvest.jobs.review_calc import SONNET_ARM_TAG, aggregate_votes  # noqa: E402,F401
 
 # 默认资产
 DEFAULT_ASSETS = ["NDQ.AX", "GC=F"]
@@ -131,6 +133,46 @@ SEALED_MIN_N = 3   # 少于 3 次凑不出"多数"，实验臂就和对照臂没
 #   cio.md 改了规则 2 的措辞 → 锚点失效直接报错，宁可停也不静默跑出别的 prompt。
 DEBATE_ROUNDS = 4
 _CIO_RULE2 = "2. **Quant vs Macro 分歧**: 看 Risk Officer 倒向哪边"
+
+# 模型臂（--sonnet-arm，2026-10 换模型 #483 之后）：舰队其余臂钉 DeepSeek（回答“结构”问题，判读 2026-12-22 不变），
+# 这一臂把同一批标的、同一套 live 配置（rounds=1、单次抽样 = 对照臂）的 LLM 换成 config `fleet.sonnet_arm`
+# （默认 claude-sonnet-5-5 @ api.anthropic.com/v1，key 取环境变量 FLEET_SONNET_API_KEY），写 .backtest_sonnet/<今天>/。
+# 做法同 T2 臂：运行期 patch，live 委员会不 import 本脚本；patch 的是 utils.llm.get_llm_config / get_llm_config_safe
+# （所有调用点都是函数内延迟 import，所以模块属性替换即生效），仅在本臂的 with 作用域内，退出即还原。
+# Macro 由 Sonnet 自己生成（不借对照臂的）：这是“换模型”的一部分，所以 Input Health 的 macro_shared 恒为 False，
+# 复盘（review_calc.is_model_arm_row）对这一臂不按它剔行，而是在「模型对照」一节与对照臂同日同标的配对比较。
+
+
+class SonnetArmUnavailable(RuntimeError):
+    """模型臂没法启动（缺 API key 环境变量）。"""
+
+
+def _sonnet_arm_settings():
+    """(config fleet.sonnet_arm, key)。key 缺失 → SonnetArmUnavailable（调用方在花钱之前就跳过这一臂）。"""
+    from openinvest.core.config import load_config
+    cfg = load_config().fleet.sonnet_arm
+    key = (os.environ.get(cfg.api_key_env) or "").strip()
+    if not key:
+        raise SonnetArmUnavailable(f"环境变量 {cfg.api_key_env} 未设（Sonnet 臂的 API key；cron 里从 .env 的 LLM_API_KEY 注入）")
+    return cfg, key
+
+
+@contextmanager
+def _sonnet_arm():
+    """模型臂唯一开关：作用域内 get_llm_config* 返回 Sonnet 的 (key, base_url, model, provider)，退出（含异常）即还原。
+    patch 是进程级的，但各臂串行——对照臂 / 其余臂跑完才进，退出才轮到别人。"""
+    cfg, key = _sonnet_arm_settings()
+    provider = os.getenv("LLM_PROVIDER", "openai")   # Anthropic 的 OpenAI 兼容端点走 openai 客户端（生产同款）
+
+    def _config():
+        return key, cfg.base_url, cfg.model, provider
+
+    def _config_safe(default_model=None, default_base_url=None):
+        return _config()
+
+    with patch("openinvest.utils.llm.get_llm_config", _config), \
+            patch("openinvest.utils.llm.get_llm_config_safe", _config_safe):
+        yield cfg
 
 
 def build_cio_prompt_macro_soft(asset: Dict[str, Any], json_mode: bool = False) -> str:
@@ -544,6 +586,12 @@ def main():
              f"时不否决、金额按 (10−STRENGTH)/10 打折\"的变体，写 memory/{MACROSOFT_ARM_SUBDIR}/<今天>/；live prompt 不变。",
     )
     parser.add_argument(
+        "--sonnet-arm", action="store_true",
+        help="（仅 --prospective）模型臂：同一批标的、live 配置（rounds=1、单次抽样，同对照臂），LLM 换成 config "
+             f"fleet.sonnet_arm 的模型（默认 claude-sonnet-5-5），写 memory/{SONNET_ARM_SUBDIR}/<今天>/。需要环境变量 "
+             "FLEET_SONNET_API_KEY（缺了该臂跳过、退出码非 0）。Macro 由该模型自己生成（不借对照臂的）。",
+    )
+    parser.add_argument(
         "--sealed-n", type=int, default=SEALED_DEFAULT_N,
         help=f"密封臂每标的抽样次数（默认 {SEALED_DEFAULT_N}，最少 {SEALED_MIN_N}）。"
              "实验开跑后别改：同一目录混不同 N 的行，复盘报告会按 arm 标签分开计数提示。",
@@ -553,10 +601,11 @@ def main():
         raise SystemExit("❌ --t2-confidence-arm 只能和 --prospective 一起用（舰队试跑，不碰回填）")
     if args.sealed_arm and not args.prospective:
         raise SystemExit("❌ --sealed-arm 只能和 --prospective 一起用（舰队试跑，不碰回填）")
-    for flag, on in (("--debate-arm", args.debate_arm), ("--macro-soft-arm", args.macro_soft_arm)):
+    for flag, on in (("--debate-arm", args.debate_arm), ("--macro-soft-arm", args.macro_soft_arm),
+                     ("--sonnet-arm", args.sonnet_arm)):
         if on and not args.prospective:
             raise SystemExit(f"❌ {flag} 只能和 --prospective 一起用（舰队试跑，不碰回填）")
-    if args.sealed_arm or args.debate_arm or args.macro_soft_arm:
+    if args.sealed_arm or args.debate_arm or args.macro_soft_arm or args.sonnet_arm:
         # 对照臂与 macro-soft 臂读 INVEST_MAX_DEBATE_ROUNDS，sealed 臂固定 1 轮、debate 臂固定 4 轮：
         # 环境变量一旦不是 1（Optuna 实验遗留之类），臂与臂之间就悄悄多出“轮数”这个变量，复盘报告还看不出来。花钱前直接拒绝。
         raw_rounds = os.environ.get("INVEST_MAX_DEBATE_ROUNDS", "").strip()
@@ -652,6 +701,20 @@ def main():
                 ok_m = sum(1 for v in res_m.get("verdicts", {}).values() if v and not v.get("error"))
                 print(f"\n✅ macro-soft 臂完成：{ok_m}/{len(fresh)} 成功，写入 memory/{MACROSOFT_ARM_SUBDIR}/{d}/")
                 failed = failed or ok_m < len(fresh)
+        if args.sonnet_arm:
+            # 最后一臂（不借对照臂的 macro_view：Macro 由 Sonnet 自己生成）。缺 key → 跳过这一臂、不花钱、退出码非 0。
+            try:
+                with _sonnet_arm() as sonnet_cfg:
+                    res_s = run_one_day(d, fresh, out_subdir=SONNET_ARM_SUBDIR,
+                                        arm_health={"arm": SONNET_ARM_TAG})
+            except SonnetArmUnavailable as e:
+                print(f"\n❌ Sonnet 臂跳过：{e}")
+                failed = True
+            else:
+                ok_s = sum(1 for v in res_s.get("verdicts", {}).values() if v and not v.get("error"))
+                print(f"\n✅ Sonnet 模型臂完成（{sonnet_cfg.model}）：{ok_s}/{len(fresh)} 成功，"
+                      f"写入 memory/{SONNET_ARM_SUBDIR}/{d}/")
+                failed = failed or ok_s < len(fresh)
         if failed:
             raise SystemExit(1)   # 让 cron 日志/退出码暴露失败，不静默成功
         return

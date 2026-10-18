@@ -306,6 +306,24 @@ class FundConfig:
 
 
 @dataclass(frozen=True)
+class SonnetArmConfig:
+    """纸面舰队「Sonnet 模型臂」（scripts/backtest_committee.py --sonnet-arm）的 LLM 覆盖。
+
+    只在该臂作用域内覆盖 utils.llm.get_llm_config*；其余臂 / live 照旧读全局 LLM_*（舰队 cron 钉 DeepSeek）。
+    API key 不进配置：只存**环境变量名**（api_key_env），值由 cron 从 .env 注入，别写进仓库。
+    """
+    model: str = "claude-sonnet-5-5"
+    base_url: str = "https://api.anthropic.com/v1"   # Anthropic 的 OpenAI 兼容端点（生产委员会同款）
+    api_key_env: str = "FLEET_SONNET_API_KEY"
+
+
+@dataclass(frozen=True)
+class FleetConfig:
+    """纸面舰队实验臂配置（不进 API_SETTABLE：嵌套 + 含端点；改 defaults.yaml 的 fleet: 段）"""
+    sonnet_arm: SonnetArmConfig = field(default_factory=SonnetArmConfig)
+
+
+@dataclass(frozen=True)
 class TunableConfig:
     """所有可调参数的顶层容器"""
     language: LanguageConfig = field(default_factory=LanguageConfig)
@@ -324,3 +342,4 @@ class TunableConfig:
     staleness: StalenessConfig = field(default_factory=StalenessConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     fund: FundConfig = field(default_factory=FundConfig)
+    fleet: FleetConfig = field(default_factory=FleetConfig)
