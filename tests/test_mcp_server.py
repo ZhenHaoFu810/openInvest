@@ -12,6 +12,8 @@ EXPECTED_TOOLS = {
     "status", "strategy", "history", "live_prices", "what_if", "discipline",
     "decisions", "explain_decision", "record_execution", "ingest_event",
     "buy", "sell", "deposit", "withdraw", "run_committee",
+    # Agent 自己编排委员会（Coordinator）：出题 / 收卷，后端不调模型（2026-10-18 插件不持 key）
+    "prepare_committee", "submit_committee",
     # 再平衡清单：只出清单不下单（读持仓，顾问模式拒绝）
     "rebalance_plan",
     # 补录用系统前就持有的仓位（不扣现金）：独立工具，老 server 上 Unknown tool 而不是静默扣现金
@@ -65,6 +67,10 @@ MONEY_TOOLS = {"buy", "sell", "deposit", "withdraw", "record_existing_position",
                "untrack_asset", "remove_news_source"}
 
 
+# 写、非资金、但重复调用会累加记录（反事实干预 / dream 事件）
+NON_IDEMPOTENT_WRITES = {"submit_committee"}
+
+
 def test_tool_annotations():
     """危险等级标注精确契约：读工具 readOnlyHint、动钱工具 destructiveHint，
     一个都不能漏——client 的确认弹窗策略全靠这个（issue #133 merge 后差距 #1）。"""
@@ -77,6 +83,9 @@ def test_tool_annotations():
             assert ann.readOnlyHint is True, name
         elif name in MONEY_TOOLS:
             assert ann.readOnlyHint is False and ann.destructiveHint is True, name
+        elif name in NON_IDEMPOTENT_WRITES:
+            assert ann.readOnlyHint is False and ann.destructiveHint is False \
+                and ann.idempotentHint is False, name
         else:  # record_execution / run_committee / ingest_event：写但幂等
             assert ann.readOnlyHint is False and ann.destructiveHint is False \
                 and ann.idempotentHint is True, name
@@ -152,6 +161,8 @@ def test_advisory_mode_blocks_non_whitelisted_tools(monkeypatch):
         "set_allocations": {"target_allocation_stock": 0.7, "target_allocation_cash": 0.3},
         "track_asset": {"symbol": "GC=F"},
         "untrack_asset": {"symbol": "GC=F"},
+        "prepare_committee": {"symbol": "GC=F"},
+        "submit_committee": {"symbol": "GC=F", "transcript": "=== CIO ===\nVERDICT: HOLD"},
         "record_execution": {"decision_id": "2026-01-01/GC=F", "executed": True},
         "ingest_event": {"title": "t", "url": "https://x.co/a"},
     }
@@ -193,6 +204,7 @@ CLI_ALIASES = {
     "record_existing_position": ("buy", "--existing-position"),
     "add_news_source": ("news_sources", "--add"),
     "remove_news_source": ("news_sources", "--remove"),
+    "submit_committee": ("save_committee", None),
 }
 
 

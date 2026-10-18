@@ -237,3 +237,47 @@ def test_prepare_committee_risk_prompt_names_no_tools_and_real_headings(_mock_wo
     assert "你有工具可调用" not in prompt
     for heading in ("# 用户持仓:", "# 长期模式:"):
         assert heading in out["instructions"], f"instructions 不再以 {heading} 粘贴，risk_officer.md 的指向要跟着改"
+
+
+def test_prepare_facts_feed_save_defense_and_regime(_mock_world, monkeypatch):
+    """SENTINEL（P1）：真跑 prepare → save。prepare 落盘的事实 key（regime_brief / sentiment_brief）
+    或 regime brief 的行格式一改，save 端会静默退回"从 transcript 解析"——这里会红。"""
+    import openinvest.core.committee.persist as persist
+    import openinvest.core.runner.coordinator as cr
+    monkeypatch.setattr(cr, "load_sentiment_brief", lambda *a, **k: "INDEP_DEFENSE_FLAG: on")
+    monkeypatch.setattr(persist, "_capture_macro_context", lambda **kw: {})
+    cr.prepare_committee_brief("TEST.AX")
+    facts = cr._load_brief_facts("TEST.AX")
+    assert facts and facts["regime_brief"] and "INDEP_DEFENSE_FLAG: on" in facts["sentiment_brief"]
+    seen = {}
+    real = cr.parse_cio_memo
+    monkeypatch.setattr(cr, "parse_cio_memo", lambda t, **kw: seen.update(kw) or real(t, **kw))
+    # transcript 故意不抄任何确定性行
+    res = cr.save_committee_transcript(
+        "TEST.AX", "=== CIO ===\nVERDICT: HOLD\nCONFIDENCE: 0.5\nDOMINANT_VIEW: macro\nSUGGESTED_ALLOC_CNY: 0\n")
+    assert seen["defense_flag_on"] is True
+    assert seen["regime"] == cr.regime_label_from_text(facts["regime_brief"]) and seen["regime"]
+    assert '"facts_source": "prepare"' in open(res["saved"], encoding="utf-8").read()
+
+
+def _call_mcp(name, args):
+    import asyncio
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from openinvest.connectors.mcp_server import mcp
+
+    async def go():
+        async with create_connected_server_and_client_session(mcp) as client:
+            return await client.call_tool(name, args)
+    return asyncio.run(go())
+
+
+def test_mcp_prepare_committee_tool(_mock_world):
+    ok = _call_mcp("prepare_committee", {"symbol": "TEST.AX"})
+    assert not ok.isError
+    out = ok.structuredContent
+    out = out.get("result", out)
+    assert out["regime_brief"] and out["prompts"]["cio"] and "submit_committee" in out["instructions"]
+    bad = _call_mcp("prepare_committee", {"symbol": "NOT.IN.STRATEGY"})
+    assert bad.isError and "target_assets" in bad.content[0].text
