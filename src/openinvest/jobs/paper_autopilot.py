@@ -6,7 +6,7 @@
 
 成交规则（裁决规则本身一字不改）：
   HOLD / UNCLEAR / 无 alloc   不动、不记 execution（和人一样"没事做"）
-  ACCUMULATE / BUY            买 |alloc_cny| 等值，当日 close，整手向下取整，现金不足先 CNY 换汇再缩量
+  ACCUMULATE / BUY            买 |alloc_cny| 等值，当日首个缓存 bar（通常为收盘价），整手向下取整，现金不足先 CNY 换汇再缩量
   TRIM                        卖 |alloc_cny| 等值（整手、≤持有量）
   SELL                        全部卖出
   场外基金（FUND:xxx）       不成交（T+1 两段式），记 executed=False / unsupported_otc_fund
@@ -41,10 +41,11 @@ _CASH_SLACK = 0.01   # 现金按分取整，留一分钱余量防 买入后 现�
 
 class _Skip(Exception):
     """前置条件不满足。terminal=True：判定已定（金额太小 / 没仓位 / 没钱），留 claim 并记 executed=False；
-    False：什么都没写、条件可能自愈（陈旧行情 / 休市 / 取不到价 / 无汇率）→ unclaim 当日重试。"""
-    def __init__(self, reason: str, terminal: bool = False):
+    False：什么都没写、条件可能自愈（陈旧行情 / 休市 / 取不到价 / 无汇率）→ unclaim 当日重试。
+    record=False：terminal 但不写 execution 声明（duplicate_key：这笔其实已成交，写 False 会盖掉匹配出的 executed=True）。"""
+    def __init__(self, reason: str, terminal: bool = False, record: bool = True):
         super().__init__(reason)
-        self.reason, self.terminal = reason, terminal
+        self.reason, self.terminal, self.record = reason, terminal, record
 
 
 def _lot(symbol: str, kind: str) -> Optional[int]:
@@ -160,6 +161,9 @@ def _fill(pm: PortfolioManager, d: Dict[str, Any], today: str, cfg) -> Dict[str,
     if symbol.upper().startswith("FUND:") or is_eastmoney_fund(holding):
         raise _Skip("unsupported_otc_fund", terminal=True)   # 场外基金 T+1 两段式确认，autopilot 不模拟
     price, ccy = _quote(holding, today)
+    held_ccy = str(holding.get("cost_currency") or ccy).upper()
+    if pm.find_holding(symbol) and held_ccy != ccy:
+        raise _Skip("currency_mismatch", terminal=True)   # 买卖按持仓币种入账，报价币种不一致会记错现金 / 手续费
     fx = _fx(ccy)
     rate = float(cfg.commission_bps) / 1e4
     unit_label = str(holding.get("unit_label") or "股")
@@ -168,24 +172,33 @@ def _fill(pm: PortfolioManager, d: Dict[str, Any], today: str, cfg) -> Dict[str,
 
     if side == "buy":
         plan = _plan_buy(pm, holding, price, ccy, fx, _alloc_cny(d), rate, min_cny)
+        cny_out = math.ceil(plan["topup"] * fx * 100) / 100
+        k = f"paper-fx-{today}-{symbol}-{ccy}"
         if plan["topup"] > 0:   # CNY 换汇补足：两笔各带幂等键（同 key 会被账本当重复，所以 -out / -in 分开）
-            cny_out = math.ceil(plan["topup"] * fx * 100) / 100
-            k = f"paper-fx-{today}-{symbol}-{ccy}"
             pm.withdraw_cash("CNY", cny_out, source=_CLAIM, idempotency_key=f"{k}-out")
             try:
                 pm.deposit_cash(ccy, plan["topup"], source=_CLAIM, idempotency_key=f"{k}-in")
             except Exception:
                 pm.deposit_cash("CNY", cny_out, source=_CLAIM, idempotency_key=f"{k}-undo")   # 换汇只做了一半：把 CNY 退回去
                 raise
-        res = pm.buy(symbol, plan["units"], price, currency=ccy, kind=kind, unit_label=unit_label,
-                     source=_CLAIM, idempotency_key=f"paper-{today}-{symbol}-buy")
+        try:
+            res = pm.buy(symbol, plan["units"], price, currency=ccy, kind=kind, unit_label=unit_label,
+                         source=_CLAIM, idempotency_key=f"paper-{today}-{symbol}-buy")
+        except Exception as e:  # noqa: BLE001
+            if plan["topup"] > 0:   # 换汇已提交而买入没成：反向换回，别留下没有成交的现金结构。
+                # 换汇键已烧，重试会被判重复 → 本次判终局（不 unclaim）
+                log.warning(f"[autopilot] {symbol} 买入失败，回滚换汇: {e}")
+                pm.withdraw_cash(ccy, plan["topup"], source=_CLAIM, idempotency_key=f"{k}-rollback-out")
+                pm.deposit_cash("CNY", cny_out, source=_CLAIM, idempotency_key=f"{k}-rollback-in")
+                raise _Skip("buy_failed", terminal=True) from e
+            raise
     else:
         plan = _plan_sell(holding, price, fx, verdict, _alloc_cny(d), min_cny)
         plan["fee"] = round(plan["cost"] * rate, 2)
         res = pm.sell(symbol, plan["units"], price, source=_CLAIM,
                       idempotency_key=f"paper-{today}-{symbol}-sell")
     if res.get("status") == "duplicate":
-        raise _Skip("duplicate_key", terminal=True)
+        raise _Skip("duplicate_key", terminal=True, record=False)
 
     # —— 账本已提交：之后只做收尾记账，失败只告警，绝不 unclaim ——
     if plan["fee"] > 0:
@@ -233,7 +246,9 @@ def run(today: Optional[str] = None) -> Dict[str, Any]:
             filled.append(_fill(pm, d, today, cfg))
             log.info(f"📒 [autopilot] {filled[-1]}")
         except _Skip as s:
-            if s.terminal:
+            if s.terminal and not s.record:
+                pass
+            elif s.terminal:
                 try:
                     record_execution(d["decision_id"], False, reason=f"{_CLAIM}:{s.reason}")
                 except Exception as e:  # noqa: BLE001

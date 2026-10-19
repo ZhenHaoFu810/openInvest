@@ -281,6 +281,34 @@ def test_rerun_same_day_does_not_double_book(home, monkeypatch):
     assert out["filled"] == [] and out["skipped"][0]["reason"] == "duplicate_key"
     assert (_pm(home).cash_amount("CNY"), _pm(home).find_holding("510300.SS")["units"]) == snap
     assert [h["action"] for h in home.read_history()] == ["buy", "fee"]
+    # duplicate_key 不写 execution（那会盖掉匹配出的 executed=True）
+    d = _decision(f"{TODAY}/510300.SS")
+    assert d["execution"] is None and d["executed"] is True
+
+
+def test_currency_mismatch_is_terminal_skip(home, monkeypatch):
+    _enable(monkeypatch)
+    _seed(home)   # 510300.SS 持仓按 CNY 计价
+    _verdict(home, "510300.SS", "TRIM", -1000)
+    _market(monkeypatch, {"510300.SS": (5.0, "USD")}, fx={"USD": 7.0})
+    assert ap.run(TODAY)["skipped"] == [{"symbol": "510300.SS", "reason": "currency_mismatch"}]
+    assert home.read_history() == []
+
+
+def test_buy_failure_after_fx_rolls_back_conversion(home, monkeypatch):
+    _enable(monkeypatch)
+    _seed(home, cash={"CNY": 30000.0, "AUD": 0.0}, holdings=[])
+    _verdict(home, "NDQ.AX", "ACCUMULATE", 2000)
+    _market(monkeypatch, {"NDQ.AX": (40.0, "AUD")}, fx={"AUD": 4.7})
+
+    def boom(self, *a, **kw):
+        raise ValueError("boom")
+    monkeypatch.setattr(PortfolioManager, "buy", boom)
+    out = ap.run(TODAY)
+    assert out["skipped"] == [{"symbol": "NDQ.AX", "reason": "buy_failed"}]
+    pm = _pm(home)
+    assert pm.cash_amount("CNY") == pytest.approx(30000.0) and pm.cash_amount("AUD") == pytest.approx(0.0)
+    assert _decision(f"{TODAY}/NDQ.AX")["execution"]["reason"] == "paper_autopilot:buy_failed"
 
 
 # ---------------- 休市 / 陈旧行情 ----------------

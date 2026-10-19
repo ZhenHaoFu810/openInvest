@@ -38,15 +38,17 @@ documents:
 | 裁决 | 行为 |
 |---|---|
 | HOLD / UNCLEAR / 无 alloc | 不动，不记 execution |
-| ACCUMULATE / BUY | `|alloc_cny|` 等值，当日 close，向下取整到整手 |
+| ACCUMULATE / BUY | `|alloc_cny|` 等值，当日首个缓存 bar（通常为收盘价，若同一 home 盘中跑过 scheduler / 哨兵则可能是更早缓存的盘中价），向下取整到整手 |
 | TRIM | 卖 `|alloc_cny|` 等值（整手、≤ 持有量） |
 | SELL | 全部卖出 |
 | 场外基金（`FUND:` 开头，T+1 两段式） | 不成交，记 `executed=false`，reason `unsupported_otc_fund` |
 
 - 必须有当日 bar：没拉到 → `stale_quote`，最新 bar 非今天 → `market_closed`（北京日期口径，美股 / 欧股不支持）；都不动账本、当日可重试。
-- 手数：`.SS/.SZ` 100、`.HK` 100、`.AX` 1、金属 / 加密小数 4 位；黄金 GC=F 按 CNY/克。
+- 手数：`.SS/.SZ` 100、`.HK` 固定 100（真实港股每手因股而异，如 2800.HK 是 500 股；模拟账本不会出错，但与「人执行」的可比性有偏差，暂不支持按标的覆盖）、`.AX` 1、金属 / 加密小数 4 位；黄金 GC=F 按 CNY/克。
 - 现金不足：先按当日汇率从 CNY 换汇（`withdraw` + `deposit`），再不够缩量到整手，缩到 0 → `no_cash`；现金不为负。
 - 金额 < `autopilot.min_order_cny` 或取整为 0 → `too_small`；TRIM / SELL 无持仓 → `no_position`。终局性跳过记 `executed=false`。
+- 持仓币种与报价币种不一致 → `currency_mismatch`（终局性跳过）；换汇后买入失败会反向换回并记 `buy_failed`（终局性）。
+- `duplicate_key`（账本幂等键拦下，说明这笔其实已成交）不写 execution 声明，避免盖掉匹配出的 `executed=True`。
 - 手续费 = 成交额 × `commission_bps/1e4`，作为 ADR-027 的 `fee` 活动（`record_fee`）另记一行。
 
 ## 幂等（ADR-016）

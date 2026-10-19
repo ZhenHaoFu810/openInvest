@@ -36,19 +36,20 @@ uv run python experiments/paper_autopilot/clone_home.py --src <生产 INVEST_HOM
 | 裁决 | 行为 |
 |---|---|
 | HOLD / UNCLEAR / 无 alloc | 不动、不记 execution（和人一样「没事做」） |
-| ACCUMULATE / BUY | 金额 = `|alloc_cny|`（CIO 已被 Sanity6 钳到用户上限，不二次钳）；价 = 当日 close；数量 = floor(金额 ÷ 价 ÷ 手) × 手 |
+| ACCUMULATE / BUY | 金额 = `|alloc_cny|`（CIO 已被 Sanity6 钳到用户上限，不二次钳）；价 = 当日首个缓存 bar（通常为收盘价；若同一 home 盘中跑过 scheduler / 哨兵，可能是更早缓存的盘中价）；数量 = floor(金额 ÷ 价 ÷ 手) × 手 |
 | TRIM | 卖出 `|alloc_cny|` 等值（整手、≤ 持有量） |
 | SELL | 全部卖出（不受最小单限制） |
 | 场外基金（`FUND:` 开头，T+1 两段式） | 不成交，记 `executed=false, reason=paper_autopilot:unsupported_otc_fund` |
 
 - **必须有今天的 bar**：行情源没拉到 → `skip(stale_quote)`；最新 bar 不是今天（休市）→ `skip(market_closed)`；两者都不动账本、不占幂等闸，当日可重跑。按北京日期比 bar，
   所以美股 / 欧股（北京 16:35 还没开盘）不受支持，会 `market_closed`。黄金 proxy 不带 bar 日期，照旧成交。
-- **手数**：`.SS/.SZ` 100、`.HK` 100、`.AX` 1、金属 / 加密可小数（保留 4 位）。
+- **手数**：`.SS/.SZ` 100、`.HK` 固定 100（真实港股每手因股而异，如 2800.HK 是 500 股；账本不会出错，但与「人执行」的可比性有偏差）、`.AX` 1、金属 / 加密可小数（保留 4 位）。
 - **币种 / 单位**：有持仓取持仓的 `cost_currency / unit_label / proxy_kind`；没有持仓的标的按后缀猜币种；黄金 GC=F 走 CNY/克。
 - **最小单**：金额 < `autopilot.min_order_cny`（默认 500）或取整后 0 股 → `skip(too_small)`。
 - **现金**：按币种扣。该币种现金不够，从 CNY 按当日汇率换汇（`withdraw` CNY + `deposit` 目标币，note 为 `paper fx`），CNY 也不够就缩量到整手，缩到 0 → `skip(no_cash)`。现金永不为负。
 - **手续费**：成交额 × `autopilot.commission_bps / 1e4`（默认 3bp），用 ADR-027 的 `fee` 活动另记一行。
 - 终局性跳过（`too_small / no_cash / no_position`）会记 `executed=false, reason=paper_autopilot:<原因>`，`decisions` 里能看到「程序也没成交」及原因。
+- 持仓币种与报价币种不一致 → `currency_mismatch`；换汇后买入失败会反向换回并记 `buy_failed`；`duplicate_key`（账本幂等键拦下，说明这笔其实已成交）不写 execution 声明。
 - 同日多条裁决：先卖后买（卖出回款可供当天买入），其余按 symbol 字母序，保证确定性。
 
 幂等（ADR-016）：每个 `(日期, symbol, side)` 一把 `state_claim`；`buy / sell / fee / fx` 各带 `idempotency_key`；账本一旦提交就不再 unclaim。
