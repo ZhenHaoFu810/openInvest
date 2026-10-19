@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.62.0](https://github.com/longsizhuo/openInvest/compare/v0.61.0...v0.62.0) (2026-10-19)
+
+
+### Features
+
+* **autopilot:** IBKR via IB Gateway — whole shares, resident-session driver, IBKR news ([#526](https://github.com/longsizhuo/openInvest/issues/526)) ([b719dc2](https://github.com/longsizhuo/openInvest/commit/b719dc2787a5dae254749ce123c0483c35f91aae))
+
 ## [0.61.0](https://github.com/longsizhuo/openInvest/compare/v0.60.0...v0.61.0) (2026-10-19)
 
 
