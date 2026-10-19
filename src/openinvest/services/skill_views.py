@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import re
 import sys
+from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -197,11 +198,12 @@ def build_history_view(n: int) -> Dict[str, Any]:
             if not date_dir.is_dir() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_dir.name):
                 continue
             for md in sorted(date_dir.glob("*.md")):
-                content = md.read_text(encoding="utf-8")
+                with md.open(encoding="utf-8") as fh:  # 只取前 8 行，不整份读进内存
+                    summary = "\n".join(line.rstrip("\r\n") for line in islice(fh, 8))
                 debates.append({
                     "date": date_dir.name,
                     "asset": md.stem,
-                    "summary": "\n".join(content.splitlines()[:8]),
+                    "summary": summary,
                 })
             if len(debates) >= n:
                 break

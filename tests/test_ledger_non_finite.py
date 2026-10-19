@@ -41,3 +41,34 @@ def test_nan_amount_leaves_ledger_untouched(tmp_path, op):
     assert (store.root / "portfolio.md").read_text(encoding="utf-8") == before
     assert store.read_history() == []
     assert pm.cash_amount("CNY") == 1000.0
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_entry_points_reject_non_finite_with_clear_message(tmp_path, bad):
+    pm, _ = _pm(tmp_path)
+    for call in (
+        lambda: pm.deposit_cash("CNY", bad),
+        lambda: pm.withdraw_cash("CNY", bad),
+        lambda: pm.buy("AAPL", bad, 1.0, currency="USD"),
+        lambda: pm.buy("AAPL", 1.0, bad, currency="USD"),
+        lambda: pm.sell("AAPL", bad, 1.0),
+        lambda: pm.sell("AAPL", 1.0, bad),
+    ):
+        with pytest.raises(ValueError, match="有限数"):
+            call()
+
+
+def test_corrupted_ledger_write_names_field_and_manual_fix(tmp_path):
+    """portfolio.md 里已有 .nan：后续任何写入要报出字段路径 + 手动修 portfolio.md 的提示"""
+    pm, store = _pm(tmp_path)
+    store.write("portfolio", "state",
+                {"cash": {"CNY": float("nan"), "AUD": 5.0}, "holdings": [], "schema_version": 2}, "# p")
+    with pytest.raises(ValueError, match=r"cash\.CNY.*portfolio\.md"):
+        pm.deposit_cash("AUD", 10)
+
+
+def test_web_cash_body_rejects_nan_and_inf():
+    from openinvest.connectors.web_api.models import CashWriteRequest
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValidationError):
+            CashWriteRequest(amount=bad)
