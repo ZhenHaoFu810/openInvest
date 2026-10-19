@@ -42,4 +42,5 @@ def test_one_failed_asset_keeps_the_report(monkeypatch):
 
     assert set(out["verdicts"]) == {"0700.HK"}
     assert "AAPL" in out["skipped_assets"]
+    assert out["status"] == "degraded"  # 部分失败 = 降级，对外语义钉死
     assert out["full_report"] and sent
