@@ -24,6 +24,7 @@ from openinvest.paths import INVEST_ROOT
 ROOT = INVEST_ROOT
 
 __all__ = [
+    "cmd_autopilot_daily",
     "cmd_daily_report",
     "cmd_prepare_committee",
     "cmd_run_committee",
@@ -48,6 +49,27 @@ def cmd_daily_report(_: argparse.Namespace) -> None:
         real_stdout.flush()
     else:
         _print_json(result)
+
+
+def cmd_autopilot_daily(_: argparse.Namespace) -> None:
+    """模拟账户一站式日流程（给没有 scheduler 的第二个 INVEST_HOME 用 cron 跑，experiments/paper_autopilot/）：
+    daily_report（不发邮件）→ paper_autopilot（按当日裁决模拟成交）→ verdict_review（复盘）。
+    三段各自隔离失败（一段抛异常不挡后面），输出 JSON；有任何一段抛异常则退出码 1。
+    autopilot.enabled 关着时第二段是 no-op。"""
+    from openinvest.jobs import daily_report, paper_autopilot, verdict_review
+
+    out, failed = {}, False
+    for name, fn in (("daily_report", lambda: daily_report.run(send_email=False)),
+                     ("paper_autopilot", paper_autopilot.run),
+                     ("verdict_review", verdict_review.run)):
+        try:
+            out[name] = fn()
+        except Exception as e:  # noqa: BLE001
+            out[name] = {"status": "error", "error": f"{type(e).__name__}: {e}"}
+            failed = True
+    _print_json(out)
+    if failed:
+        sys.exit(1)
 
 
 # ---------- prepare_debate ----------
@@ -83,19 +105,6 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
     """
     import os
 
-    # LLM_API_KEY（通用）或 DEEPSEEK_API_KEY（向后兼容）都接受
-    if not (os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")):
-        _print_json({
-            "status": "error",
-            "error": "LLM_API_KEY / DEEPSEEK_API_KEY 未设。Direct 路径必须有 LLM key。",
-            "hint": (
-                "走 Coordinator 路径（在 Claude Code 里用 prepare_committee + spawn"
-                " subagent）不需要 key。或在 .env 里加 LLM_API_KEY（推荐）或"
-                " DEEPSEEK_API_KEY 后重试。"
-            ),
-        })
-        sys.exit(1)
-
     from openinvest.core.committee_runner import run_committee_session
     from openinvest.core.portfolio_manager import PortfolioManager
 
@@ -120,12 +129,14 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
     # 输出的 transcript_path 字段就是空字符串（Fresh Claude 端到端测试发现）
     safe_sym = safe_symbol(args.symbol)
     transcript_path = ROOT / "memory" / ".committee" / today / f"{safe_sym}.md"
-    if transcript_path.exists() and not args.force:
+    from openinvest.core.decision_ledger import is_unclear, llm_failure_reason, parse_committee_file
+    cached_parsed = parse_committee_file(transcript_path) if transcript_path.exists() else None
+    # CIO 没出裁决（UNCLEAR）的记录不当缓存，直接重跑；部分角色失败的照常命中但带 degraded
+    if transcript_path.exists() and not args.force and not is_unclear(cached_parsed):
         from openinvest.capabilities.committee.i18n import bilingual
-        from openinvest.core.decision_ledger import parse_committee_file
         from openinvest.jobs.review_calc import confidence_display
         from openinvest.jobs.verdict_review import load_confidence_lookup
-        parsed = parse_committee_file(transcript_path)
+        parsed = cached_parsed
         _print_json({
             "status": "cached",
             "reason": bilingual(
@@ -137,8 +148,23 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
             # 与 fresh 路径 / MCP run_committee cached 同款
             "confidence_lookup": (confidence_display(parsed, load_confidence_lookup(), with_raw=False)
                                   if parsed else None),
+            **({"degraded": llm_failure_reason(parsed)} if llm_failure_reason(parsed) else {}),
         })
         return
+
+    # LLM key 闸放在同日 cache 之后：命中缓存只读 transcript，不调 LLM，没 key 也该能读
+    # LLM_API_KEY（通用）或 DEEPSEEK_API_KEY（向后兼容）都接受
+    if not (os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")):
+        _print_json({
+            "status": "error",
+            "error": "LLM_API_KEY / DEEPSEEK_API_KEY 未设。Direct 路径必须有 LLM key。",
+            "hint": (
+                "走 Coordinator 路径（在 Claude Code 里用 prepare_committee + spawn"
+                " subagent）不需要 key。或在 .env 里加 LLM_API_KEY（推荐）或"
+                " DEEPSEEK_API_KEY 后重试。"
+            ),
+        })
+        sys.exit(1)
 
     # 三路径统一架构：所有 prep（macro/wealth/event_brief/regime/portfolio_summary/
     # prior_insights）全部委托给 run_committee_session 一处实现，跟 Web/Cron 对齐。
@@ -160,6 +186,17 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     verdict = asset_result.get("verdict", {})
+    failure = llm_failure_reason(
+        parse_committee_file(transcript_path)
+        or {"verdict": str((verdict or {}).get("verdict") or "").upper()})
+    if failure and str((verdict or {}).get("verdict") or "").upper() == "UNCLEAR":
+        _print_json({
+            "status": "error",
+            "error": f"委员会没跑成：{failure}",
+            "hint": "多半是 LLM 调用失败（key / 额度 / 参数），先跑 doctor；失败记录已存档但不会当缓存。",
+            "transcript_path": str(transcript_path) if transcript_path.exists() else "",
+        })
+        sys.exit(1)
     report = asset_result.get("report")
     cio_memo = report.cio_memo if report is not None else ""
     from openinvest.capabilities.committee.i18n import get_invest_lang
@@ -205,6 +242,8 @@ def cmd_run_committee(args: argparse.Namespace) -> None:
         "cio_memo": cio_memo,
         "transcript_path": str(transcript_path) if transcript_path.exists() else "",
         "next_step": next_step,
+        # 有角色没产出、CIO 被强制 HOLD：照给，但要让 agent 看见并转告用户
+        **({"degraded": failure} if failure else {}),
     })
 
 
@@ -216,8 +255,13 @@ def cmd_save_committee(args: argparse.Namespace) -> None:
     """
     raw = sys.stdin.read()
     if not raw.strip():
-        _print_json({"error": "empty stdin"})
-        return
+        _print_json({"status": "error", "error": "empty stdin"})
+        sys.exit(1)
     from openinvest.core.committee_runner import save_committee_transcript
     provider = getattr(args, "provider", None) or "claude"
-    _print_json(save_committee_transcript(args.symbol, raw, provider=provider))
+    model = getattr(args, "model", None) or ""
+    try:
+        _print_json(save_committee_transcript(args.symbol, raw, provider=provider, model=model))
+    except ValueError as e:   # CIO 解析不出裁决：不存档，退出码 1 让 agent 看见并重交
+        _print_json({"status": "error", "error": str(e)})
+        sys.exit(1)

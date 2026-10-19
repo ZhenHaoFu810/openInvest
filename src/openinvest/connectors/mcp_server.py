@@ -9,10 +9,12 @@
 
 写安全与 CLI / web API 并存同一模型（with_portfolio_tx fcntl 锁）。
 
-工具刻意克制在高频能力（现 22 个）（80+ REST 端点全暴露会撑爆 agent context），
+工具刻意克制在高频能力（现 36 个）（80+ REST 端点全暴露会撑爆 agent context），
 全部复用 service 层 / PortfolioManager / decision_ledger——与 CLI、REST 同源，
-防三 adapter 漂移。委员会 Coordinator workflow 不在此处（Decision 5：那是
-Skill 的职责，MCP 只暴露 Direct 路径 run_committee）。
+防三 adapter 漂移。委员会 Coordinator 的出题/收卷（prepare_committee /
+submit_committee）2026-10-18 起也在此暴露：方向改为"插件不持模型 key、推理由宿主
+Agent 负责"，纯 MCP 的 agent 也要能走（推翻 Decision 5：那时只把 Coordinator 当
+Claude Code Skill 的专属流程）。
 
 注册（本地开发）：
     claude mcp add openinvest -- uv --directory <repo> run python -m connectors.mcp_server
@@ -23,9 +25,10 @@ Skill 的职责，MCP 只暴露 Direct 路径 run_committee）。
 from __future__ import annotations
 
 import asyncio
+import json
 from functools import partial, wraps
 from inspect import iscoroutinefunction
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 import anyio
 from pydantic import Field
@@ -39,6 +42,14 @@ from openinvest.utils.symbols import safe_symbol
 # 读工具零确认放行；动钱工具必须过 destructiveHint 闸——status 和 sell 不能同级
 _RO = ToolAnnotations(readOnlyHint=True)
 _MONEY = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False)
+# 动钱工具的可选幂等键（ADR-016）：client 自己生成（uuid4）；超时 / 结果未知时重试**复用同一个
+# key**，账本只记一次，之后同 key 返回 {"status": "duplicate"}。不传 = 旧行为（每次都入账）。
+_IDEM_FIELD = Field(description=(
+    "Optional client-generated key (e.g. a UUID4). When retrying this SAME call after a "
+    "timeout or an unknown result, reuse the same key: the ledger records it once and later "
+    "calls return {\"status\": \"duplicate\"} without touching cash or holdings. Only the key "
+    "is compared, not the arguments — a different order (other symbol/units/price/amount) "
+    "needs a new key, or it is silently treated as the retry."))
 
 mcp = FastMCP(
     "openinvest",
@@ -120,13 +131,54 @@ def status() -> Dict[str, Any]:
     between calls.
 
     Returns:
-        Object with `cash` (currency → amount), `holdings` (list of positions
-        with symbol, units, avg_cost, live price, market value, pnl_pct), and
-        portfolio-level totals.
+        Object with `cash` (currency → amount), `all_holdings` (every position,
+        priced the same way whatever the symbol: units, avg_cost, live price,
+        market value, pnl_pct; null price fields when a quote is unavailable;
+        each carries `alerts`, the user's per-asset alert lines with the
+        distance still to go, e.g. "距 price_below 还有 3.2%" — a tracked asset
+        with alert lines but no holding row appears as an is_tracking_only row),
+        `total_assets_cny`, `fx` (rate to CNY per non-CNY currency in use), an
+        optional `gold` summary when a gold-per-gram holding exists, and
+        `performance` (real-account TWR 30d / YTD / since inception, XIRR, max
+        drawdown with peak/trough dates, annualised volatility, return vs the
+        configured benchmark, `price_basis` per symbol (raw | adjusted), and data_quality;
+        or {"status": "insufficient_history"} until the ledger spans 2 trading days),
+        `income_30d` (dividends / interest received in the last 30 days by currency;
+        only present when there are any), and `pending_fund_orders` +
+        `pending_fund_orders_line` (off-exchange fund orders placed but not yet
+        confirmed — cash already deducted, `total_assets_cny` counts them at face
+        value; only present when there are any).
     """
     _check_advisory()
     from openinvest.services.skill_views import build_status_view
     return build_status_view()
+
+
+@_tool(annotations=_RO)
+def doctor() -> Dict[str, Any]:
+    """Health check, the first call of a session (same output as `run.sh doctor`,
+    for agents without shell access): is onboarding done, and which optional
+    pieces are missing.
+
+    `status` is "ready" when memory (user / strategy / portfolio) is initialized,
+    or "needs_setup" when it is not (or portfolio.md is still the v1 format) —
+    only then hand over to the `invest-setup` skill. A missing LLM key or mail
+    credentials never makes it "needs_setup": those `checks` entries are marked
+    `optional_for_coordinator` / `optional_for_email`. The Coordinator path
+    (`prepare_committee` + subagents) works without a key; only the Direct path
+    (`run_committee`, cron) needs one, see `direct_ready`.
+
+    Read-only; makes one short HTTP probe to the configured LLM endpoint when a
+    key is set.
+
+    Returns:
+        Object with `status`, `version`, `coordinator_ready`, `direct_ready`,
+        `next_step`, and `checks` (name / status / detail / hint per check).
+    """
+    _check_advisory()
+    from openinvest.paths import INVEST_ROOT
+    from openinvest.services.skill_views import build_doctor_view
+    return build_doctor_view(INVEST_ROOT)
 
 
 @_tool(annotations=_RO)
@@ -174,7 +226,9 @@ def history(
 def live_prices() -> Dict[str, Any]:
     """Fetch a one-shot market backdrop: spot gold (USD/oz and CNY/gram),
     USDCNY and AUDCNY FX rates, the NDQ.AX ETF price, the VIX volatility
-    index, and the 10-year US Treasury yield (TNX).
+    index, and the 10-year US Treasury yield (TNX). A fixed set of reference
+    instruments, independent of what the user holds (use `status` for the
+    user's own positions).
 
     Use for quick market context before analysis or when the user asks
     "how is the market / what's the gold price". Read-only; single batch,
@@ -227,6 +281,38 @@ def what_if(
     _check_advisory()
     from openinvest.services.skill_views import build_what_if_view
     return build_what_if_view(symbol=symbol, pct=pct, price=price)
+
+
+@_tool(annotations=_RO)
+def rebalance_plan(
+    mode: Annotated[Literal["cash_only", "sell_to_rebalance", "hybrid"], Field(description="cash_only: buy underweights with cash above the target cash ratio, never sell. hybrid (default): use that cash first, sell overweights only to cover the shortfall. sell_to_rebalance: sell every overweight back to target and buy underweights with the proceeds plus spare cash.")] = "hybrid",
+    band_pct: Annotated[float, Field(description="Drift band in percentage points (default 5): holdings within ±band of target are left alone.", ge=0, le=100)] = 5,
+) -> Dict[str, Any]:
+    """Compute a rebalance list against the target allocation in strategy.md:
+    what to BUY / SELL, how much, in whole lots, and why. Only produces the
+    list, places no order — the human executes. No LLM call.
+
+    Use when the user asks "do I need to rebalance", "how far am I from my
+    target allocation" or "what should I buy/sell to get back on target".
+    Per-asset targets come from `target_assets[].target_pct` in strategy.md;
+    assets without one split `target_allocation_stock` equally
+    (`target_source: "equal_split"`). Lot sizes: A-shares 100, convertible
+    bonds 10, off-exchange funds by amount, HK/others 1 (HK lot size is
+    unknown — see `lot_note`).
+
+    Args:
+        mode: "cash_only" | "sell_to_rebalance" | "hybrid" (default).
+        band_pct: Drift band in percentage points, default 5.
+
+    Returns:
+        `rows` (per target asset: current_pct / target_pct / drift_pct /
+        action BUY|SELL|NONE / amount in base currency / units / reason),
+        `totals` (cash_after, turnover, n_trades), `unmanaged` holdings,
+        `warnings`; or {"status": "error", "error": ...}.
+    """
+    _check_advisory()
+    from openinvest.services.rebalance_plan import build_rebalance_plan
+    return build_rebalance_plan(mode=mode, band_pct=band_pct)
 
 
 @_tool(annotations=_RO)
@@ -351,10 +437,22 @@ def ingest_event(
     source: Annotated[str, Field(description="Publisher name (e.g. 'Reuters') — the news outlet.")] = "",
     published_at: Annotated[Optional[str], Field(description="ISO 8601 publication time, if known.")] = None,
     ingested_by: Annotated[str, Field(description="Your own agent identity (e.g. 'hermes') for provenance; distinct from source.")] = "host-agent",
+    one_line_claim: Annotated[Optional[str], Field(description="Your one-sentence factual summary. Fill this (plus stance and severity) to ingest without any backend model — preferred.")] = None,
+    stance: Annotated[Optional[str], Field(description="For the holdings: 'risk', 'opportunity' or 'neutral'. Required with one_line_claim.")] = None,
+    severity: Annotated[Optional[str], Field(description="'low', 'mid' or 'high'. Required with one_line_claim.")] = None,
+    event_type: Annotated[Optional[str], Field(description="e.g. 'macro', 'policy', 'earnings', 'geopolitics', 'commodity', 'other'.")] = None,
+    affected_symbols: Annotated[Optional[List[str]], Field(description="yfinance tickers the event materially affects, e.g. ['GC=F'].")] = None,
+    entities: Annotated[Optional[List[str]], Field(description="Key entities (countries, companies, central banks), lowercase.")] = None,
 ) -> Dict[str, Any]:
     """Feed a finance news item you (the host agent) found into the event
-    ledger. The backend LLM normalizes it, grades severity, maps affected
-    symbols, and stores it for committee RAG recall.
+    ledger, graded and mapped to affected symbols, stored for committee RAG
+    recall.
+
+    Preferred: normalize it yourself — pass `one_line_claim`, `stance`,
+    `severity` (and ideally `affected_symbols`). The backend then only
+    validates and stores it; no backend model is involved. Without those
+    fields the backend model normalizes it, which fails when the backend runs
+    keyless (agent mode) — you get an error telling you which fields to add.
 
     You have far better search reach than the self-hosted crawler (including
     Chinese-language sources) — proactively feed news relevant to the user's
@@ -374,14 +472,65 @@ def ingest_event(
     Returns:
         Ingestion result with the normalized event id(s), dedup status, and
         `committee_task_id` — set when a new holding-relevant event (severity
-        ≥ mid, non-neutral) triggered a rate-limited committee re-run. This
-        tool is disabled in advisory mode.
+        ≥ mid, non-neutral) triggered a rate-limited committee re-run. In
+        agent mode it is "queued:<id>": the re-run waits for you in
+        `pending_committees`. This tool is disabled in advisory mode.
     """
     _check_advisory()
     from openinvest.services.event_ingest import ingest_events
     return ingest_events([{"title": title, "url": url, "snippet": snippet,
-                           "source": source, "published_at": published_at}],
+                           "source": source, "published_at": published_at,
+                           "one_line_claim": one_line_claim, "stance": stance, "severity": severity,
+                           "event_type": event_type, "affected_symbols": affected_symbols,
+                           "entities": entities}],
                          ingested_by=ingested_by)
+
+
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+def pending_news(
+    limit: Annotated[int, Field(description="Max items to return.", ge=1, le=100)] = 30,
+    dismiss_urls: Annotated[Optional[List[str]], Field(description="URLs you reviewed and judged irrelevant to the holdings; they won't be offered again.")] = None,
+) -> Dict[str, Any]:
+    """News the backend fetched but did not normalize because reasoning is
+    delegated to you (agent mode). For each relevant item call `ingest_event`
+    with `one_line_claim` / `stance` / `severity` / `affected_symbols`; pass
+    the irrelevant ones back here as `dismiss_urls`. Items leave the queue once
+    ingested or dismissed, and expire after 48h.
+    """
+    _check_advisory()
+    from openinvest.services.agent_queue import pending_news as _pending
+    return _pending(limit=limit, dismiss_urls=dismiss_urls or [])
+
+
+# 不标幂等：每调一次都往当天 daily 记录追加一段委员会摘要
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def daily_report() -> Dict[str, Any]:
+    """Assemble today's daily report (portfolio, verdicts, performance,
+    holdings digest) and return it as `full_report` Markdown for you to deliver.
+
+    Agent mode (keyless backend): run prepare_committee → roles →
+    submit_committee for every target asset FIRST; this tool then only reads
+    today's submitted verdicts — nothing is re-run by a backend model. Assets
+    without a submitted verdict are listed in `missing_verdicts`: treat any
+    entry there as a failure and report it. Backend mode: runs the backend
+    committee itself (needs a backend LLM key, takes minutes).
+    """
+    _check_advisory()
+    from openinvest.jobs.daily_report import run
+    return json.loads(json.dumps(run(send_email=False, include_report=True),
+                                 ensure_ascii=False, default=str))
+
+
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+def pending_committees() -> Dict[str, Any]:
+    """Committee re-runs that events or price moves requested while reasoning
+    is delegated to you (agent mode). For each item run `prepare_committee`,
+    the roles, then `submit_committee`; an item is done once a newer verdict
+    for that symbol is submitted. Requests expire after 24h.
+    """
+    _check_advisory()
+    from openinvest.services.agent_queue import pending_committees as _pending
+    return _pending()
 
 
 # ---------- 新闻源管理（用户级额外源，INVEST_HOME/rss_feeds.yml） ----------
@@ -441,17 +590,21 @@ def remove_news_source(
 
 @_tool(annotations=_MONEY)
 def buy(
-    symbol: Annotated[str, Field(description="yfinance ticker, e.g. 'AAPL', '510300.SS', 'GC=F'.")],
+    symbol: Annotated[str, Field(description=(
+        "yfinance ticker, e.g. 'AAPL', '510300.SS'. Gold is 'GC=F' and must be booked per gram in CNY: "
+        "units = grams, price = CNY/gram, currency='CNY', kind='metal', unit_label='克' "
+        "(USD/oz bookings are rejected)."))],
     units: Annotated[float, Field(description="Quantity bought; must be > 0.", gt=0)],
     price: Annotated[float, Field(description="Execution price per unit, in `currency`.", gt=0)],
     currency: Annotated[Optional[str], Field(description=(
         "Currency of `price`, e.g. 'CNY', 'USD', 'AUD'. Omit to use the existing position's "
         "currency (CNY for a new position); a different currency than the position's is rejected."))] = None,
-    kind: Annotated[str, Field(description="Asset kind tag, e.g. 'equity', 'etf', 'commodity'.")] = "equity",
+    kind: Annotated[str, Field(description="Asset kind tag: 'equity', 'etf', 'metal' (gold), 'crypto', 'bond', 'fund', 'other'.")] = "equity",
     unit_label: Annotated[str, Field(description="Human display label for units (default '股', i.e. shares).")] = "股",
     existing_position: Annotated[bool, Field(description=(
         "Not supported on buy. For a position held before using openInvest call "
         "`record_existing_position`; passing true here returns an error instead of deducting cash."))] = False,
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
 ) -> Dict[str, Any]:
     """Record a buy in the local ledger: adds to an existing position with
     weighted-average cost, or opens a new position for an unseen symbol.
@@ -461,14 +614,20 @@ def buy(
     Confirm symbol, units, and price with the user before calling; this
     moves ledger cash. A position the user already held before using
     openInvest is not a purchase: record it with `record_existing_position`.
+    Off-exchange China mutual funds (`FUND:<6 digits>`) settle T+1 or later
+    at the NAV of the pricing day: use `place_fund_order` +
+    `confirm_fund_order` instead (buy books them as instantly filled and
+    total assets dip by the amount until the real confirmation).
 
     Args:
-        symbol: yfinance ticker (e.g. "AAPL", "510300.SS", "GC=F").
+        symbol: yfinance ticker (e.g. "AAPL", "510300.SS"). Gold = "GC=F", booked in
+            CNY per gram only (units = grams, currency "CNY", kind "metal", unit_label "克").
         units: Quantity bought; must be > 0.
         price: Execution price per unit, in `currency`.
         currency: Currency of `price`; omitted = the existing position's currency (CNY if new).
-        kind: Asset kind tag, e.g. "equity", "etf", "commodity".
+        kind: Asset kind tag: "equity", "etf", "metal" (gold), "crypto", "bond", "fund", "other".
         unit_label: Human display label for units (default "股", i.e. shares).
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
 
     Returns:
         Updated position summary, or {"status": "error", "error": ...}.
@@ -479,7 +638,8 @@ def buy(
         return {"status": "error", "error": "buy 不登记已有持仓（会扣现金）；请改用 record_existing_position。"}
     try:
         return _pm().buy(symbol=symbol, units=units, price=price, currency=currency,
-                         kind=kind, unit_label=unit_label, source="mcp")
+                         kind=kind, unit_label=unit_label, source="mcp",
+                         idempotency_key=idempotency_key)
     except ValueError as e:
         return {"status": "error", "error": str(e)}
 
@@ -488,14 +648,18 @@ def buy(
 # 在老版本上照样扣现金。独立工具在老 server 上直接报 Unknown tool，宁可失败也不扣错钱。
 @_tool(annotations=_MONEY)
 def record_existing_position(
-    symbol: Annotated[str, Field(description="yfinance ticker, e.g. 'AAPL', '510300.SS', 'GC=F'.")],
+    symbol: Annotated[str, Field(description=(
+        "yfinance ticker, e.g. 'AAPL', '510300.SS'. Gold is 'GC=F' and must be booked per gram in CNY: "
+        "units = grams, price = CNY/gram, currency='CNY', kind='metal', unit_label='克' "
+        "(USD/oz bookings are rejected)."))],
     units: Annotated[float, Field(description="Quantity held; must be > 0.", gt=0)],
     price: Annotated[float, Field(description="Average cost per unit, in `currency`.", gt=0)],
     currency: Annotated[Optional[str], Field(description=(
         "Currency of `price`, e.g. 'CNY', 'USD', 'AUD'. Omit to use the existing position's "
         "currency (CNY for a new position); a different currency than the position's is rejected."))] = None,
-    kind: Annotated[str, Field(description="Asset kind tag, e.g. 'equity', 'etf', 'commodity'.")] = "equity",
+    kind: Annotated[str, Field(description="Asset kind tag: 'equity', 'etf', 'metal' (gold), 'crypto', 'bond', 'fund', 'other'.")] = "equity",
     unit_label: Annotated[str, Field(description="Human display label for units (default '股', i.e. shares).")] = "股",
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
 ) -> Dict[str, Any]:
     """Record a position the user already held before using openInvest
     (onboarding backfill) WITHOUT touching ledger cash. History is marked
@@ -507,12 +671,14 @@ def record_existing_position(
     list; use `track_asset` for committee coverage.
 
     Args:
-        symbol: yfinance ticker (e.g. "AAPL", "510300.SS", "GC=F").
+        symbol: yfinance ticker (e.g. "AAPL", "510300.SS"). Gold = "GC=F", booked in
+            CNY per gram only (units = grams, currency "CNY", kind "metal", unit_label "克").
         units: Quantity held; must be > 0.
         price: Average cost per unit, in `currency`.
         currency: Currency of `price`; omitted = the existing position's currency (CNY if new).
-        kind: Asset kind tag, e.g. "equity", "etf", "commodity".
+        kind: Asset kind tag: "equity", "etf", "metal" (gold), "crypto", "bond", "fund", "other".
         unit_label: Human display label for units (default "股", i.e. shares).
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
 
     Returns:
         Updated position summary, or {"status": "error", "error": ...}.
@@ -521,7 +687,8 @@ def record_existing_position(
     try:
         return _pm().buy(symbol=symbol, units=units, price=price, currency=currency,
                          kind=kind, unit_label=unit_label,
-                         source="mcp:existing_position", source_type="external_funding")
+                         source="mcp:existing_position", source_type="external_funding",
+                         idempotency_key=idempotency_key)
     except ValueError as e:
         return {"status": "error", "error": str(e)}
 
@@ -531,6 +698,7 @@ def sell(
     symbol: Annotated[str, Field(description="yfinance ticker of an existing holding.")],
     units: Annotated[float, Field(description="Quantity sold; must be > 0.", gt=0)],
     price: Annotated[float, Field(description="Execution price per unit, in the holding's cost currency.", gt=0)],
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
 ) -> Dict[str, Any]:
     """Record a sell in the local ledger: reduces the position's units
     (average cost unchanged) and credits cash in the holding's cost
@@ -544,6 +712,7 @@ def sell(
         symbol: yfinance ticker of an existing holding.
         units: Quantity sold; must be > 0.
         price: Execution price per unit, in the holding's cost currency.
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
 
     Returns:
         Updated position summary, or {"status": "error", "error": ...}.
@@ -552,7 +721,8 @@ def sell(
     if units <= 0 or price <= 0:
         return {"status": "error", "error": "units and price must both be > 0"}
     try:
-        return _pm().sell(symbol=symbol, units=units, price=price, source="mcp")
+        return _pm().sell(symbol=symbol, units=units, price=price, source="mcp",
+                          idempotency_key=idempotency_key)
     except ValueError as e:
         return {"status": "error", "error": str(e)}
 
@@ -561,6 +731,7 @@ def sell(
 def deposit(
     currency: Annotated[str, Field(description="ISO-style currency code, e.g. 'CNY', 'USD', 'AUD'.")],
     amount: Annotated[float, Field(description="Amount to add; must be > 0.", gt=0)],
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
 ) -> Dict[str, Any]:
     """Record a cash deposit into the ledger, in any currency. Bookkeeping
     only — no real payment system is connected.
@@ -568,13 +739,14 @@ def deposit(
     Args:
         currency: ISO-style currency code, e.g. "CNY", "USD", "AUD".
         amount: Amount to add; must be > 0.
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
 
     Returns:
         Updated cash balances, or {"status": "error", "error": ...}.
     """
     _check_advisory()
     try:
-        return _pm().deposit_cash(currency, amount, source="mcp")
+        return _pm().deposit_cash(currency, amount, source="mcp", idempotency_key=idempotency_key)
     except ValueError as e:
         return {"status": "error", "error": str(e)}
 
@@ -583,6 +755,7 @@ def deposit(
 def withdraw(
     currency: Annotated[str, Field(description="ISO-style currency code, e.g. 'CNY', 'USD', 'AUD'.")],
     amount: Annotated[float, Field(description="Amount to remove; must be > 0.", gt=0)],
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
 ) -> Dict[str, Any]:
     """Record a cash withdrawal from the ledger, in any currency. Fails if
     the balance is insufficient. Bookkeeping only — no real payment system
@@ -591,6 +764,7 @@ def withdraw(
     Args:
         currency: ISO-style currency code, e.g. "CNY", "USD", "AUD".
         amount: Amount to remove; must be > 0.
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
 
     Returns:
         Updated cash balances, or {"status": "error", "error": ...}.
@@ -599,7 +773,288 @@ def withdraw(
     if amount <= 0:
         return {"status": "error", "error": "amount must be > 0"}
     try:
-        return _pm().withdraw_cash(currency, amount, source="mcp")
+        return _pm().withdraw_cash(currency, amount, source="mcp", idempotency_key=idempotency_key)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+
+
+# ---------- 账本活动：分红 / 利息 / 费用 / 税 / 拆股 / 退回本金（ADR-027 PR2；写逻辑在 PortfolioManager.record_*）----------
+# 同样是已发生事实的记账（不下单）；全部走 fcntl 锁 + 可选幂等键。interest 并入 record_dividend 的 kind、tax 并入
+# record_fee 的 kind，少两个工具（工具面刻意克制）。
+
+_DATE_FIELD = Field(description="Date the event happened, YYYY-MM-DD (default: today). Account performance books it on this date, so pass the real date when back-filling history.")
+
+
+@_tool(annotations=_MONEY)
+def record_dividend(
+    amount: Annotated[float, Field(description="Gross amount before withholding tax (for kind='interest': the interest credited); must be > 0.", gt=0)],
+    currency: Annotated[str, Field(description="Currency the cash was credited in, e.g. 'CNY', 'USD', 'AUD'.")],
+    symbol: Annotated[Optional[str], Field(description="yfinance ticker the dividend belongs to (required for kind='dividend'; optional for interest = account-level).")] = None,
+    kind: Annotated[Literal["dividend", "interest"], Field(description="'dividend' (default) or 'interest' (money-market / cash-account interest).")] = "dividend",
+    tax_withheld: Annotated[float, Field(description="Tax already withheld at source (kind='dividend' only); cash credited = amount - tax_withheld.", ge=0)] = 0.0,
+    reinvest: Annotated[bool, Field(description="DRIP: use the net cash to buy more of `symbol` (adds a second ledger row, source='drip'). The holding must exist and be in `currency`.")] = False,
+    reinvest_price: Annotated[Optional[float], Field(description="Reinvestment price per unit. Omit to use the stored raw close for the date (run `backfill_raw_close` first).", gt=0)] = None,
+    trade_date: Annotated[Optional[str], _DATE_FIELD] = None,
+    note: Annotated[Optional[str], Field(description="Free-text note stored with the ledger row.")] = None,
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
+) -> Dict[str, Any]:
+    """Record a dividend (or interest) the user already received: credits ledger
+    cash by amount - tax_withheld, positions unchanged. It counts as account
+    return (inside NAV), not as a deposit. Bookkeeping only — openInvest
+    never moves money.
+
+    Confirm symbol, gross amount, withholding tax, and the date with the
+    user before calling; this moves ledger cash. A symbol that is neither held
+    nor in the ledger is rejected (typo guard).
+
+    Args:
+        amount: Gross amount before withholding tax; must be > 0.
+        currency: Currency of the cash credited.
+        symbol: Ticker (required for dividends; optional for interest).
+        kind: "dividend" (default) or "interest".
+        tax_withheld: Tax withheld at source; credited cash = amount - tax_withheld.
+        reinvest: DRIP — buy more `symbol` with the net amount.
+        reinvest_price: Price per unit for the reinvestment (default: stored raw close).
+        trade_date: YYYY-MM-DD the cash arrived (default today).
+        note: Free-text note.
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
+
+    Returns:
+        Cash credited and new balance, or {"status": "error", "error": ...}.
+    """
+    _check_advisory()
+    try:
+        if kind == "interest":
+            if tax_withheld or reinvest or reinvest_price:
+                return {"status": "error", "error": "interest does not take tax_withheld / reinvest (book withholding tax with record_fee kind='tax')"}
+            return _pm().record_interest(amount, currency, symbol=symbol, trade_date=trade_date, note=note,
+                                         source="mcp", idempotency_key=idempotency_key)
+        if not symbol:
+            return {"status": "error", "error": "symbol is required for a dividend"}
+        return _pm().record_dividend(symbol, amount, currency, tax_withheld=tax_withheld, reinvest=reinvest,
+                                     trade_date=trade_date, note=note, reinvest_price=reinvest_price,
+                                     source="mcp", idempotency_key=idempotency_key)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+
+
+@_tool(annotations=_MONEY)
+def record_fee(
+    amount: Annotated[float, Field(description="Amount paid (positive number); must be > 0.", gt=0)],
+    currency: Annotated[str, Field(description="Currency the cash left in, e.g. 'CNY', 'USD', 'AUD'.")],
+    kind: Annotated[Literal["fee", "tax"], Field(description="'fee' (default: account / remittance / standalone commission) or 'tax' (e.g. dividend tax settled afterwards).")] = "fee",
+    symbol: Annotated[Optional[str], Field(description="Ticker the fee/tax relates to (optional; omit for account-level).")] = None,
+    trade_date: Annotated[Optional[str], _DATE_FIELD] = None,
+    note: Annotated[Optional[str], Field(description="Free-text note stored with the ledger row.")] = None,
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
+) -> Dict[str, Any]:
+    """Record a fee or a tax the user already paid: debits ledger cash, positions
+    unchanged. It is an account cost (inside NAV), not a withdrawal. Trade
+    commissions need no separate entry — buy / sell already book the trade.
+    Fails if the currency's cash balance is lower than the amount.
+
+    Confirm the amount and date with the user before calling; this moves
+    ledger cash.
+
+    Args:
+        amount: Amount paid; must be > 0.
+        currency: Currency of the cash debited.
+        kind: "fee" (default) or "tax".
+        symbol: Related ticker (optional).
+        trade_date: YYYY-MM-DD it was charged (default today).
+        note: Free-text note.
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
+
+    Returns:
+        Cash debited and new balance, or {"status": "error", "error": ...}.
+    """
+    _check_advisory()
+    try:
+        return _pm().record_fee(amount, currency, symbol=symbol, kind=kind, trade_date=trade_date, note=note,
+                                source="mcp", idempotency_key=idempotency_key)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+
+
+@_tool(annotations=_MONEY)
+def record_split(
+    symbol: Annotated[str, Field(description="yfinance ticker that split (must be held now or appear in the ledger).")],
+    ratio: Annotated[float, Field(description="New shares per old share: a 10-for-1 split is 10, a 1-for-10 reverse split is 0.1. Must be > 0 and not 1.", gt=0)],
+    trade_date: Annotated[Optional[str], Field(description="Ex-date of the split, YYYY-MM-DD (default: today). Pass the real ex-date when back-filling: account performance uses it to restate earlier trades.")] = None,
+    note: Annotated[Optional[str], Field(description="Free-text note stored with the ledger row.")] = None,
+    ledger_only: Annotated[bool, Field(description="Only write the ledger row, leave the holding's units / average cost untouched. Use it when the snapshot already reflects the split (e.g. you fixed the units by hand, or later trades were booked in post-split units).")] = False,
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
+) -> Dict[str, Any]:
+    """Record a stock split / reverse split: units x ratio, average cost / ratio,
+    cash unchanged (market value is unchanged). Call it once per split — a
+    second call multiplies the position again; use an idempotency_key if
+    unsure whether an earlier attempt landed. Rejected when the ledger already
+    has trades / corrections for the symbol on or after trade_date (their units
+    are already post-split, so multiplying the whole snapshot would invent
+    shares) — pass ledger_only=true if the snapshot is already correct.
+
+    Confirm symbol, ratio, and ex-date with the user before calling; this
+    rewrites the position's units and average cost.
+
+    Args:
+        symbol: Ticker that split.
+        ratio: New / old shares (10-for-1 = 10; 1-for-10 reverse = 0.1).
+        trade_date: Ex-date YYYY-MM-DD (default today).
+        note: Free-text note.
+        ledger_only: Write the ledger row only; do not change units / average cost.
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
+
+    Returns:
+        New units / average cost (plus a `follow_up` hint), or {"status": "error", "error": ...}.
+    """
+    _check_advisory()
+    try:
+        return _pm().record_split(symbol, ratio, trade_date=trade_date, note=note, ledger_only=ledger_only,
+                                  source="mcp", idempotency_key=idempotency_key)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+
+
+@_tool(annotations=_MONEY)
+def record_return_of_capital(
+    symbol: Annotated[str, Field(description="yfinance ticker of an existing holding.")],
+    amount: Annotated[float, Field(description="Cash received as return of capital; must be > 0.", gt=0)],
+    currency: Annotated[str, Field(description="Currency received; must equal the holding's cost currency.")],
+    trade_date: Annotated[Optional[str], _DATE_FIELD] = None,
+    note: Annotated[Optional[str], Field(description="Free-text note stored with the ledger row.")] = None,
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
+) -> Dict[str, Any]:
+    """Record a return of capital (some ETF / REIT distributions): credits ledger
+    cash, lowers the holding's average cost by amount / units (a cost
+    reduction, not income), units unchanged. Cost floors at 0; any excess is
+    reported as excess_over_cost (treat as a capital gain).
+
+    Confirm symbol, amount, and date with the user before calling; this moves
+    ledger cash and changes average cost.
+
+    Args:
+        symbol: Held ticker.
+        amount: Cash received; must be > 0.
+        currency: Currency of the cash (must match the holding's cost currency).
+        trade_date: YYYY-MM-DD received (default today).
+        note: Free-text note.
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
+
+    Returns:
+        New average cost, or {"status": "error", "error": ...}.
+    """
+    _check_advisory()
+    try:
+        return _pm().record_return_of_capital(symbol, amount, currency, trade_date=trade_date, note=note,
+                                              source="mcp", idempotency_key=idempotency_key)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+
+
+# ---------- 场外基金两段式（ADR-027 PR3；写逻辑在 PortfolioManager.place/confirm/cancel_fund_order）----------
+# 下单扣现金记在途（总资产按面值含它，不会中间假跌）→ 定价日净值公布后按净值换成份额（fund_confirm job 自动做，也可手动）。
+
+@_tool(annotations=_MONEY)
+def place_fund_order(
+    symbol: Annotated[str, Field(description="Off-exchange China mutual fund: 'FUND:<6-digit code>' (a bare 6-digit code is also accepted).")],
+    amount: Annotated[float, Field(description="Subscription amount in CNY (cash deducted now); must be > 0.", gt=0)],
+    currency: Annotated[str, Field(description="Currency of the amount; off-exchange funds are CNY.")] = "CNY",
+    order_ts: Annotated[Optional[str], Field(description=(
+        "When the order was placed, ISO 8601 in Beijing time (e.g. '2026-10-19T14:30:00'); default now. "
+        "Before 15:00 on a trading day the order is priced at that day's NAV, otherwise at the next trading day's. "
+        "Pass the real time when back-filling an order placed earlier."))] = None,
+    note: Annotated[Optional[str], Field(description="Free-text note stored with the order and ledger row.")] = None,
+    idempotency_key: Annotated[Optional[str], _IDEM_FIELD] = None,
+) -> Dict[str, Any]:
+    """Record the first leg of an off-exchange fund purchase the user already
+    placed with the fund platform: cash - amount, and the order is tracked as
+    in transit (`status.pending_fund_orders`). Total assets do not change
+    (the in-transit amount counts at face value), so there is no fake dip
+    between order day and confirmation. Shares arrive when the pricing-day NAV
+    is published: the `fund_confirm` job confirms automatically, or call
+    `confirm_fund_order`. Bookkeeping only — openInvest never places orders.
+
+    The expected confirm date uses a Monday-Friday calendar (no China holiday
+    table) and a lag by fund type (QDII / FOF are slower, read from the fund's
+    profile); the result says so (`calendar`, `lag_source`).
+
+    Confirm fund, amount, and order time with the user before calling; this
+    moves ledger cash.
+
+    Args:
+        symbol: FUND:<6 digits>.
+        amount: Subscription amount in CNY; must be > 0.
+        currency: Currency of the amount (CNY).
+        order_ts: Order time, ISO 8601 Beijing time (default now).
+        note: Free-text note.
+        idempotency_key: Reuse the same key when retrying this exact call; recorded once.
+
+    Returns:
+        order_id, pricing day (`nav_date`), expected confirm date, and new cash
+        balance, or {"status": "error", "error": ...}.
+    """
+    _check_advisory()
+    try:
+        return _pm().place_fund_order(symbol, amount, currency, order_ts=order_ts, note=note,
+                                      idempotency_key=idempotency_key, source="mcp")
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+
+
+@_tool(annotations=_MONEY)
+def confirm_fund_order(
+    order_id: Annotated[str, Field(description="order_id from place_fund_order / status.pending_fund_orders.")],
+    nav: Annotated[Optional[float], Field(description=(
+        "Unit NAV to confirm at. Omit to fetch the pricing day's published NAV (if it isn't published yet "
+        "the call returns status 'pending_nav' and changes nothing)."), gt=0)] = None,
+    fee: Annotated[float, Field(description="Subscription fee in CNY, taken out of the order amount (units = (amount - fee) / nav). Default 0.", ge=0)] = 0.0,
+) -> Dict[str, Any]:
+    """Second leg of an off-exchange fund purchase: turn an in-transit order
+    into shares at the pricing day's NAV (units = (amount - fee) / nav; average
+    cost updates, cash unchanged). The `fund_confirm` job does this
+    automatically every weekday evening, so call it manually only to supply a
+    NAV / fee yourself or to confirm early.
+
+    Safe to call twice: an order that is already confirmed returns
+    {"status": "already_confirmed"} (a cancelled one {"status": "cancelled"})
+    and nothing changes. If the pricing-day NAV is not published yet the result
+    is {"status": "pending_nav"} and the order stays in transit.
+
+    Args:
+        order_id: The order to confirm.
+        nav: Unit NAV; omit to use the published NAV of the pricing day.
+        fee: Subscription fee in CNY (default 0).
+
+    Returns:
+        Units added, NAV used and new average cost, or {"status": "error", "error": ...}.
+    """
+    _check_advisory()
+    try:
+        return _pm().confirm_fund_order(order_id, nav=nav, fee=fee, source="mcp")
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+
+
+@_tool(annotations=_MONEY)
+def cancel_fund_order(
+    order_id: Annotated[str, Field(description="order_id of an in-transit order (status 'placed').")],
+) -> Dict[str, Any]:
+    """Cancel an in-transit off-exchange fund order that was never executed
+    (the user withdrew it on the fund platform): the amount returns to ledger
+    cash. Only orders still in transit can be cancelled — a confirmed order
+    already holds shares (use `sell` to book a redemption).
+
+    Confirm with the user before calling; this moves ledger cash.
+
+    Args:
+        order_id: The in-transit order to cancel.
+
+    Returns:
+        Cash returned and new balance, or {"status": "error", "error": ...}.
+    """
+    _check_advisory()
+    try:
+        return _pm().cancel_fund_order(order_id, source="mcp")
     except ValueError as e:
         return {"status": "error", "error": str(e)}
 
@@ -611,26 +1066,38 @@ _STRAT_W = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotent
 
 @_tool(annotations=_STRAT_W)
 def set_allocations(
-    target_allocation_stock: Annotated[float, Field(description="Stock weight in [0, 1], e.g. 0.7. Must sum to ~1.0 with cash.", ge=0, le=1)],
-    target_allocation_cash: Annotated[float, Field(description="Cash weight in [0, 1], e.g. 0.3. Must sum to ~1.0 with stock.", ge=0, le=1)],
+    target_allocation_stock: Annotated[Optional[float], Field(description="Stock weight in [0, 1], e.g. 0.7. Pass together with target_allocation_cash (they must sum to ~1.0); omit both to leave the stock/cash split unchanged.", ge=0, le=1)] = None,
+    target_allocation_cash: Annotated[Optional[float], Field(description="Cash weight in [0, 1], e.g. 0.3. Pass together with target_allocation_stock; omit both to leave the split unchanged.", ge=0, le=1)] = None,
+    target_pcts: Annotated[Optional[Dict[str, Optional[float]]], Field(description="Per-asset target weights as {symbol: fraction of total assets in [0, 1]}, e.g. {'510300.SS': 0.3, 'GC=F': 0.2}. Symbols must already be tracked (see track_asset). A null value clears that asset's target (back to an equal split). The weights must sum to <= target_allocation_stock (the new one if you pass it in the same call).")] = None,
+    alerts: Annotated[Optional[Dict[str, Optional[Dict[str, Optional[float]]]]], Field(description="Per-asset alert lines as {symbol: {rule: value}}, rule in price_above / price_below / day_drop_pct / day_rise_pct / drawdown_from_cost_pct, e.g. {'GC=F': {'price_below': 900, 'day_drop_pct': 2}}. Rules you name overwrite, a null rule value clears just that rule, rules you don't mention stay; a null for the whole symbol clears all its alerts. Symbols must already be tracked. *_pct values are percentage points (3 = 3%), unlike target_pct. Alerts are only delivered when INVEST_EVENT_ALERT=1 is set on the server.")] = None,
 ) -> Dict[str, Any]:
-    """Update the strategy's target stock/cash allocation ratio. The two
-    values must sum to ≈1.0; schema validation rejects and rolls back any
-    write that would corrupt the strategy file.
+    """Update the strategy's target allocation: the stock/cash ratio and/or
+    the per-asset target weights that `rebalance_plan` reads, and/or the
+    per-asset alert lines the price sentinel watches. The stock and
+    cash values must sum to ≈1.0, and the per-asset weights must sum to at
+    most the stock target; schema validation rejects and rolls back any write
+    that would corrupt the strategy file. Everything in one call is validated
+    and written atomically — to lower the stock target below the current sum
+    of per-asset weights, pass the new weights in the same call.
 
-    Use when the user says e.g. "set my target to 70% stock / 30% cash".
+    Use when the user says e.g. "set my target to 70% stock / 30% cash" or
+    "put 30% in 510300.SS and 20% in gold".
 
     Args:
-        target_allocation_stock: Stock weight in [0, 1], e.g. 0.7.
-        target_allocation_cash: Cash weight in [0, 1], e.g. 0.3.
+        target_allocation_stock: Stock weight in [0, 1], e.g. 0.7 (with cash).
+        target_allocation_cash: Cash weight in [0, 1], e.g. 0.3 (with stock).
+        target_pcts: {symbol: weight in [0, 1]} per tracked asset; null clears.
+        alerts: {symbol: {rule: value}} alert lines per tracked asset; null
+            clears a rule (or, for a whole symbol, all its rules).
 
     Returns:
-        The updated allocation, or {"status": "error", "error": ...}.
+        The updated allocation and target assets, or {"status": "error", "error": ...}.
     """
     _check_advisory()
     from openinvest.services import strategy_write as svc
     try:
-        return svc.set_allocations(target_allocation_stock, target_allocation_cash)
+        return svc.set_allocations(target_allocation_stock, target_allocation_cash,
+                                   target_pcts=target_pcts, alerts=alerts)
     except ValueError as e:
         return {"status": "error", "error": str(e)}
 
@@ -643,13 +1110,25 @@ def track_asset(
     channel: Annotated[Optional[str], Field(description="Where the user actually buys it (broker/app name).")] = None,
     price_offset_pct: Annotated[Optional[float], Field(description="Systematic offset between quote and actual fill price, in percent (e.g. bank gold spread).")] = None,
     sell_fee_pct: Annotated[Optional[float], Field(description="Sell-side fee in percent, used by fee-aware math.")] = None,
+    target_pct: Annotated[Optional[float], Field(description="Target weight of this asset as a fraction of total assets, in [0, 1] (0.3 = 30%); read by rebalance_plan. The weights of all tracked assets must sum to <= target_allocation_stock, otherwise the write is rejected and the current sum is reported. Assets without one split the remainder equally. To clear a target use set_allocations with a null value.", ge=0, le=1)] = None,
+    alert_price_above: Annotated[Optional[float], Field(description="Alert when the price reaches or exceeds this level. Same price basis as status.current_price (held: cost currency, gold booking = CNY per gram; tracked-only: the quote source's own price).", gt=0)] = None,
+    alert_price_below: Annotated[Optional[float], Field(description="Alert when the price falls to or below this level (same price basis as alert_price_above). Must be below alert_price_above if both are set.", gt=0)] = None,
+    alert_day_drop_pct: Annotated[Optional[float], Field(description="Alert when the latest daily bar's drop vs the previous close reaches this many percentage points (3 = 3%, not a 0-1 fraction). On a closed market that is the last session; each trading day is reported once.", gt=0, le=100)] = None,
+    alert_day_rise_pct: Annotated[Optional[float], Field(description="Alert when the latest daily bar's rise vs the previous close reaches this many percentage points (3 = 3%); each trading day is reported once.", gt=0)] = None,
+    alert_drawdown_from_cost_pct: Annotated[Optional[float], Field(description="Alert when a held position is this many percentage points below its average cost (10 = 10%). Only evaluated for assets you hold.", gt=0, le=100)] = None,
 ) -> Dict[str, Any]:
     """Add a symbol to the tracked-asset list, or update an existing entry
     (idempotent upsert: only the fields you pass are changed). The tracked
-    list decides which symbols the committee and DCA jobs cover.
+    list decides which symbols the committee and DCA jobs cover. The
+    alert_* parameters set per-asset alert lines the price sentinel checks
+    every few minutes (price lines: 24h cooldown; day-move lines: once per trading day); each one you pass overwrites
+    that line only. To clear a line use set_allocations with a null value.
+    Delivery needs INVEST_EVENT_ALERT=1 on the server (default off — without
+    it a hit is only logged to the event store, nothing is sent).
 
-    Use when the user says "track AAPL" or wants to change a tracked
-    asset's cap/channel/fees.
+    Use when the user says "track AAPL", wants to change a tracked
+    asset's cap/channel/fees/target weight, or says "alert me when X drops
+    below N" / "tell me if it falls 3% in a day".
 
     Args:
         symbol: yfinance ticker to track (e.g. "AAPL", "0700.HK", "BTC-USD").
@@ -661,12 +1140,26 @@ def track_asset(
         price_offset_pct: Systematic offset between the quote and the user's
             actual fill price, in percent (e.g. bank gold spread).
         sell_fee_pct: Sell-side fee in percent, used by fee-aware math.
+        target_pct: Target weight as a fraction of total assets in [0, 1]
+            (read by rebalance_plan); all tracked assets' weights must sum
+            to <= target_allocation_stock or the write is rejected.
+        alert_price_above / alert_price_below: price lines (status.current_price
+            basis). alert_day_drop_pct / alert_day_rise_pct: the latest daily bar's move vs the
+            previous close, percentage points. alert_drawdown_from_cost_pct:
+            held position below average cost, percentage points.
 
     Returns:
         The stored asset entry, or {"status": "error", "error": ...}.
     """
     _check_advisory()
     from openinvest.services import strategy_write as svc
+    alerts = {k: v for k, v in {
+        "price_above": alert_price_above,
+        "price_below": alert_price_below,
+        "day_drop_pct": alert_day_drop_pct,
+        "day_rise_pct": alert_day_rise_pct,
+        "drawdown_from_cost_pct": alert_drawdown_from_cost_pct,
+    }.items() if v is not None}
     try:
         return svc.upsert_target_asset(symbol, {
             "max_single_invest_cny": max_single_invest_cny,
@@ -674,6 +1167,8 @@ def track_asset(
             "channel": channel,
             "price_offset_pct": price_offset_pct,
             "sell_fee_pct": sell_fee_pct,
+            "target_pct": target_pct,
+            "alerts": alerts or None,
         })
     except ValueError as e:
         return {"status": "error", "error": str(e)}
@@ -703,6 +1198,81 @@ def untrack_asset(
 
 # ---------- 委员会（Direct 路径） ----------
 
+# structured_output=False：只回一份 JSON 文本。默认会再附一份 structuredContent（中文转义后体积翻倍），
+# 宿主 Agent 的上下文里同一份出题内容出现两遍——实测 2.8 万字符的出题变成 5.5 万（2026-10-19）
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+       structured_output=False)
+def prepare_committee(
+    symbol: Annotated[str, Field(description="A symbol already in strategy target_assets, e.g. 'GC=F', 'NDQ.AX'.")],
+) -> Dict[str, Any]:
+    """Step 1 of the agent-run committee (Coordinator path): get everything YOU
+    need to play the 4 roles yourself — no backend LLM key involved.
+
+    Returns the deterministic data blocks (regime, sentiment / defense flag,
+    valuation, macro, events, portfolio, path reference) plus the 6 role
+    prompts and `instructions` describing the 3 rounds. Run Macro / Quant /
+    Risk (cheap subagents are fine), write the CIO memo yourself, then call
+    `submit_committee` with the full transcript.
+
+    The backend keeps its own copy of the deterministic facts from this call
+    and uses them when you submit (defense downgrade, regime, path snapshot),
+    so a fact you forget to paste cannot silently switch a rule off. Submit
+    within 6 hours of preparing.
+    """
+    _check_advisory()
+    from mcp.server.fastmcp.exceptions import ToolError
+    from openinvest.core.committee_runner import prepare_committee_brief
+    out = prepare_committee_brief(symbol)
+    if out.get("status") == "error":
+        raise ToolError(f"{out.get('error')} {out.get('hint', '')}".strip())
+    return json.loads(json.dumps(out, ensure_ascii=False, default=str))
+
+
+# 不标幂等：重交会再记一条反事实干预与 dream 事件，客户端不该当成可放心自动重试的调用
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def submit_committee(
+    symbol: Annotated[str, Field(description="Same symbol you passed to prepare_committee.")],
+    transcript: Annotated[str, Field(description="All sections, each starting with its separator line: === MACRO ===, === QUANT_R1 ===, === RISK_R1 ===, === QUANT_R2 ===, === RISK_R2 ===, === CIO ===.")],
+    provider: Annotated[str, Field(description="Which agent played the roles, e.g. 'hermes', 'claude', 'codex'.")] = "agent",
+    model: Annotated[str, Field(description="Model that actually played the roles, e.g. 'claude-sonnet-5-5'; omitted -> recorded as 'unknown'. The scorecard buckets verdicts by provider:model.")] = "",
+) -> Dict[str, Any]:
+    """Step 2 of the agent-run committee: hand in the transcript you produced
+    from `prepare_committee`. The backend parses the CIO memo, applies the same
+    deterministic rules as the backend-run committee (single-investment cap,
+    defense downgrade, sanity checks), saves the decision and returns it.
+
+    If the CIO section has no parseable verdict, nothing is saved and this
+    returns an error — fix the CIO section and submit again.
+
+    Returns:
+        `decision_id`, the post-rule `verdict` object, `saved` path and
+        `facts_source` ("prepare" = rules used the facts saved at prepare time;
+        "transcript" = no recent prepare found, facts were read from your text).
+    """
+    _check_advisory()
+    from datetime import datetime
+
+    from mcp.server.fastmcp.exceptions import ToolError
+    from openinvest.core.committee_runner import save_committee_transcript
+    from openinvest.core.decision_ledger import llm_failure_reason, parse_committee_file
+    if not transcript.strip():
+        raise ToolError("transcript is empty")
+    try:
+        res = save_committee_transcript(symbol, transcript, provider=provider, model=model)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    from pathlib import Path
+    parsed = parse_committee_file(Path(res["saved"])) or {}
+    reason = llm_failure_reason(parsed)
+    return {
+        "decision_id": f"{datetime.now().strftime('%Y-%m-%d')}/{symbol}",
+        "verdict": json.loads(json.dumps(res["verdict"], default=str)),
+        "saved": res["saved"],
+        "facts_source": (parsed.get("input_health") or {}).get("facts_source"),
+        **({"degraded": reason} if reason else {}),
+    }
+
+
 _COMMITTEE_LOCK = asyncio.Lock()
 
 @_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
@@ -730,12 +1300,20 @@ async def run_committee(
         max_rounds: Cross-challenge debate rounds (default 1).
 
     Returns:
-        Object with `decision_id`, `cached` flag, `verdict` (verdict,
-        confidence, suggested allocation, CIO memo) and `confidence_lookup`
-        (show this to the user instead of the self-reported confidence).
+        Object with `decision_id`, `cached` flag, `verdict` and
+        `confidence_lookup` (show this to the user instead of the
+        self-reported confidence). The shape differs by path:
+        - `cached: false` (fresh run): `verdict` is an object (verdict,
+          confidence, suggested allocation, ...).
+        - `cached: true` (today's transcript): `verdict` is the verdict string,
+          with `confidence`, `alloc_cny`, `alloc_currency` alongside, plus the
+          CIO memo as `cio_memo` and the deterministic `input_health` block
+          (empty inputs, rewrite rules applied, forced HOLD) — no need to call
+          `explain_decision` just to read them.
     """
     import json
-    from openinvest.core.decision_ledger import parse_committee_file
+    from mcp.server.fastmcp.exceptions import ToolError
+    from openinvest.core.decision_ledger import is_unclear, llm_failure_reason, parse_committee_file
     from openinvest.core.memory_store import MemoryStore
     from openinvest.jobs.review_calc import confidence_display
     from openinvest.jobs.verdict_review import load_confidence_lookup
@@ -746,11 +1324,16 @@ async def run_committee(
         safe = safe_symbol(symbol)
         cached = MemoryStore().root / ".committee" / today / f"{safe}.md"
         parsed = parse_committee_file(cached)
-        if parsed:
+        # CIO 没出裁决（UNCLEAR）的记录不当缓存，直接重跑；部分角色失败的照常命中但带 degraded
+        # （单个角色持续失败时不至于每次调用都重跑整轮委员会）
+        if parsed and not is_unclear(parsed):
             return {"cached": True, "decision_id": f"{today}/{symbol}",
                     **{k: parsed[k] for k in ("verdict", "confidence", "alloc_cny", "alloc_currency")},
                     "confidence_lookup": confidence_display(parsed, load_confidence_lookup(),
-                                                            with_raw=False)}
+                                                            with_raw=False),
+                    # 与 CLI 同款：缓存命中也带 memo 与 Input Health，agent 不必再 explain_decision
+                    "cio_memo": parsed["cio_memo"], "input_health": parsed["input_health"],
+                    **({"degraded": llm_failure_reason(parsed)} if llm_failure_reason(parsed) else {})}
 
     from openinvest.core.committee_runner import run_committee_session
 
@@ -790,12 +1373,22 @@ async def run_committee(
             symbols=[symbol], max_debate_rounds=max_rounds, progress_callback=_on_phase))
     res = (out.get("asset_committees") or {}).get(symbol) or {}
     v = res.get("verdict") if isinstance(res, dict) else None
+    today = datetime.now().strftime("%Y-%m-%d")
+    failure = llm_failure_reason(
+        parse_committee_file(MemoryStore().root / ".committee" / today / f"{safe_symbol(symbol)}.md")
+        or ({"verdict": str(v.get("verdict") or "").upper()} if isinstance(v, dict) else None))
+    if failure and isinstance(v, dict) and str(v.get("verdict") or "").upper() == "UNCLEAR":
+        # 没有裁决可给：报错而不是返回一个 UNCLEAR"结果"（2026-10-09 Codex 实测 402 时 isError=false）
+        raise ToolError(f"委员会没跑成：{failure}。多半是后端 LLM 调用失败（key / 额度 / 参数），"
+                        f"先跑 doctor；失败记录已存档但不会当缓存，修好后直接重跑。")
     return {
         "cached": False,
-        "decision_id": f"{datetime.now().strftime('%Y-%m-%d')}/{symbol}",
+        "decision_id": f"{today}/{symbol}",
         "verdict": json.loads(json.dumps(v if v is not None else res, default=str)),
         "confidence_lookup": (confidence_display(v, load_confidence_lookup(), with_raw=False)
                               if isinstance(v, dict) else None),
+        # 有角色没产出但 CIO 仍给了（被强制的）HOLD：照给，但必须让 agent 看见并转告用户
+        **({"degraded": failure} if failure else {}),
     }
 
 

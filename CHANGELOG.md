@@ -1,5 +1,196 @@
 # Changelog
 
+## [0.59.1](https://github.com/longsizhuo/openInvest/compare/v0.59.0...v0.59.1) (2026-10-19)
+
+
+### Performance
+
+* **committee:** send the prepare_committee brief once, without backend-only fields ([#517](https://github.com/longsizhuo/openInvest/issues/517)) ([eba1b24](https://github.com/longsizhuo/openInvest/commit/eba1b247c50294f0e77e3ee7b453fc3b2870cd78))
+
+## [0.59.0](https://github.com/longsizhuo/openInvest/compare/v0.58.0...v0.59.0) (2026-10-19)
+
+
+### Features
+
+* **fleet:** Sonnet model arm for the paper fleet (--sonnet-arm) ([#498](https://github.com/longsizhuo/openInvest/issues/498)) ([cd12eed](https://github.com/longsizhuo/openInvest/commit/cd12eed7a4671b614024f644a2ecfa3ac2ae2371))
+* **report:** agent-mode daily report built from submitted verdicts ([#510](https://github.com/longsizhuo/openInvest/issues/510)) ([5dc8823](https://github.com/longsizhuo/openInvest/commit/5dc8823a4d7680bee5e3384d6d188ddd73e03544))
+
+
+### Bug Fixes
+
+* **init:** onboarding gold rows go through gold_booking; USD/oz is rejected without failing init ([#514](https://github.com/longsizhuo/openInvest/issues/514)) ([6ad98a6](https://github.com/longsizhuo/openInvest/commit/6ad98a62998bba519a047e12bdfbc95e6f051c38)), closes [#501](https://github.com/longsizhuo/openInvest/issues/501)
+* **what_if:** point the missing-holding hint at buy --existing-position, not the retired GUI ([#512](https://github.com/longsizhuo/openInvest/issues/512)) ([38e5325](https://github.com/longsizhuo/openInvest/commit/38e5325a51ebd1074ce86cf8737e0ed47b216859))
+
+## [0.58.0](https://github.com/longsizhuo/openInvest/compare/v0.57.1...v0.58.0) (2026-10-18)
+
+
+### Features
+
+* **events:** agent mode — queue model work for the host agent ([#505](https://github.com/longsizhuo/openInvest/issues/505)) ([ed8727c](https://github.com/longsizhuo/openInvest/commit/ed8727ce4e00a6c0faff28237c597864b00580ef))
+* **review:** split scorecard by model era (Sonnet 5.5 vs DeepSeek) + Coordinator records model ([#497](https://github.com/longsizhuo/openInvest/issues/497)) ([be74cd7](https://github.com/longsizhuo/openInvest/commit/be74cd7317002addb32993345ab6344bcd64b872))
+
+## [0.57.1](https://github.com/longsizhuo/openInvest/compare/v0.57.0...v0.57.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **committee:** stop telling Risk Officer to call tools it does not have ([#500](https://github.com/longsizhuo/openInvest/issues/500)) ([6965016](https://github.com/longsizhuo/openInvest/commit/6965016a4de42f1b9a01ea4a81001276b7332f65)), closes [#476](https://github.com/longsizhuo/openInvest/issues/476)
+* **import:** reuse buy's gold booking check in import --commit ([#499](https://github.com/longsizhuo/openInvest/issues/499)) ([48cd9ae](https://github.com/longsizhuo/openInvest/commit/48cd9aecb7ca0017ec8a0492f8f324880e94308f)), closes [#462](https://github.com/longsizhuo/openInvest/issues/462)
+
+## [0.57.0](https://github.com/longsizhuo/openInvest/compare/v0.56.1...v0.57.0) (2026-10-18)
+
+
+### Features
+
+* **committee:** agent-run committee over MCP with backend-held facts ([#495](https://github.com/longsizhuo/openInvest/issues/495)) ([164e5d2](https://github.com/longsizhuo/openInvest/commit/164e5d2e63980a0ae17f280ce1be549f821ed5e8))
+
+## [0.56.1](https://github.com/longsizhuo/openInvest/compare/v0.56.0...v0.56.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* make LLM failures loud instead of silent successes ([#489](https://github.com/longsizhuo/openInvest/issues/489)) ([4c96774](https://github.com/longsizhuo/openInvest/commit/4c96774c1c5be19056cbdf5cc7e83f7b7a9bc989))
+
+## [0.56.0](https://github.com/longsizhuo/openInvest/compare/v0.55.0...v0.56.0) (2026-10-18)
+
+
+### Features
+
+* **fund:** 场外基金两段式——下单扣现金记在途，确认日按净值到账（ADR-027 PR3） ([#490](https://github.com/longsizhuo/openInvest/issues/490)) ([36e9e32](https://github.com/longsizhuo/openInvest/commit/36e9e32db2ecb25a7c0430df2c97c17427acdd13))
+
+## [0.55.0](https://github.com/longsizhuo/openInvest/compare/v0.54.1...v0.55.0) (2026-10-18)
+
+
+### Features
+
+* **ledger:** 账本活动类型 + 原始价估值（ADR-027 PR2） ([#482](https://github.com/longsizhuo/openInvest/issues/482)) ([e3bc54a](https://github.com/longsizhuo/openInvest/commit/e3bc54aef53b86fd50c98505f452f782b5d8d518))
+
+## [0.54.1](https://github.com/longsizhuo/openInvest/compare/v0.54.0...v0.54.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **llm:** omit temperature and json_object for Claude models ([#483](https://github.com/longsizhuo/openInvest/issues/483)) ([cafdfb8](https://github.com/longsizhuo/openInvest/commit/cafdfb89a9627baded01ef13152a1f18fa1902f7))
+
+## [0.54.0](https://github.com/longsizhuo/openInvest/compare/v0.53.1...v0.54.0) (2026-10-18)
+
+
+### Features
+
+* **events:** cap same-thesis reprints in the event brief and EVENT_STANCE ([9ba7b56](https://github.com/longsizhuo/openInvest/commit/9ba7b5639fa750810c89a6955ae80182c8d866f4))
+
+
+### Bug Fixes
+
+* **committee:** stop telling Quant to call tools it does not have ([9a4b549](https://github.com/longsizhuo/openInvest/commit/9a4b54957173c3c64fc2372710c40fb3f86f7dd5))
+
+
+### Refactor
+
+* **ledger:** 账本流水统一 Activity schema + replay_ledger 唯一读法（ADR-027 PR1） ([#479](https://github.com/longsizhuo/openInvest/issues/479)) ([c9db696](https://github.com/longsizhuo/openInvest/commit/c9db6964a4742af8a45a27eba55928647a1a23d5))
+
+
+### Docs
+
+* **skill:** point screeners / options / earnings calls / SEC filings at hosted MCPs ([46e0c55](https://github.com/longsizhuo/openInvest/commit/46e0c559f9ff2166f306c96d59f9012063cd8e1b))
+
+## [0.53.1](https://github.com/longsizhuo/openInvest/compare/v0.53.0...v0.53.1) (2026-10-18)
+
+
+### Docs
+
+* **adr:** ADR-027 账本活动类型（分红/利息/费用/税/拆股/场外基金两段式确认）——设计提案 ([#472](https://github.com/longsizhuo/openInvest/issues/472)) ([101ea98](https://github.com/longsizhuo/openInvest/commit/101ea9881fadb1b27c72cbe69642632d52f37907))
+
+## [0.53.0](https://github.com/longsizhuo/openInvest/compare/v0.52.0...v0.53.0) (2026-10-18)
+
+
+### Features
+
+* **sentinel:** per-symbol alert lines (price / daily move / drawdown from cost) ([#469](https://github.com/longsizhuo/openInvest/issues/469)) ([c460c47](https://github.com/longsizhuo/openInvest/commit/c460c4779f02c3d48b994973b2af1e62373ade8d))
+
+## [0.52.0](https://github.com/longsizhuo/openInvest/compare/v0.51.1...v0.52.0) (2026-10-18)
+
+
+### Features
+
+* **daily_report:** 日报新增"今日持仓归因"段（C5） ([#468](https://github.com/longsizhuo/openInvest/issues/468)) ([8ef850b](https://github.com/longsizhuo/openInvest/commit/8ef850bcaf7d13a0db5860db9e894b4a03e7ef87))
+
+## [0.51.1](https://github.com/longsizhuo/openInvest/compare/v0.51.0...v0.51.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **ops:** 运维加固 D3 超时+心跳 / D6 部署守卫 / D7 锁·jsonl·bak·scheduler unit ([#459](https://github.com/longsizhuo/openInvest/issues/459)) ([3149869](https://github.com/longsizhuo/openInvest/commit/3149869c89193f7afe334872faeeef2bf26723df))
+
+## [0.51.0](https://github.com/longsizhuo/openInvest/compare/v0.50.0...v0.51.0) (2026-10-18)
+
+
+### Features
+
+* **review:** B4 四臂 A/B（舰队 --sealed-arm / --debate-arm / --macro-soft-arm + 独立复盘），live 裁决不变 ([#460](https://github.com/longsizhuo/openInvest/issues/460)) ([5a197d3](https://github.com/longsizhuo/openInvest/commit/5a197d3f47652aaf148f7c26556d6876a81837f2))
+
+
+### Bug Fixes
+
+* **portfolio:** gold booked per gram in CNY, MCP doctor + optional checks, target_pct writable ([#443](https://github.com/longsizhuo/openInvest/issues/443) [#444](https://github.com/longsizhuo/openInvest/issues/444) [#449](https://github.com/longsizhuo/openInvest/issues/449)) ([#457](https://github.com/longsizhuo/openInvest/issues/457)) ([30f120d](https://github.com/longsizhuo/openInvest/commit/30f120d2f582c2d90a4a4f7237b39b12a5075ea4))
+
+
+### Refactor
+
+* 去重 + 删死代码 + 文档漂移修正（[#236](https://github.com/longsizhuo/openInvest/issues/236) / 评审 D8） ([#458](https://github.com/longsizhuo/openInvest/issues/458)) ([a84632e](https://github.com/longsizhuo/openInvest/commit/a84632e1d103c58b51fbb63105a83fcd41f23159))
+
+## [0.50.0](https://github.com/longsizhuo/openInvest/compare/v0.49.0...v0.50.0) (2026-10-18)
+
+
+### Features
+
+* **review:** 自报置信度校准 + 裁决中性度 + 同输入方差研究（Sprint 2 A5/A4） ([#455](https://github.com/longsizhuo/openInvest/issues/455)) ([2dd9229](https://github.com/longsizhuo/openInvest/commit/2dd922941a3bc25a1cdf1a4ef8c31338e7bc8a3d))
+
+## [0.49.0](https://github.com/longsizhuo/openInvest/compare/v0.48.0...v0.49.0) (2026-10-17)
+
+
+### Features
+
+* **portfolio:** rebalance_plan turns strategy targets into a buy/sell list ([#447](https://github.com/longsizhuo/openInvest/issues/447)) ([3425844](https://github.com/longsizhuo/openInvest/commit/3425844a19e2242600b00df760722e9af2e1757e))
+
+
+### Bug Fixes
+
+* **pnl,portfolio:** public PnL chart and status stop assuming the author's assets (C4) ([#448](https://github.com/longsizhuo/openInvest/issues/448)) ([c5a774b](https://github.com/longsizhuo/openInvest/commit/c5a774b229890c584beb07b976d27142561afead))
+
+## [0.48.0](https://github.com/longsizhuo/openInvest/compare/v0.47.0...v0.48.0) (2026-10-17)
+
+
+### Features
+
+* **jobs:** scheduled backup with WAL checkpoint ([#446](https://github.com/longsizhuo/openInvest/issues/446)) ([9d3f1bc](https://github.com/longsizhuo/openInvest/commit/9d3f1bc38773c1f70b229b3804f3aca34b9e682d))
+* **review:** 反事实账本——每条裁决配同窗口基准超额与照做净损益 ([#442](https://github.com/longsizhuo/openInvest/issues/442)) ([ea19e06](https://github.com/longsizhuo/openInvest/commit/ea19e06d40603073fa41a0c45e9d24488142639f))
+
+
+### Bug Fixes
+
+* **committee:** Sprint 1 端到端跟进——成交匹配起点、单次上限措辞与守卫、缓存路径、performance 提示 ([#445](https://github.com/longsizhuo/openInvest/issues/445)) ([f02b3b2](https://github.com/longsizhuo/openInvest/commit/f02b3b29f39c6aa39825a60c87a8efbcfdab54b6))
+
+## [0.47.0](https://github.com/longsizhuo/openInvest/compare/v0.46.0...v0.47.0) (2026-10-17)
+
+
+### Features
+
+* **committee:** Sanity 6 单次入场上限 + 删无出处 77% 规则 + 新闻注入防护 ([#430](https://github.com/longsizhuo/openInvest/issues/430)) ([81da569](https://github.com/longsizhuo/openInvest/commit/81da569837b624363a4b394addcfae3e7e08f55e))
+* **portfolio:** real-account TWR/XIRR/drawdown/benchmark in status and daily report ([#433](https://github.com/longsizhuo/openInvest/issues/433)) ([74dac7b](https://github.com/longsizhuo/openInvest/commit/74dac7b1a1e50cbab66ae4e263180746eaa33480))
+
+## [0.46.0](https://github.com/longsizhuo/openInvest/compare/v0.45.0...v0.46.0) (2026-10-17)
+
+
+### Features
+
+* **review:** 计分板诚实化——UNCLEAR 单列、同尺子基率/提升/区间 + transcript Input Health 块与同日重跑归档 ([#431](https://github.com/longsizhuo/openInvest/issues/431)) ([a76fcba](https://github.com/longsizhuo/openInvest/commit/a76fcbaf0cb8222dacbbc5128456dd23a5c63538))
+
+
+### Bug Fixes
+
+* **ledger:** idempotency key for money paths, agent-path decision matching, no bare load_dotenv ([#432](https://github.com/longsizhuo/openInvest/issues/432)) ([9df549d](https://github.com/longsizhuo/openInvest/commit/9df549d36543f7e98726cc6a2393223f23f9915f))
+
 ## [0.45.0](https://github.com/longsizhuo/openInvest/compare/v0.44.1...v0.45.0) (2026-10-17)
 
 

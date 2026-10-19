@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 
 import pandas as pd
+import pytest
 
 from openinvest.jobs.review_calc import (
     VerdictReview,
@@ -12,6 +13,14 @@ from openinvest.jobs.review_calc import (
     confidence_display,
     merge_confidence_lookup,
 )
+
+
+@pytest.fixture(autouse=True)
+def _default_llm_model(monkeypatch):
+    """查表按"当前配置的模型"过滤样本（build_confidence_lookup(model=)）：本文件的夹具行都是 DeepSeek 时代的，
+    别让开发机 / CI 的 LLM_MODEL 改变结果（评审 #497）。个别用例需要别的模型时自己 setenv。"""
+    for var in ("LLM_MODEL", "DEEPSEEK_MODEL"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _rv(verdict, hit, *, date="2026-06-01", conf=0.6, source="live", flat=True,
@@ -116,10 +125,10 @@ def test_bundled_default_is_fleet_only_aggregate():
     """随包默认表：只用舰队（n_live 恒 0），只有聚合数，没有标的（CI 红线 grep 同一份）。"""
     from openinvest.jobs.verdict_review import DEFAULT_LOOKUP_PATH
     data = json.loads(DEFAULT_LOOKUP_PATH.read_text(encoding="utf-8"))
-    assert data["source"] == "fleet"
+    assert data["source"] == "fleet" and data["model"] == "deepseek-v4-flash"
     cells = list(data["by_verdict"].values()) + [data["market_flat"]]
     assert cells and all(c["n_live"] == 0 and c["n"] == c["n_fleet"] for c in cells)
-    assert set(data) <= {"source", "window", "min_n", "by_verdict", "market_flat", "generated_on"}
+    assert set(data) <= {"source", "model", "window", "min_n", "by_verdict", "market_flat", "generated_on"}
 
 
 def test_daily_verdict_review_refreshes_lookup(tmp_path, monkeypatch):

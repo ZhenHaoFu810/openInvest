@@ -30,6 +30,7 @@ from openinvest.core.committee.cio_parse import (
     _strip_concentration_if_lens_off,
     parse_cio_memo,
     regime_label_from_text,
+    single_invest_cap_note,
 )
 from openinvest.core.committee.persist import _persist
 from openinvest.utils.base_currency import alloc_ceiling, base_currency
@@ -113,9 +114,11 @@ def run_committee(
     *,
     atr_defense_on: bool = False,
     defense_dca: Optional[Dict[str, Any]] = None,
+    single_invest_cap: Optional[int] = None,
     persist_to_memory: bool = True,
     max_debate_rounds: int = 1,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    input_health: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """对单个资产跑 Macro + Quant/Risk 多轮辩论 + CIO
 
@@ -129,9 +132,16 @@ def run_committee(
             本资产是黄金且 gold_defense_dca_enabled，service 层算好的本批放行/暂拦决定
             （{"allow", "fraction", "reason", "tranche_idx"}）。防御触发时改"全拦"为
             "放行一批 or 按 spacing/quota 拦"。None = 非黄金/未启用 → 旧全拦行为。
-        max_debate_rounds: cross-challenge 轮数上限。
-            - 1 = 旧行为（仅 1 轮 Round 2 cross-challenge），daily_report 用
-            - 4 = 真讨论模式（live 端点用），允许 4 轮拉锯，收敛后提前退出
+        single_invest_cap: 用户单次入场上限（基准币种，调用方用
+            utils.base_currency.single_invest_cap(target, strategy) 换好传入）。
+            parse_cio_memo Sanity 6 据此钳买侧金额；None/0 = 不设限。
+        max_debate_rounds: 辩论**总**轮数上限（含 Round 1 独立陈述）。cross-challenge 轮次是
+            Round 2..max_debate_rounds，即 `range(2, max(2, max_debate_rounds + 1))`。
+            - 1 = 只跑 Round 1，**不做 cross-challenge**（range 为空），daily_report / CLI 默认
+            - 4 = 真讨论模式（live 端点用）：Round 1 + 最多 3 轮 cross-challenge，收敛后提前退出
+        input_health: 调用方（session）算好的输入健康位（price_last_bar / empty_inputs /
+            macro_data_empty …），原样透传给 _persist 写进 transcript 的 Input Health 块；
+            本函数只补它自己知道的 model / cio_json_mode。None = 不带（旧调用零改）。
         progress_callback: 每个 stage 完成时调用，传 dict {phase, ...extra}
             phase 取值：
               - "round_1_start" / "round_1_done"
@@ -352,18 +362,29 @@ def run_committee(
         # 黄金分批 DCA 闸（service 层算好的本批放行/暂拦；非黄金/未启用为 None=旧全拦）
         defense_dca=defense_dca,
         alloc_ceiling=alloc_ceiling(),
+        single_invest_cap=single_invest_cap,
     )
     cio_parsed["alloc_currency"] = base_currency()
+    # Sanity 6 钳过金额 → memo 末尾留一句人话（transcript / 邮件 / CLI 渲染的都是 memo）
+    _cap_note = single_invest_cap_note(cio_parsed)
+    if _cap_note:
+        report.cio_memo = f"{report.cio_memo.rstrip()}\n\n⚠️ {_cap_note}"
 
+    from openinvest.utils.llm import get_llm_config_safe
     debate_meta = {
         "max_rounds": max_debate_rounds,
         "final_round": final_round,
         "converged": converged,
         "quant_history": quant_history,
         "risk_history": risk_history,
+        # Input Health 块用：哪个模型、CIO 走没走 JSON 输出（文本回退 = 多一次重问）。
+        # model 取的是写盘时刻的全局配置；_create_agent 目前没有按调用覆盖模型的入口，
+        # 真加了要改成从 agent 实例读（CR #431 建议 5）。
+        "model": get_llm_config_safe()[2],
+        "cio_json_mode": bool(_want_json and cio_fields is not None),
     }
     if persist_to_memory:
-        _persist(report, cio_parsed, debate_meta=debate_meta)
+        _persist(report, cio_parsed, debate_meta=debate_meta, input_health=input_health)
 
     return {
         "asset": sym,

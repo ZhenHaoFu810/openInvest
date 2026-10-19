@@ -49,7 +49,7 @@ class _Ticker:
     def __init__(self, daily, hourly=None, hourly_error=None):
         self.daily, self.hourly, self.hourly_error, self.calls = daily, hourly, hourly_error, []
 
-    def history(self, period="1mo", interval="1d"):
+    def history(self, period="1mo", interval="1d", **kw):
         self.calls.append((period, interval))
         if interval == "60m":
             if self.hourly_error:
@@ -110,6 +110,7 @@ def test_nan_daily_close_rebuilt_from_hourly_bars(store, monkeypatch, daily_volu
     assert last["Close"] == 4.234
     assert last["High"] == pytest.approx(4.28) and last["Low"] == pytest.approx(4.20)
     assert last["Volume"] == pytest.approx(expected_volume)
+    assert store.get_close_pair_df(SYM).loc["2026-10-16", "CloseRaw"] == 4.234  # ADR-027：重建也写 close_raw
 
 
 def test_hourly_failure_keeps_old_bar(store, monkeypatch):

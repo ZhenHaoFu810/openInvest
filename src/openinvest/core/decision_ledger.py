@@ -20,6 +20,7 @@ from openinvest.core.decision_calc import (  # noqa: F401
     _match_trades,
     _safe_stem,
     _vid_matches,
+    history_as_trades,
     summarize_decisions,
 )
 
@@ -45,6 +46,31 @@ def parse_committee_file(path: Path) -> Optional[Dict[str, Any]]:
     return parse_committee_text(path.read_text(encoding="utf-8"))
 
 
+def llm_failure_reason(parsed: Optional[Dict[str, Any]]) -> Optional[str]:
+    """这份委员会记录是不是"LLM 没跑成"的产物；是 → 人话原因，否则 None。
+
+    UNCLEAR（CIO 没出裁决）与"有角色没产出、被强制 HOLD"都算：这类记录不能当结果、
+    不能当当日缓存（2026-10-18 起失败要响亮——此前 402 被当成功缓存一整天）。
+    老存档没有 Input Health 块时只能看 verdict。
+    """
+    if not parsed:
+        return None
+    h = parsed.get("input_health") or {}
+    bad = h.get("worker_unavailable") or []
+    if parsed.get("verdict") == "UNCLEAR" or h.get("cio_unclear"):
+        return f"CIO 没给出裁决（UNCLEAR）；没产出的角色：{', '.join(bad) or '无'}"
+    if bad:
+        verdict_note = "裁决被强制 HOLD" if h.get("forced_hold") else "裁决可信度存疑"
+        return f"这些角色没产出：{', '.join(bad)}（{verdict_note}）"
+    return None
+
+
+def is_unclear(parsed: Optional[Dict[str, Any]]) -> bool:
+    """CIO 没给出裁决——只有这种记录不当缓存；部分角色失败的仍命中缓存但带 degraded。"""
+    return bool(parsed) and (parsed.get("verdict") == "UNCLEAR"
+                             or bool((parsed.get("input_health") or {}).get("cio_unclear")))
+
+
 def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
     """parse_committee_file 的文本版——远端模式拿到的是 hub 回传的 md 正文。"""
     verdict_m = re.search(r"\*\*Verdict\*\*:\s*(\w+)\s*\(confidence\s+([\d.]+)\)", text)
@@ -57,6 +83,27 @@ def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
             macro = json.loads(macro_m.group(1))
         except json.JSONDecodeError:
             pass
+    # Input Health 块（2026-10 计分板诚实化）：哪些输入为空 / 行情最后一根 / 规则改写 / 强制 HOLD。
+    # 老存档没有这块 → {}（读方按"未知"处理，不猜）。
+    health: Dict[str, Any] = {}
+    health_m = re.search(r"## Input Health.*?```json\n(.*?)\n```", text, re.DOTALL)
+    if health_m:
+        try:
+            parsed_health = json.loads(health_m.group(1))
+            if isinstance(parsed_health, dict):
+                health = parsed_health
+        except json.JSONDecodeError:
+            pass
+    run_m = re.search(r"\*\*Run at\*\*:\s*(\S+)", text)
+    # Coordinator 落盘的 Provider 行形如 "**Provider**: claude (skill mode)"（Direct 路径没有这行）。
+    # 老存档没有 Input Health 块时，复盘靠它认出"Claude/Hermes 扮演角色"的 Coordinator 行，别按日期算成 DeepSeek。
+    prov_m = re.search(r"\*\*Provider\*\*:\s*(\S+)\s*\(skill mode\)", text)
+    # CIO memo 正文：_persist 版 "## CIO Memo (Round 3)" 到下一个 "---\n\n## " 分节；
+    # Coordinator 版 "### CIO" 到下一个 "### ROLE" 小节（任意全大写角色名，不写死——
+    # 以后 CIO 后面加别的小节也不会被吞进 memo）。取不到 → None（缓存命中时让 agent 不必再 explain_decision）。
+    # 版式由 tests/test_run_committee_cached.py 的落盘回读测试守——改了分节标题那里会红。
+    memo_m = (re.search(r"## CIO Memo[^\n]*\n(.*?)(?=\n---\s*\n\s*## |\Z)", text, re.DOTALL)
+              or re.search(r"\n### CIO\n(.*?)(?=\n### [A-Z][A-Z0-9_]*\n|\Z)", text, re.DOTALL))
     sym_m = re.search(r"\*\*Symbol\*\*:\s*(\S+)", text)
     # 标签带基准币种（"Suggested allocation CNY" / "… AUD"），老存档都是 CNY
     alloc_m = re.search(r"\*\*Suggested allocation ([A-Z]{3})\*\*:\s*(-?[\d,.]+)", text)
@@ -73,6 +120,10 @@ def parse_committee_text(text: str) -> Optional[Dict[str, Any]]:
         "symbol": sym_m.group(1) if sym_m else None,
         "alloc_cny": alloc,
         "alloc_currency": alloc_m.group(1) if alloc_m else None,
+        "input_health": health,
+        "provider": prov_m.group(1).lower() if prov_m else None,
+        "run_at": run_m.group(1) if run_m else None,
+        "cio_memo": memo_m.group(1).strip() if memo_m else None,
     }
 
 
@@ -154,10 +205,13 @@ def record_execution(
     """记录用户对某决议的执行/拒绝（宿主 Agent 通过 CLI/API/MCP 回写）。
 
     幂等（ADR-016）：与该 decision_id 现存最新记录内容相同 → 跳过 append。
-    check-then-append 全程持 fcntl 排他锁——HTTP 重试 / agent 重发 / CLI 与 MCP
-    并发同写时不会双记（ADR-016 的原子幂等闸要求）。
+    check-then-append 全程持排他锁——HTTP 重试 / agent 重发 / CLI 与 MCP
+    并发同写时不会双记（ADR-016 的原子幂等闸要求）。锁用 memory_store 的 sidecar flock
+    （与其它 jsonl 追加同一纪律），不再直接 flock 数据文件。
     """
     import fcntl
+
+    from openinvest.core.memory_store import _file_lock
 
     if "/" not in decision_id:
         raise ValueError(f"decision_id 应为 '<date>/<symbol>'，收到: {decision_id!r}")
@@ -170,8 +224,11 @@ def record_execution(
         "recorded_at": datetime.now().isoformat(timespec="seconds"),
     }
     p = path or _executions_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a+", encoding="utf-8") as f:
+    with _file_lock(p), p.open("a+", encoding="utf-8") as f:
+        # 过渡一版（下个版本可删）：旧版本进程只 flock 数据文件本身、不认 sidecar，长寿命进程
+        # （invest-mcp / invest-web / agent 拉起的 stdio openinvest-mcp）可能在新版本上线后还活很久。
+        # 两把锁都拿：新进程之间由 sidecar 串行（顺序固定 sidecar→数据文件，不会死锁），
+        # 与旧进程之间由数据文件锁互斥——ADR-016 的原子幂等闸在混跑期不破。
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)
         latest = None
@@ -206,6 +263,7 @@ def list_decisions(days: int = 90) -> List[Dict[str, Any]]:
       memory/.committee/<date>/<sym>.md   决议（含被规则改写后的最终 verdict）
       .dreams/interventions.jsonl         规则干预（原始 verdict → 最终 verdict）
       trades.db                           实际成交（显式 verdict_id 或窗口匹配）
+      memory/portfolio_history.jsonl      MCP/CLI buy|sell 记的成交（只在这里，不写 trades.db）
       .dreams/verdict_review.jsonl        事后 returns/hits（verdict_review cron 回填）
       .dreams/executions.jsonl            用户执行/拒绝声明（本模块写入）
     """
@@ -227,6 +285,9 @@ def list_decisions(days: int = 90) -> List[Dict[str, Any]]:
     except Exception as e:  # noqa: BLE001  账本读失败不挡视图
         log.warning(f"decision_ledger 读 trades.db 失败 graceful：{e}")
         trades = []
+    # agent 路径（MCP/CLI → PortfolioManager.buy|sell）只写 portfolio_history.jsonl；
+    # 不并进来，wiki 承诺的"7 天同标的同向自动匹配"对 agent 记的成交永远不成立
+    trades = trades + history_as_trades(_load_jsonl(MemoryStore().root / "portfolio_history.jsonl"))
 
     # sanitized stem → 真实 symbol 回退映射（Coordinator/旧版 md 无 **Symbol**: 行时用；
     # 否则 decision_id 退化成 "GC_F" 与 interventions/trades 的 "GC=F" 永远 join 不上）
@@ -258,7 +319,8 @@ def list_decisions(days: int = 90) -> List[Dict[str, Any]]:
             rv = next((r for r in reviews
                        if r.get("date") == date and r.get("asset") == symbol
                        and r.get("source") == "live"), None)
-            matched = _match_trades(trades, decision_id, date, symbol, parsed["verdict"])
+            matched = _match_trades(trades, decision_id, date, symbol, parsed["verdict"],
+                                    run_at=parsed.get("run_at"))
             decl = executions.get(decision_id)
 
             executed: Optional[bool] = None  # None = 未知（无声明也无匹配依据）

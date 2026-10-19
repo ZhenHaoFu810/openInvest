@@ -8,10 +8,6 @@ documents:
     - POST /api/holdings
     - PUT /api/holdings/{symbol}
     - DELETE /api/holdings/{symbol}
-    - POST /api/deposit
-    - POST /api/withdraw
-    - POST /api/gold/buy
-    - POST /api/gold/sell
     - POST /api/trades/record
     - PATCH /api/trades/{trade_id}/status
     - POST /api/skill/buy
@@ -123,19 +119,50 @@ superseded_by: []
 | `PUT /api/holdings/{symbol}` | HTTP PUT | SET | 覆盖 | ✅ |
 | `DELETE /api/holdings/{symbol}` | HTTP DELETE | remove | 第二次 → 404 | ✅ |
 | napcat `/deposit /withdraw /gold*` | QQ 私聊 | 累加 | 单 WS 连接内事件串行处理、无重放 | ✅（直接用户动作）|
-| `deposit_cash / withdraw_cash / buy / sell / delete_holding` | CLI / MCP（含 `record_existing_position`）/ `/api/skill/*` / `/api/deposit` 等 | 累加 | 无去重键 | ⚠ 见下"未决" |
+| `deposit_cash / withdraw_cash / buy / sell` | CLI `--idempotency-key` / MCP `idempotency_key`（含 `record_existing_position`）/ `/api/skill/buy\|sell\|deposit\|withdraw`（body `idempotency_key` 或 `Idempotency-Key` header）| 累加 | 可选幂等键：`PortfolioManager._ledger_tx` 把 key 记进 portfolio 文档自身的 `ledger_idempotency_keys`（同 `synced_trade_ids`），check+append 与 cash/holdings 同一把锁、同一次 atomic write；重复 key 返回 `{"status": "duplicate"}` 不提交事务；失败 / 中断时 key 与账本一起不落盘。远端 CLI 不传 key 自动生成 uuid4，网络失败回显供重试复用 | ✅ PR #432（`tests/test_ledger_idempotency.py` 20 线程同 key 恰好 1 次入账）|
+| `record_dividend`（含 `--reinvest` DRIP）| CLI `record_dividend` / MCP `record_dividend`（`kind=dividend`）| 累加（现金 +净额；DRIP 再 +units、更新 avg_cost）| 同上 `PortfolioManager._ledger_tx` 幂等键（ADR-027 PR2）：key 与 cash / holdings 同一次 atomic write；DRIP 的第二条流水行（`buy`，`source=drip`）在同一事务之后追加，键为 `<key>#drip`，重放整笔返回 `duplicate` 两条流水都不重复；流水行都在事务提交**之后**追加（与 buy / sell 同一约定）——进程恰在两步之间被杀 = 快照已变、流水缺行，业绩的 `unreconciled` 会显示差额 | ✅ `tests/test_ledger_activities.py`（含 20 线程同 key 恰好 1 次）|
+| `record_interest`（`record_dividend --kind interest`）| CLI / MCP `record_dividend`（`kind=interest`）| 累加（现金 +）| 同上 | ✅ |
+| `record_fee`（`--kind fee\|tax`）| CLI `record_fee` / MCP `record_fee` | 累加（现金 −）| 同上；余额不足在锁内校验、不烧 key | ✅ |
+| `record_split` | CLI `record_split` / MCP `record_split` | **乘法**（units × ratio、avg_cost ÷ ratio）——重放最危险：第二次会再乘一遍 | 同上；强烈建议调用方总带 key（MCP 工具描述里写明） | ✅（带 key）；不带 key 的重复调用 = 再拆一次，与 buy 同一"不传 key 行为不变"约定 |
+| `record_return_of_capital` | CLI / MCP `record_return_of_capital` | 累加（现金 +，avg_cost −）| 同上 | ✅ |
+| `place_fund_order`（场外基金申购第一段）| CLI / MCP `place_fund_order` | 累加（现金 −amount，订单追加进 `holding.extra.pending_orders`）| 同上 `PortfolioManager._ledger_tx` 幂等键（ADR-027 PR3）：key、现金、在途订单同一次 atomic write；重放返回 `duplicate`，不二次扣现金、不多一张订单。`order_id` 在锁外生成，重放不会换号。不传 key = 每次都下一张新单（与 buy 同一约定）| ✅ `tests/test_fund_two_phase.py`（含 20 线程同 key 恰好 1 张）|
+| `confirm_fund_order`（手动：CLI / MCP）| CLI / MCP `confirm_fund_order` | 状态转换 `placed → confirmed`（units +、avg_cost 加权）——重放最危险：第二次会再加一遍份额 | **CAS，不靠 key**：读订单 `status`、改持仓、写 `confirmed` 在同一个 `with_portfolio_tx` 里；读到非 `placed` 就在锁内抛 `_NoChange` 中止事务（不提交、文件一个字节都不动），原样返回 `already_confirmed` / `cancelled`。联网取净值在锁外（净值没公布 → `pending_nav`，同样不动账）| ✅ 并发 8 线程恰好 1 个 `ok`、其余 `already_confirmed`；另有"锁外先被别人确认"的确定性用例 |
+| `confirm_fund_order`（`jobs/fund_confirm`，工作日 21:00-23:30 每 30 分钟）| 调度器 cron | 同上 | 同上 CAS——job 重跑 / 与手动确认并发 / 持有旧视图的 job 都只有一个赢家；job 只处理 `nav_date ≤ 今天` 的单，且读到 `already_confirmed` 不算失败 | ✅ `tests/test_fund_two_phase.py::test_job_*` |
+| `cancel_fund_order` | CLI / MCP `cancel_fund_order` | 状态转换 `placed → cancelled`（现金 +amount）| 同一个 CAS：只有 `placed` 能撤；已撤销再撤 → `cancelled`（不二次退钱）；**已确认 → 拒绝**（ValueError，份额已到账，要卖走 sell）| ✅ |
+| `delete_holding` | CLI / MCP / `/api/skill/delete_holding` | remove | 第二次 → "不在持仓" ValueError | ✅（天然幂等）|
+| ~~退役 GUI 端点 `/api/deposit` `/api/withdraw` `/api/gold/buy\|sell\|set\|offset`（`routers/write.py`）~~ | HTTP POST | 累加 | 无去重键 | ✅ 已删除（#236）：与 `cash_write.py` / `/api/skill/*` 重复、无消费者 |
+| 退役 GUI 端点 `/api/cash/{ccy}/deposit\|withdraw`（`cash_write.py`）| HTTP POST | 累加 | 无去重键 | ⚠ GUI 2026-07-05 退役、Web API 已 deprecated，无现存客户端；随 Web API 退场一并删，不再加键 |
 | `db.trades_db.record_trade` | `/api/trades/record` 重试 | INSERT | 无去重键 | ⚠ agent 重试产生重复 *planned* 行，但每行各执行一次（apply 端幂等已守）|
 
-## 未决（systemic，需用户拍板，不在本 PR 范围）
+## 已解决（PR #432）：累加型写路径的幂等键
 
-**所有"累加型 POST 写端点"没有幂等键**（`/api/deposit` `/api/withdraw` `/api/gold/buy|sell`
-`/api/skill/buy|sell`）。本地同进程 GUI/CLI 下，单次点击=单次意图，问题不大；但
-**hub-and-spoke 远端模式（`INVEST_API_BASE`）下，HTTP 客户端超时重发会双重应用**——这是
-REST "POST 非幂等"的通病。彻底关闭需要给写端点引入 `Idempotency-Key` header 方案
-（客户端生成 UUID，服务端按 key 去重 N 分钟）。这是设计决策，留给用户决定是否做、何时做。
+原"未决"：**所有"累加型 POST 写端点"没有幂等键**，hub-and-spoke 远端模式（`INVEST_API_BASE`）
+下 HTTP 客户端超时重发会双重应用。
 
-`record_trade` 的重复 *planned* 行同理可加 `(verdict_id, symbol, intended_date)` 唯一约束，
-但优先级低（每行各执行一次，真正的钱由 apply 端幂等守住）。
+落地方案（不设 TTL，不缓存上次响应——只记"见过的 key"，最近 500 个）：
+
+- **核心**：`core/portfolio_manager.py:PortfolioManager._ledger_tx(idempotency_key)` 包住
+  `with_portfolio_tx`；有 key 时在 portfolio 锁内读文档自身的 `ledger_idempotency_keys` 列表
+  （与 `synced_trade_ids` 同款，#231）：已存在 → 抛 `_DuplicateKey` 中止事务（`transaction`
+  commit-on-success，不落盘），方法返回 `{"status": "duplicate", "idempotency_key": ...}`；不存在 →
+  append 进列表，**与 cash/holdings 改动同一次 atomic write 落盘**。所以业务异常（余额不足）、
+  schema 校验失败、写盘中途被 kill，key 和账本一起不落盘——不存在"key 烧掉了但账没记"的丢单
+  窗口（独立 `.state` 文件的 `state_claim` 是两个文件两次写，`record_external_trade` 那条就留着这个
+  已记录的残余风险）。不传 key 行为完全不变。
+  `buy / sell / deposit_cash / withdraw_cash` 四个方法接 `idempotency_key=`，`record_existing_position`
+  经 `buy(source_type="external_funding")` 同受保护。
+- **入口透传**：CLI `deposit/withdraw/buy/sell --idempotency-key KEY`；MCP 五个动钱工具可选
+  `idempotency_key`（docstring："重试同一笔请复用同一个 key"）；`/api/skill/buy|sell|deposit|withdraw`
+  接 body `idempotency_key` 或 `Idempotency-Key` header。远端 CLI（`remote_dispatch.py`）不传
+  key 时本地生成一次 uuid4 随请求发送；超时/连不上时 error JSON 回显该 key 并提示
+  `--idempotency-key <key>` 重试——这就是"重试复用"的落点（requests 本身不重试 POST）。
+- **测试**：`tests/test_ledger_idempotency.py`（同 key 两次 buy 只变一次 / 不同 key 两次 /
+  并发 20 线程同 key 恰好 1 次 / 失败释放 key / MCP 层透传），`tests/test_web_api.py`
+  （body 与 header 两种 key 都去重），`tests/test_remote_dispatch.py`（自动 uuid4 / 显式 key 原样转发 /
+  超时回显 key）。
+
+仍留的两条见上表 ⚠：退役 GUI 端点随 Web API 退场一并删；`record_trade` 的重复 *planned* 行可加
+`(verdict_id, symbol, intended_date)` 唯一约束，优先级低（每行各执行一次，真正的钱由 apply 端幂等守住）。
 
 ## 不做的事
 

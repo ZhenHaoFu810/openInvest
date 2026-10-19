@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.30.0](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.29.0...invest-skill-v0.30.0) (2026-10-18)
+
+
+### Features
+
+* **committee:** agent-run committee over MCP with backend-held facts ([#495](https://github.com/longsizhuo/openInvest/issues/495)) ([164e5d2](https://github.com/longsizhuo/openInvest/commit/164e5d2e63980a0ae17f280ce1be549f821ed5e8))
+
+## [0.29.0](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.28.0...invest-skill-v0.29.0) (2026-10-18)
+
+
+### Features
+
+* **fund:** 场外基金两段式——下单扣现金记在途，确认日按净值到账（ADR-027 PR3） ([#490](https://github.com/longsizhuo/openInvest/issues/490)) ([36e9e32](https://github.com/longsizhuo/openInvest/commit/36e9e32db2ecb25a7c0430df2c97c17427acdd13))
+* **ledger:** 账本活动类型 + 原始价估值（ADR-027 PR2） ([#482](https://github.com/longsizhuo/openInvest/issues/482)) ([e3bc54a](https://github.com/longsizhuo/openInvest/commit/e3bc54aef53b86fd50c98505f452f782b5d8d518))
+
+## [0.28.0](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.27.0...invest-skill-v0.28.0) (2026-10-18)
+
+
+### Features
+
+* **sentinel:** per-symbol alert lines (price / daily move / drawdown from cost) ([#469](https://github.com/longsizhuo/openInvest/issues/469)) ([c460c47](https://github.com/longsizhuo/openInvest/commit/c460c4779f02c3d48b994973b2af1e62373ade8d))
+
+
+### Bug Fixes
+
+* **ops:** 运维加固 D3 超时+心跳 / D6 部署守卫 / D7 锁·jsonl·bak·scheduler unit ([#459](https://github.com/longsizhuo/openInvest/issues/459)) ([3149869](https://github.com/longsizhuo/openInvest/commit/3149869c89193f7afe334872faeeef2bf26723df))
+* **portfolio:** gold booked per gram in CNY, MCP doctor + optional checks, target_pct writable ([#443](https://github.com/longsizhuo/openInvest/issues/443) [#444](https://github.com/longsizhuo/openInvest/issues/444) [#449](https://github.com/longsizhuo/openInvest/issues/449)) ([#457](https://github.com/longsizhuo/openInvest/issues/457)) ([30f120d](https://github.com/longsizhuo/openInvest/commit/30f120d2f582c2d90a4a4f7237b39b12a5075ea4))
+
+
+### Refactor
+
+* 去重 + 删死代码 + 文档漂移修正（[#236](https://github.com/longsizhuo/openInvest/issues/236) / 评审 D8） ([#458](https://github.com/longsizhuo/openInvest/issues/458)) ([a84632e](https://github.com/longsizhuo/openInvest/commit/a84632e1d103c58b51fbb63105a83fcd41f23159))
+
+
+### Docs
+
+* **skill:** point screeners / options / earnings calls / SEC filings at hosted MCPs ([46e0c55](https://github.com/longsizhuo/openInvest/commit/46e0c559f9ff2166f306c96d59f9012063cd8e1b))
+
+## [0.27.0](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.26.0...invest-skill-v0.27.0) (2026-10-18)
+
+
+### Features
+
+* **portfolio:** real-account TWR/XIRR/drawdown/benchmark in status and daily report ([#433](https://github.com/longsizhuo/openInvest/issues/433)) ([74dac7b](https://github.com/longsizhuo/openInvest/commit/74dac7b1a1e50cbab66ae4e263180746eaa33480))
+* **portfolio:** rebalance_plan turns strategy targets into a buy/sell list ([#447](https://github.com/longsizhuo/openInvest/issues/447)) ([3425844](https://github.com/longsizhuo/openInvest/commit/3425844a19e2242600b00df760722e9af2e1757e))
+
+
+### Bug Fixes
+
+* **committee:** Sprint 1 端到端跟进——成交匹配起点、单次上限措辞与守卫、缓存路径、performance 提示 ([#445](https://github.com/longsizhuo/openInvest/issues/445)) ([f02b3b2](https://github.com/longsizhuo/openInvest/commit/f02b3b29f39c6aa39825a60c87a8efbcfdab54b6))
+
 ## [0.26.0](https://github.com/longsizhuo/openInvest/compare/invest-skill-v0.25.0...invest-skill-v0.26.0) (2026-10-16)
 
 

@@ -1,6 +1,6 @@
 ---
 name: invest
-version: 0.26.0 # x-release-please-version
+version: 0.30.0 # x-release-please-version
 description: openInvest multi-asset AI investment committee — **daily use**. Read portfolio / live prices / strategy / decision history / adjust positions / run a 4-role LLM committee for an investment verdict. Supports any yfinance symbol (A-share / HK / US / ETF / crypto / commodities) and any currency. **Two paths** — (1) Coordinator, Claude Code spawns 4 subagents, saves DeepSeek tokens; (2) Direct, any agent (Codex / Hermes / OpenClaw / Cursor / Cline / plain script) runs `run.sh run_committee <SYM>` for a one-shot verdict. **Trigger scenarios** — "show portfolio / 看看我的持仓", "how is my P&L / 我现在涨了多少", "should I buy/sell X / 该不该买卖X", "analyze X / 分析一下X", "run committee on X / 跑委员会", "track AAPL / 跟踪苹果", "add/trim a position, log a trade / 加仓减仓记一笔". **First-time install uses a separate skill `invest-setup`** (switch to it when `doctor` returns `needs_setup`). Backend — longsizhuo/openInvest.
 platforms: [linux, macos]
 metadata:
@@ -58,7 +58,10 @@ All three paths share the **same foundation** — the same prompts, the same dat
 preparation (regime classification + probability framing + deterministic fact
 block), and the same on-disk format
 (`memory/.committee/<date>/<asset>.md`; both Coordinator variants must call `save_committee`
-with `--provider <your-brand>` so the transcript is not mislabeled as claude). The only
+with `--provider <your-brand>` so the transcript is not mislabeled as claude, and
+`--model <the model that plays the 4 roles>`, e.g. `claude-haiku-5-5` — omitted is recorded as
+`unknown`, and the scorecard buckets verdicts per `<provider>:<model>`, so a model swap never
+mixes old and new track records). The only
 difference is "who plays the 4 LLM roles": on Coordinator you play them yourself
 (the model the user already subscribes to); on Direct the configured LLM (billed
 per token) plays them. Verdicts may differ (different models — useful for
@@ -80,9 +83,15 @@ just call `run_committee` (you will get a clear error) and honestly tell the use
 ## Decision tree (identical up front, whichever path you take)
 
 ```
-1. Run `run.sh doctor`                               ← mandatory first step
-   ├─ status: "ready"        → go to step 2 (keep using this skill)
-   └─ status: "needs_setup"  → **switch to the `invest-setup` skill** (not handled here)
+1. Run `run.sh doctor` (no shell access? call the MCP `doctor` tool — same output)   ← mandatory first step
+   ├─ status: "ready"        → go to step 2 (keep using this skill). A missing LLM key / mail
+   │                          credentials / .env shows up only as `optional_*` checks and never
+   │                          flips the status: Coordinator needs no key (only Direct does — see
+   │                          `direct_ready`), so do NOT re-onboard for those
+   └─ status: "needs_setup"  → memory not initialized (or portfolio.md still the v1 format) →
+                              **switch to the `invest-setup` skill** (not handled here)
+   (An older MCP server answers `Unknown tool` for `doctor`: call `status` instead — a normal
+    reply means onboarding is done.)
 
 2. Pick the subcommand by user intent:
 
@@ -90,6 +99,11 @@ just call `run_committee` (you will get a clear error) and honestly tell the use
    "assess the situation / risk / concentration
     / 分析战况"                                       → run.sh status (see Constraints before
                                                         calling anything "overweight")
+   "how am I doing / annualised return / drawdown
+    / 我的收益率 / 跑赢大盘没"                        → run.sh performance (TWR / XIRR / max
+                                                        drawdown / vs benchmark; also inside
+                                                        status.performance — quote TWR as the
+                                                        return, XIRR only as money-weighted)
    "what is my strategy / 我的策略是什么"             → run.sh strategy
    "recent trades / transaction log / 最近交易"       → run.sh history
    "where is the market / VIX now / 现在大盘"         → run.sh live_prices
@@ -97,8 +111,39 @@ just call `run_committee` (you will get a clear error) and honestly tell the use
                                                         (X is a yfinance symbol in the user's
                                                         portfolio; --gold-pct / --ndq-pct kept
                                                         for legacy usage)
+   "do I need to rebalance / what to buy or sell to
+    get back to my target allocation / 要不要再平衡"  → run.sh rebalance_plan [--mode hybrid|cash_only|
+                                                        sell_to_rebalance] [--band-pct 5] — a list
+                                                        only (BUY/SELL, whole lots, reason); the user
+                                                        places the orders; quote amounts from the JSON
+   "I got a dividend / interest / paid a fee or tax /
+    X split / 收到分红 利息 交了费 拆股 退回本金"      → run.sh record_dividend (--kind interest) /
+                                                        record_fee (--kind tax) / record_split /
+                                                        record_return_of_capital (MCP tools of the same
+                                                        name) — bookkeeping of what already happened,
+                                                        pass the REAL date (--trade-date); always send
+                                                        an idempotency key (a repeated split multiplies
+                                                        the position twice); never use deposit/withdraw
+                                                        for these (that would book them as new money
+                                                        instead of return)
+   "I bought / subscribed an off-exchange fund (FUND:xxxxxx)
+    today / 申购了场外基金 / 基金份额确认了吗"          → run.sh place_fund_order (MCP tool of the same
+                                                        name) when the order was just placed: cash goes
+                                                        out now, the order is "in transit" and total
+                                                        assets do not dip; shares arrive when the
+                                                        pricing-day NAV is published (the fund_confirm
+                                                        job confirms nightly; confirm_fund_order only to
+                                                        give a NAV / fee yourself, cancel_fund_order if
+                                                        the order never went through). Status shows
+                                                        pending_fund_orders. Don't use buy for these
    "should I buy/sell X / analyze X / 该不该买卖X"    → committee protocol ↓
    "track AAPL / I want to watch TSLA / 跟踪苹果"     → see references/adding-assets.md
+   "alert me if gold falls below 900 / tell me when
+    X drops 3% in a day / 跌破N提醒我 / 日跌超3%报警"  → run.sh track_asset --symbol X
+                                                        --alert-price-below 900 | --alert-day-drop-pct 3
+                                                        (MCP track_asset alert_* args) — then tell
+                                                        the user alerts are only SENT when the server
+                                                        has INVEST_EVENT_ALERT=1 (see Constraints)
    "I already held 3000 X before using this /
     补录我原来就有的持仓"                              → run.sh status first — never re-add a
                                                         symbol it lists (double count); else
@@ -190,7 +235,7 @@ machine but has no key, tell the user to run `run.sh init` to configure it first
 > spokes register the HTTP MCP directly — all tools fully available, no CLI forwarding:
 > `claude mcp add --transport http openinvest https://<hub>/mcp --header "Authorization: Bearer $INVEST_API_TOKEN"`
 > The CLI→REST forwarding below is still supported (maintenance mode); the Coordinator protocol (prepare/save) and
-> doctor/event_check still go through it. For deployment see backend wiki 08 §9.
+> event_check still go through it (`doctor` is an MCP tool too). For deployment see backend wiki 08 §9.
 
 With `INVEST_API_BASE` set in `.env`, this machine is a **client**: every subcommand is
 auto-forwarded to the remote hub (another machine running the invest web_api), and
@@ -218,6 +263,7 @@ same shape as local**, decision tree applies as usual):
 | `prepare/save_committee` | Via hub RPC — the Coordinator protocol (spawn 4 subagents) is **completely unchanged** |
 | `buy/sell/deposit/...` write ops | Land in the hub ledger (history `source: skill_remote`) |
 | `buy --existing-position` | **Refused** (the REST endpoint can't carry it, and forwarding would deduct hub cash) — run it on the hub, or use the remote MCP tool `record_existing_position` |
+| `record_dividend/record_fee/record_split/record_return_of_capital`, `place_fund_order/confirm_fund_order/cancel_fund_order`, `backfill_raw_close` | **Refused** (no REST endpoint, by design) — run them on the hub, or use the remote MCP tools of the same name |
 | `event_check` | Forwards the hub's manual scan; `--live` / `--recall` disabled (hub cron already covers them) |
 
 **Discipline**: in remote mode this machine has no `memory/`, so "reading/writing memory
@@ -227,11 +273,32 @@ add `Authorization: Bearer $INVEST_API_TOKEN` when curling.
 
 ## Tool lookup (MCP first; long tail in references/tools.md)
 
-**MCP users** (auto-registered once the plugin is installed; same for Claude Code / Codex): status / strategy /
-history / live_prices / what_if / discipline / decisions / explain_decision /
+**MCP users** (auto-registered once the plugin is installed; same for Claude Code / Codex): doctor / status / strategy /
+history / live_prices / what_if / rebalance_plan / discipline / decisions / explain_decision /
 record_execution / ingest_event / buy / record_existing_position / sell / deposit / withdraw /
+record_dividend / record_fee / record_split / record_return_of_capital /
+place_fund_order / confirm_fund_order / cancel_fund_order /
 set_allocations / track_asset / untrack_asset / news_sources / add_news_source / remove_news_source /
-run_committee — schemas auto-discovered; call them directly, no table lookup needed.
+run_committee / prepare_committee / submit_committee / pending_news / pending_committees / daily_report — schemas auto-discovered; call them directly, no table lookup needed.
+**Agent-run committee over MCP (no backend LLM key):** `prepare_committee` returns the data blocks, the 6 role
+prompts and `instructions`; play Macro / Quant / Risk (cheap subagents are fine), write the CIO memo yourself,
+then `submit_committee(symbol, transcript, provider, model)` within 6 hours (`provider` = your brand, `model` = the model that
+plays the roles, e.g. `claude-haiku-5-5`; omitted is recorded as `unknown` and the scorecard buckets by `provider:model`). The backend applies its own saved facts for the
+defense / regime rules and rejects a CIO section with no parseable verdict (fix it and resubmit).
+**Keyless backend (agent mode):** the backend queues work it would otherwise send to a model. `pending_news` lists
+fetched news — `ingest_event` the relevant items with `one_line_claim` / `stance` / `severity` / `affected_symbols`,
+pass the rest as `dismiss_urls`. `pending_committees` lists triggered re-runs — prepare, run, submit each.
+Daily report in agent mode: submit a verdict for every target asset first, then `daily_report` returns the
+report Markdown to deliver; anything in `missing_verdicts` is a failure to report, never something to skip.
+Do the submissions and the `daily_report` call in the same run (it reads today's local date — splitting them
+across midnight makes every asset show as missing).
+`track_asset` takes an optional `target_pct` (0–1 share of total assets, read by `rebalance_plan`) and
+`set_allocations` a `target_pcts` map — use them instead of editing strategy.md; the weights must sum
+to ≤ `target_allocation_stock` (a write that exceeds it is rejected with the current sum).
+Per-asset alert lines: `track_asset` takes `alert_price_above` / `alert_price_below` / `alert_day_drop_pct` /
+`alert_day_rise_pct` / `alert_drawdown_from_cost_pct`; `set_allocations` takes an `alerts` map
+(`{symbol: {rule: value}}`, a null value clears that rule, a null symbol clears all its rules). `status`
+shows each line and its distance on `all_holdings[].alerts` (e.g. "距 price_below 还有 3.2%").
 
 **CLI/REST agents**, or long-tail operations MCP does not cover (trades intent flow /
 config whitelist / events / holdings import / gold-specific endpoints) → read
@@ -267,6 +334,27 @@ cooldown that a strictly higher-severity item can bypass, ≤4 per rolling 24h; 
 A-share / regional-market news especially: that is the crawler's blind spot and you are
 the only source. If the host has a quotes/news skill installed (e.g. Longbridge), its
 news is worth feeding too — the ledger cares about the information, not where it came from.
+
+## Screeners / options chains / earnings calls / SEC filings: not built here — use a hosted MCP
+
+openInvest does **not** build or proxy these, and will not add a dependency for them. If the user asks
+for a stock screener, an options chain, an earnings-call transcript, or SEC filing text, **you (the host
+agent) register a hosted MCP next to openInvest and call it directly**. Three options (checked 2026-10):
+
+| MCP | Connect | Covers | Cost |
+|-----|---------|--------|------|
+| **Alpha Vantage** (official, hosted) | remote endpoint `https://mcp.alphavantage.co/mcp` (linked from the official docs as "our official MCP server"); free key at `alphavantage.co/support/#api-key` — how the key is attached (URL query vs header) is on the official MCP page, not repeated here | API catalog includes options data, earnings-call transcripts, fundamentals; the exact tool list is whatever the server's `tools/list` returns | free key: 25 requests/day |
+| **Financial Datasets** (hosted) | `https://mcp.financialdatasets.ai` (answers 401 without credentials); key from `financialdatasets.ai`. The open-source repo `financial-datasets/mcp-server` runs locally over stdio with `FINANCIAL_DATASETS_API_KEY` | financial statements (income / balance sheet / cash flow), prices, company news, crypto; the site also lists insider trades (Form 4) and 10-K search | paid API |
+| **OpenBB MCP server** (self-hosted, PyPI `openbb-mcp-server`) | `pip install openbb-mcp-server openbb`, then `openbb-mcp` — serves `http://127.0.0.1:8001/mcp` (streamable-http; `--transport sse` also available). Keep it on localhost. `--allowed-categories equity,news` limits what is exposed; `--tool-discovery` hides the full catalog behind search tools | routes of the installed OpenBB extensions, grouped by category: equity, economy, news, fixedincome, derivatives, etf, currency, commodity, index, regulators, crypto | free (data providers behind it may need their own keys) |
+
+Register with your client's own MCP command (Claude Code: `claude mcp add --transport http <name> <url>`;
+Codex / Hermes / Cursor: their MCP config). **Never paste an API key into the conversation, a note, or the ledger.**
+
+**Boundary — background only, never committee input.** Whatever these return is context for answering the
+user *outside* the committee. Do not pass it to `ingest_event`, into a committee prompt / brief, or into
+`record_execution` reasons: the committee's inputs are deterministic and replayable (as-of-safe), and a
+live screener / options-chain / transcript / filing pull is neither. The verdict still comes only from
+`run_committee`. Say plainly to the user which numbers came from the committee and which from the hosted MCP.
 
 ## Decision-loop workflow (Decision Review + Reflection)
 
@@ -306,6 +394,41 @@ a signal worth recording.
   portfolio is often only part of the user's money, and the committee's concentration lens is off by
   default (ADR-020). Raise concentration only if the user asks about it. The cap on any add-on buy is
   **always** portfolio cash — this never changes
+- **`max_single_invest_cny` ("单次上限") is a per-order cap on the suggested amount — not a daily or
+  total allowance, and orders can be split.** When the memo says "金额已按单次上限 … 钳制", the CIO's
+  amount was cut to that cap per order. Never tell the user "today's allowance is used up" because of it
+- **Dividends / interest / fees / taxes / splits are ledger activities, not trades or deposits**: `record_dividend`
+  (cash + gross − tax withheld; `--reinvest` = DRIP), `record_fee` (`--kind tax` for tax), `record_split`
+  (`--ratio` = new/old: 10-for-1 → 10, 1-for-10 → 0.1; pass the real ex-date — if later trades were already booked in post-split units it is refused, and `--ledger-only` writes the ledger row without touching units),
+  `record_return_of_capital` (lowers average cost).
+  They count as account return/cost, not as money in/out. Account performance values history at the
+  **raw** (not dividend-adjusted) price once `close_raw` is backfilled — run `backfill_raw_close` once after
+  upgrading, and read `performance.price_basis` (`raw` | `adjusted`) before quoting a return: for an
+  `adjusted` symbol a recorded dividend is deliberately left out of the NAV (the adjusted price already
+  contains it; `data_quality.income_in_adjusted_price` says so); `data_quality.price_basis_gaps` lists symbols
+  that fell back to `adjusted` because some days lack `close_raw` (run `backfill_raw_close`). `status.income_30d` totals the last 30 days.
+- **Off-exchange China mutual funds (`FUND:<6 digits>`) are a two-step purchase**: `place_fund_order` deducts the cash now and
+  records the order as in transit (`status.pending_fund_orders` + a one-line `pending_fund_orders_line`; `total_assets_cny` already
+  counts it at face value, so total assets don't dip between order day and confirmation). Orders placed before 15:00 Beijing time on a
+  trading day are priced at that day's NAV (`nav_date`), later ones at the next trading day's; shares arrive when that NAV is
+  published — the `fund_confirm` job confirms automatically every weekday evening (QDII / FOF NAVs can take a day or two longer),
+  or call `confirm_fund_order` (it is safe to repeat: an already-confirmed order returns `already_confirmed`; unpublished NAV returns
+  `pending_nav` and changes nothing). Pass `--nav` / `--fee` there only to supply the real NAV or subscription fee (the job assumes fee 0).
+  `cancel_fund_order` is only for orders still in transit. The expected confirm date is an **estimate** (Monday–Friday calendar, no
+  China holiday table; `lag_source=default` means the fund type couldn't be fetched) — say "expected", not "will". `buy` still works
+  for these funds but books them as instantly filled and warns; use it only for back-filling a purchase that is already confirmed.
+- **Gold (`GC=F`) is booked per gram in CNY only**: `buy` / `record_existing_position` with
+  `units` = grams, `price` = CNY/gram, `currency=CNY`, `kind=metal`, `unit_label=克`. A USD/ounce booking
+  is rejected (the error shows the correct form) — convert the quote first (USD/oz ÷ 31.1035 × USDCNY),
+  never retry with another currency to get it through.
+- **Per-asset alert lines (`alerts`) are only delivered when the server runs with `INVEST_EVENT_ALERT=1`
+  (default off, set by the owner on 2026-09-10 because event alerts were too noisy).** Without it a hit is
+  logged to the event store and nothing is sent — so after setting a line, say that plainly instead of
+  promising a notification, and never turn the switch on for the user (it is a server env var, not a tool
+  argument). `price_*` lines are in `status.current_price`'s unit (held: its cost currency, gold booking =
+  CNY per gram; tracked-only: the quote source's own price, e.g. `GC=F` in USD/oz); `*_pct` lines are
+  percentage points (3 = 3%), **not** the 0–1 fractions `target_pct` uses; `drawdown_from_cost_pct` only
+  works for assets the user holds. Price lines re-alert at most once per 24h; `alert_day_*` lines report a given trading day's move once (on weekends/holidays they describe the last session, and the alert text names that date); no line ever starts a committee run.
 - **Do not run `daily_report` proactively in conversation** — unless the user explicitly says "run the deep analysis" / "run full report"
   or you are setting up the daily cron. That path burns DeepSeek tokens. In conversation, single-asset `run_committee` is enough.
 - **Never fabricate live prices.** Always go through `run.sh status` or `live_prices`. yfinance may return
@@ -331,7 +454,8 @@ a signal worth recording.
 
 ## Where to look when something breaks
 
-Read the `doctor` JSON output carefully. Every check has a `hint` field telling you how to fix it.
+Read the `doctor` JSON output carefully. Every check has a `hint` field telling you how to fix it;
+checks marked `optional_*` are not faults, they only say which path/feature (Direct, e-mail) is unavailable; a `warning` check (e.g. `gold_booking`: a GC=F row not booked in CNY per gram) means a data fix is due, not that onboarding is unfinished — follow its hint with the user, do not switch to `invest-setup`.
 If doctor is all green but a subcommand still fails, read `references/troubleshooting.md`.
 
 Common Direct-path errors:

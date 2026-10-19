@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+from openinvest.core.memory_store import append_jsonl
 from openinvest.paths import INVEST_ROOT
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,10 @@ PRICING_CNY_PER_M_TOKENS: Dict[str, Dict[str, float]] = {
     # OpenAI 价格更贵，先用 gpt-4o 作为占位（如真用上要更新）
     "gpt-4o": {"input": 17.0, "output": 70.0},        # ~$2.5/$10 ≈ ¥17/¥70
     "gpt-4o-mini": {"input": 1.1, "output": 4.3},
+    # Claude 走 OpenAI 兼容层（api.anthropic.com/v1/），该层不支持 prompt caching → 只有未命中价
+    "claude-sonnet-5-5": {"input": 14.0, "output": 70.0},  # $2/$10 ≈ ¥14/¥70
+    "claude-opus-5-5": {"input": 28.0, "output": 140.0},  # $4/$20
+    "claude-haiku-5-5": {"input": 0.7, "output": 3.5},     # $0.10/$0.50（prompt ≤100K；超出 5× 价未建模）
 }
 
 # 落盘路径
@@ -102,7 +107,7 @@ def record_llm_call(
     error: Optional[str] = None,
     cache_hit_tokens: int = 0,
 ) -> Dict[str, Any]:
-    """记录一次 LLM 调用。线程安全（单 append fcntl-style 不严格，jsonl 容忍并发追加）
+    """记录一次 LLM 调用。线程/进程安全（memory_store.append_jsonl 的 sidecar flock）
 
     cache_hit_tokens：KVCache 命中的输入 token（DeepSeek usage 返回）→ 按命中价计真实成本。
 
@@ -131,9 +136,7 @@ def record_llm_call(
         record["extra"] = meta.extra
 
     try:
-        TELEMETRY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(TELEMETRY_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        append_jsonl(TELEMETRY_FILE, record)
     except Exception as e:  # noqa: BLE001  落盘失败不能阻断业务
         log.warning(f"telemetry 落盘失败: {e}")
 
@@ -188,9 +191,7 @@ def record_tool_call(
         "iteration": iteration,
     }
     try:
-        TOOL_CALLS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(TOOL_CALLS_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        append_jsonl(TOOL_CALLS_FILE, record, default=str)
     except Exception as e:  # noqa: BLE001
         log.warning(f"tool_calls 落盘失败: {e}")
     return record

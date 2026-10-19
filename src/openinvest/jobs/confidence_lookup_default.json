@@ -1,5 +1,6 @@
 {
  "source": "fleet",
+ "model": "deepseek-v4-flash",
  "window": "30d",
  "min_n": 30,
  "by_verdict": {

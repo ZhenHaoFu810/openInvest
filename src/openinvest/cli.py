@@ -10,10 +10,12 @@
 - 所有子命令都输出 JSON 或 markdown，给 Claude 读
 
 子命令：
-  status                持仓 + 实时价 + 浮盈
+  status                持仓 + 实时价 + 浮盈（含 performance 业绩块）
+  performance           真实账户业绩：TWR / XIRR / 最大回撤 / 年化波动 / vs 基准
   strategy              target_assets + Dreaming insights
   history [-n N]        近期交易 + 近期辩论
   what_if [...]         P&L 情景模拟
+  rebalance_plan [...]  再平衡清单（目标配置 → 该买/卖多少，按整手，只出清单不下单）
   live_prices           ^VIX, ^TNX, USDCNY, AUDCNY, NDQ, GC=F 一次拉齐
   prepare_debate SYM    输出辩论 brief（含项目原生 bull/bear/judge prompt）
   save_debate SYM       把 stdin 上来的 transcript 落到 memory/.debate/
@@ -22,7 +24,7 @@
 重构说明（refactor/skill-cmds-pkg）：
 本文件已退化为**薄壳 façade / dispatcher**。所有 cmd_*() 实现已逐字搬到
 scripts/skill_cmds/ 子包（按职责拆 5 个子模块）：
-  - skill_cmds/_helpers.py        共享工具 _print_json / _safe_close / _now_iso_local
+  - skill_cmds/_helpers.py        共享工具 _print_json / _safe_close
   - skill_cmds/analysis_cmds.py   status / strategy / history / what_if / correlate
                                   / live_prices / event_check
   - skill_cmds/committee_cmds.py  prepare_committee / run_committee / save_committee
@@ -66,6 +68,7 @@ from openinvest.skill_cmds.portfolio_cmds import *  # noqa: E402,F401,F403
 from openinvest.skill_cmds.strategy_cmds import *  # noqa: E402,F401,F403
 from openinvest.skill_cmds.lifecycle_cmds import *  # noqa: E402,F401,F403
 from openinvest.skill_cmds.config_cmds import *  # noqa: E402,F401,F403
+from openinvest.skill_cmds.maintenance_cmds import *  # noqa: E402,F401,F403
 
 
 # ---------- main ----------
@@ -119,12 +122,23 @@ def main() -> None:
         sys.exit(1)
 
 
+def _add_idempotency_key(p: argparse.ArgumentParser) -> None:
+    """动钱子命令共用（ADR-016）：同 key 的第二笔返回 {"status": "duplicate"} 不入账。"""
+    p.add_argument("--idempotency-key", default=None, metavar="KEY",
+                   help="幂等键：超时 / 结果未知时重试同一笔请复用同一个 key，账本只记一次；"
+                        "只比对 key 不比对参数，另一笔（换标的/数量/金额）必须换新 key；"
+                        "远端模式不传会自动生成 uuid4，出错时回显供重试")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """全部子命令的 argparse 定义（tests/test_mcp_server.py 的 CLI↔MCP 对等测试也读它）。"""
     parser = _JsonArgumentParser(prog="skill")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status").set_defaults(func=cmd_status)
+    sub.add_parser("performance",
+        help="真实账户业绩：TWR 30d/YTD/成立以来 + XIRR + 最大回撤 + 年化波动 + vs 基准（status 里同一块）"
+    ).set_defaults(func=cmd_performance)
     sub.add_parser("strategy").set_defaults(func=cmd_strategy)
     sub.add_parser("live_prices").set_defaults(func=cmd_live_prices)
     sub.add_parser("discipline", help="委员会纪律台账(不作为率+拦冲动+反事实损益)").set_defaults(func=cmd_discipline)
@@ -200,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="实际扮演 4 角色的 agent 品牌（claude/hermes/...），写进 transcript "
              "**Provider** 行。不传默认 claude（历史兼容）。",
     )
+    p.add_argument(
+        "--model", default=None,
+        help="实际扮演 4 角色的模型名（如 claude-haiku-5-5），写进 Input Health 的 model，"
+             "复盘按 provider:model 分桶。host 应该传；不传记 unknown。",
+    )
     p.set_defaults(func=cmd_save_committee)
 
     p = sub.add_parser(
@@ -214,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--max-rounds", type=int, default=1, dest="max_rounds",
-        help="cross-challenge 最大轮数，默认 1（同 daily_report cron）",
+        help="辩论总轮数上限（含 Round 1），默认 1 = 只跑 Round 1、不做 cross-challenge（同 daily_report cron）",
     )
     p.set_defaults(func=cmd_run_committee)
 
@@ -225,36 +244,116 @@ def build_parser() -> argparse.ArgumentParser:
              "需要 DEEPSEEK_API_KEY。",
     ).set_defaults(func=cmd_daily_report)
 
+    sub.add_parser(
+        "autopilot_daily",
+        help="模拟账户一站式日流程：daily_report(不发邮件) → paper_autopilot(按当日裁决模拟成交，"
+             "需 autopilot.enabled) → verdict_review。给独立 INVEST_HOME 的 cron 用；输出 JSON。",
+    ).set_defaults(func=cmd_autopilot_daily)
+
     # ============ 写操作子命令（Agent 用） ============
     p = sub.add_parser("deposit", help="存入现金（任意币种）")
     p.add_argument("--currency", "-c", required=True, help="币种 (CNY/AUD/USD/HKD/...)")
     p.add_argument("--amount", "-a", type=float, required=True, help="存入金额（正数）")
+    _add_idempotency_key(p)
     p.set_defaults(func=cmd_deposit)
 
     p = sub.add_parser("withdraw", help="取出现金（任意币种），余额不足报错")
     p.add_argument("--currency", "-c", required=True, help="币种")
     p.add_argument("--amount", "-a", type=float, required=True, help="取出金额（正数）")
+    _add_idempotency_key(p)
     p.set_defaults(func=cmd_withdraw)
 
     p = sub.add_parser("buy", help="加仓 / 建新仓（已有 symbol → 加权平均成本；新 → 建仓）")
-    p.add_argument("--symbol", required=True, help="yfinance symbol（如 510300.SS / AAPL / BTC-USD）")
-    p.add_argument("--units", type=float, required=True, help="买入数量")
-    p.add_argument("--price", type=float, required=True, help="单价（与 currency 同币种）")
+    p.add_argument("--symbol", required=True,
+                   help="yfinance symbol（如 510300.SS / AAPL / BTC-USD）。黄金 GC=F 必须按 人民币/克 记："
+                        "-c CNY --kind metal --unit-label 克，price = CNY/克，其余口径会被拒绝")
+    p.add_argument("--units", type=float, required=True, help="买入数量（黄金 = 克数）")
+    p.add_argument("--price", type=float, required=True, help="单价（与 currency 同币种；黄金 = CNY/克）")
     p.add_argument("--currency", "-c", default=None,
-                   help="计价币种；不填 = 已有持仓沿用其币种、新建仓 CNY；与已有持仓币种不一致会报错")
+                   help="计价币种；不填 = 已有持仓沿用其币种、新建仓 CNY；与已有持仓币种不一致会报错；GC=F 只接受 CNY")
     p.add_argument("--kind", choices=["equity", "etf", "metal", "crypto", "bond", "fund", "other"],
                    default="equity", help="资产类型，默认 equity")
     p.add_argument("--unit-label", default="股", help="单位（股/克/oz/coin），默认 '股'")
     p.add_argument("--existing-position", action="store_true",
                    help="补录用系统前就持有的仓位：不扣现金（funding_source=external_funding，"
                         "history source 带 ':existing_position'）")
+    _add_idempotency_key(p)
     p.set_defaults(func=cmd_buy)
 
     p = sub.add_parser("sell", help="减仓（units 减，cost_avg 不变，按 holding 的 cost_currency 还现金）")
     p.add_argument("--symbol", required=True)
     p.add_argument("--units", type=float, required=True, help="卖出数量")
     p.add_argument("--price", type=float, required=True, help="卖出单价")
+    _add_idempotency_key(p)
     p.set_defaults(func=cmd_sell)
+
+    def _activity_flags(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--trade-date", default=None, metavar="YYYY-MM-DD",
+                       help="发生日（分红到账日 / 除权日…），缺省今天；账户业绩按它入账，补记历史请传真实日期")
+        p.add_argument("--note", default=None, help="备注")
+        _add_idempotency_key(p)
+
+    p = sub.add_parser("record_dividend",
+        help="记分红（现金 +税后净额，持仓不变；--reinvest = DRIP 再买入）或利息（--kind interest）。内部流，不算外部现金流")
+    p.add_argument("--kind", choices=["dividend", "interest"], default="dividend", help="dividend（默认）或 interest（货币基金 / 现金利息）")
+    p.add_argument("--symbol", default=None, help="标的（分红必填；利息可空 = 账户级）")
+    p.add_argument("--amount", "-a", type=float, required=True, help="税前总额（利息 = 到账金额），> 0")
+    p.add_argument("--currency", "-c", required=True, help="现金到账币种")
+    p.add_argument("--tax-withheld", type=float, default=0.0, help="已被预扣的税（现金只记 amount − 此值），默认 0")
+    p.add_argument("--reinvest", action="store_true", help="DRIP：把净额再买入该标的（追加一条 source=drip 的 buy）")
+    p.add_argument("--reinvest-price", type=float, default=None,
+                   help="再投资单价；不填取行情库当日原始收盘价（需先 backfill_raw_close）")
+    _activity_flags(p)
+    p.set_defaults(func=cmd_record_dividend)
+
+    p = sub.add_parser("record_fee", help="记费用（--kind fee）或税（--kind tax）：现金 −金额，账户成本，不算外部现金流")
+    p.add_argument("--kind", choices=["fee", "tax"], default="fee", help="fee（默认）或 tax（红利税补缴等）")
+    p.add_argument("--symbol", default=None, help="可空 = 账户级")
+    p.add_argument("--amount", "-a", type=float, required=True, help="金额（正数），> 0")
+    p.add_argument("--currency", "-c", required=True, help="币种")
+    _activity_flags(p)
+    p.set_defaults(func=cmd_record_fee)
+
+    p = sub.add_parser("record_split", help="记拆股 / 并股：units × ratio、avg_cost ÷ ratio，现金不变")
+    p.add_argument("--symbol", required=True)
+    p.add_argument("--ratio", type=float, required=True, help="新 / 旧：10 拆 1 → 10；10 合 1 → 0.1")
+    p.add_argument("--ledger-only", action="store_true",
+                   help="只补流水、不动快照份数 / 成本：快照已经是拆股后口径时用（手动改过份数；或除权日之后的买卖已按拆股后口径记）。"
+                        "账本里有该标的在除权日当天或之后的份数变动而不加它 → 拒绝")
+    _activity_flags(p)
+    p.set_defaults(func=cmd_record_split)
+
+    p = sub.add_parser("record_return_of_capital", help="记退回本金：现金 +金额，avg_cost 降低 金额/持仓量（不是收益）")
+    p.add_argument("--symbol", required=True)
+    p.add_argument("--amount", "-a", type=float, required=True, help="金额，> 0")
+    p.add_argument("--currency", "-c", required=True, help="币种（须同持仓计价币种）")
+    _activity_flags(p)
+    p.set_defaults(func=cmd_record_return_of_capital)
+
+    p = sub.add_parser("place_fund_order",
+        help="场外基金申购第一段：现金 −金额，订单记在途（总资产按面值含它，不会假跌）；份额等定价日净值公布后确认。"
+             "预计确认日按周一到周五估计、延迟按基金类型（QDII / FOF 更慢）")
+    p.add_argument("--symbol", required=True, help="FUND:<六位代码>（裸六位也认）")
+    p.add_argument("--amount", "-a", type=float, required=True, help="申购金额（人民币，现在就扣现金），> 0")
+    p.add_argument("--currency", "-c", default="CNY", help="币种，场外基金 = CNY（默认）")
+    p.add_argument("--order-ts", default=None, metavar="ISO",
+                   help="下单时刻，北京时间 ISO（如 2026-10-19T14:30:00），缺省现在；15:00 前按当日净值、之后按下一交易日。补记请传真实时刻")
+    p.add_argument("--note", default=None, help="备注")
+    _add_idempotency_key(p)
+    p.set_defaults(func=cmd_place_fund_order)
+
+    p = sub.add_parser("confirm_fund_order",
+        help="场外基金申购第二段：在途单按定价日净值换成份额（fund_confirm job 每晚自动做；手动用于填净值 / 申购费 / 提前确认）。"
+             "已确认的重复调用返回 already_confirmed，不重复入账；净值没公布返回 pending_nav")
+    p.add_argument("--order-id", required=True, help="place_fund_order 返回的 order_id（status 的 pending_fund_orders 里也有）")
+    p.add_argument("--nav", type=float, default=None, help="确认用的单位净值；不填取定价日已公布的净值")
+    p.add_argument("--fee", type=float, default=0.0, help="申购费（从订单金额里扣，份额 = (金额−费用)/净值），默认 0")
+    p.set_defaults(func=cmd_confirm_fund_order)
+
+    p = sub.add_parser("cancel_fund_order",
+        help="撤销在途申购单（券商侧没成交 / 你撤了单）：金额退回现金。只有在途的能撤，已确认的拒绝（要卖用 sell）")
+    p.add_argument("--order-id", required=True, help="在途单的 order_id")
+    p.set_defaults(func=cmd_cancel_fund_order)
 
     p = sub.add_parser("delete_holding", help="删除持仓行（units 必须 0 或加 --force）")
     p.add_argument("--symbol", required=True)
@@ -262,9 +361,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_delete_holding)
 
     # ---- strategy 写操作（issue #179：读写对等，与 MCP 工具同名同语义）----
-    p = sub.add_parser("set_allocations", help="改股票/现金目标配比（两者和必须 ≈1）")
-    p.add_argument("--stock", type=float, required=True, help="股票目标比例 0~1")
-    p.add_argument("--cash", type=float, required=True, help="现金目标比例 0~1")
+    p = sub.add_parser("set_allocations", help="改股票/现金目标配比（两者和必须 ≈1）和/或按标的的目标权重 --target-pct、报警线 --alert")
+    p.add_argument("--stock", type=float, default=None, help="股票目标比例 0~1（与 --cash 一起传）")
+    p.add_argument("--cash", type=float, default=None, help="现金目标比例 0~1（与 --stock 一起传）")
+    p.add_argument("--target-pct", action="append", metavar="SYMBOL=PCT", default=None,
+                   help="按标的设目标权重（占总资产的 0~1 小数，可重复，如 --target-pct 510300.SS=0.3；"
+                        "SYMBOL=none 清掉）。symbol 须已在跟踪列表；各标的之和 ≤ 股票目标")
+    p.add_argument("--alert", action="append", metavar="SYMBOL:RULE=VALUE", default=None,
+                   help="按标的设报警线（可重复，如 --alert GC=F:price_below=900 --alert GC=F:day_drop_pct=2）。"
+                        "RULE ∈ price_above / price_below / day_drop_pct / day_rise_pct / drawdown_from_cost_pct；"
+                        "*_pct 是百分点（3 = 3%%）。SYMBOL:RULE=none 清掉这一条，SYMBOL=none 清空该标的全部。"
+                        "只有服务端设了 INVEST_EVENT_ALERT=1 才会真发出去")
     p.set_defaults(func=cmd_set_allocations)
 
     p = sub.add_parser(
@@ -278,11 +385,32 @@ def build_parser() -> argparse.ArgumentParser:
                    help="单笔投入上限 CNY（0~1,000,000；新建必填）")
     p.add_argument("--price-offset-pct", type=float, default=None, help="报价偏移 -0.1~0.1")
     p.add_argument("--sell-fee-pct", type=float, default=None, help="卖出费率 0~0.05")
+    p.add_argument("--target-pct", type=float, default=None,
+                   help="目标权重（占总资产的 0~1 小数，0.3 = 30%%）；rebalance_plan 读它。各标的之和须 ≤ 股票目标，"
+                        "超了拒绝并报出当前合计")
+    p.add_argument("--alert-price-above", type=float, default=None, help="价格线：现价 ≥ 该价时报警（口径同 status 的 current_price）")
+    p.add_argument("--alert-price-below", type=float, default=None, help="价格线：现价 ≤ 该价时报警（须小于 --alert-price-above）")
+    p.add_argument("--alert-day-drop-pct", type=float, default=None, help="最新日线跌幅（相对前收）达到该百分点时报警（3 = 3%%；每个交易日只报一次）")
+    p.add_argument("--alert-day-rise-pct", type=float, default=None, help="最新日线涨幅（相对前收）达到该百分点时报警（3 = 3%%；每个交易日只报一次）")
+    p.add_argument("--alert-drawdown-from-cost-pct", type=float, default=None,
+                   help="持仓较成本浮亏达到该百分点时报警（10 = 10%%；仅持有的标的）。清除某条用 set_allocations --alert SYMBOL:RULE=none；"
+                        "报警只有服务端设了 INVEST_EVENT_ALERT=1 才会真发出去")
     p.set_defaults(func=cmd_track_asset)
 
     p = sub.add_parser("untrack_asset", help="移除跟踪标的（schema 保证至少剩 1 个）")
     p.add_argument("--symbol", required=True)
     p.set_defaults(func=cmd_untrack_asset)
+
+    p = sub.add_parser(
+        "rebalance_plan",
+        help="再平衡清单：对照 strategy.md 的目标配置，算该买 / 卖多少（按整手；只出清单不下单，由你执行）",
+    )
+    p.add_argument("--mode", choices=["cash_only", "sell_to_rebalance", "hybrid"], default="hybrid",
+                   help="cash_only 只用多余现金买、从不卖；hybrid（默认）先用现金、不够才卖超配；"
+                        "sell_to_rebalance 超配一律卖回目标")
+    p.add_argument("--band-pct", dest="band_pct", type=float, default=5.0,
+                   help="漂移带（百分点，默认 5）：偏离目标不超过它就不动")
+    p.set_defaults(func=cmd_rebalance_plan)
 
     p = sub.add_parser(
         "import",
@@ -305,7 +433,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ts", help="事件时间 ISO 8601（可选）")
     p.add_argument("--ingested-by", dest="ingested_by", default="host-agent",
                    help="喂料 agent 身份（溯源，落 events.ingested_by；区别于 --source=新闻来源）")
+    p.add_argument("--claim", help="你自己写的一句话事实（带上它 + --stance + --severity 就不需要后端模型）")
+    p.add_argument("--stance", choices=["risk", "opportunity", "neutral"])
+    p.add_argument("--severity", choices=["low", "mid", "high"])
+    p.add_argument("--event-type", dest="event_type")
+    p.add_argument("--symbols", help="受影响的 ticker，逗号分隔（如 GC=F,NDQ.AX）")
+    p.add_argument("--entities", help="关键实体，逗号分隔")
     p.set_defaults(func=cmd_ingest_event)
+
+    p = sub.add_parser("pending_news",
+                       help="agent 模式：后端抓到但没归一化的新闻（等你结构化后 ingest_event）")
+    p.add_argument("--limit", type=int, default=30)
+    p.add_argument("--dismiss", nargs="*", default=[], metavar="URL", help="判定无关的 url，不再出现")
+    p.set_defaults(func=cmd_pending_news)
+
+    p = sub.add_parser("pending_committees",
+                       help="agent 模式：事件 / 价格触发、等你跑的委员会重跑请求")
+    p.set_defaults(func=cmd_pending_committees)
 
     p = sub.add_parser(
         "news_sources",
@@ -336,6 +480,28 @@ def build_parser() -> argparse.ArgumentParser:
                    help="设一条 override，如 --set verdict.concentration_lens_enabled false")
     p.add_argument("--clear", metavar="KEY", help="删一条 override，回退 env/yaml/默认")
     p.set_defaults(func=cmd_config)
+
+    p = sub.add_parser(
+        "maintenance",
+        help="运维清理（operator 用，非 agent 日常）：cleanup = memory/ 的 *.bak.<ts> 保留策略 + 遗留 *.lock；默认 dry-run",
+    )
+    msub = p.add_subparsers(dest="maintenance_cmd", required=True)
+    c = msub.add_parser("cleanup", help="清理 memory/ 的 *.bak.<ts> 与遗留 *.lock（默认 dry-run，只数不删）")
+    g = c.add_mutually_exclusive_group()
+    g.add_argument("--dry-run", action="store_true", help="只打印将删除的数量（默认行为）")
+    g.add_argument("--apply", action="store_true", help="真删")
+    c.add_argument("--keep", type=int, default=20, help="每个 family 至少保留最新 N 份（默认 20）")
+    c.add_argument("--days", type=int, default=7, help="mtime 在 N 天内的一律保留（默认 7）；与 --keep 取并集")
+    c.set_defaults(func=cmd_maintenance)
+
+    p = sub.add_parser(
+        "backfill_raw_close",
+        help="给行情库已有行回填原始价 close_raw（联网拉 yfinance period=max，幂等）：账户估值读原始价，"
+             "账本里的分红现金才不会和复权价里的分红算两次。默认持仓 + target_assets；场外基金 / 黄金克价代理不回填",
+    )
+    p.add_argument("--symbols", default=None, metavar="A,B",
+                   help="逗号分隔的行情库 symbol（如 NDQ.AX,SPY）；不填 = 当前持仓 + target_assets")
+    p.set_defaults(func=cmd_backfill_raw_close)
     return parser
 
 

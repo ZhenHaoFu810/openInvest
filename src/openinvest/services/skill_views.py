@@ -13,75 +13,155 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from openinvest.core.memory_store import MemoryStore
 
+log = logging.getLogger(__name__)
 
-def _safe_close(symbol: str) -> float:
+
+def _safe_close(symbol: str) -> Optional[float]:
+    """最新收盘价；拉不到 / 非有限 → None（不是 0.0 哨兵：live_prices 对外契约是 null）。
+
+    skill_cmds/_helpers.py 重导出本函数（#236：原先逐字复制两份）。
+    """
     from openinvest.utils.exchange_fee import get_history_data
-    df = get_history_data(symbol, "1d")
-    if df.empty:
-        df = get_history_data(symbol, "5d")
-    return float(df["Close"].iloc[-1]) if not df.empty else 0.0
+    try:
+        df = get_history_data(symbol, "1d")
+        if df.empty:
+            df = get_history_data(symbol, "5d")
+        if df.empty:
+            return None
+        v = float(df["Close"].iloc[-1])
+    except Exception as e:  # noqa: BLE001  单个行情源挂了只让这一个字段 null，不拖垮整个视图
+        log.warning("_safe_close(%s) 拉取失败: %s", symbol, e)
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _is_gold_gram(h: Dict[str, Any]) -> bool:
+    """黄金克价口径（CNY/克，get_quote 的 gold_cny_per_gram 反推）：按 proxy_kind 认，不按 symbol 名。
+
+    老行没写 proxy_kind 的 kind=metal 同口径（what_if 也这么认）。
+    """
+    pk = str(h.get("proxy_kind") or "")
+    return pk == "gold_cny_per_gram" or (str(h.get("kind") or "") == "metal" and not pk)
 
 
 # ---------- status ----------
 
+INCOME_WINDOW_DAYS = 30
+_INCOME_LABEL = {"dividend": "分红（税后）", "interest": "利息"}
+
+
+def _income_30d(pm: Any) -> Optional[Dict[str, Any]]:
+    """最近 30 天分红 / 利息合计（ADR-027 D6）：{since, dividend: {币种: 金额}, interest: {...}, line}。
+    没有任何记录 → None（status 不出这个键）；流水读不了也是 None，不拖垮 status。"""
+    from datetime import date, timedelta
+
+    from openinvest.calc.ledger_replay import recent_income, replay_ledger
+    since = (date.today() - timedelta(days=INCOME_WINDOW_DAYS)).isoformat()
+    try:
+        activities, _ = replay_ledger(pm.store.read_history(), alias={})
+    except Exception as e:  # noqa: BLE001
+        log.warning("status income_30d 读流水失败: %s", e)
+        return None
+    got = recent_income(activities, since)
+    if not got:
+        return None
+    rounded = {a: {c: round(v, 2) for c, v in by.items()} for a, by in got.items()}
+    parts = [f"{_INCOME_LABEL[a]} " + " + ".join(f"{c} {v:,.2f}" for c, v in sorted(by.items()))
+             for a, by in rounded.items()]
+    return {"since": since, **rounded, "line": f"最近 {INCOME_WINDOW_DAYS} 天：" + "；".join(parts)}
+
+
+def _pending_fund_fields(pm: Any) -> Dict[str, Any]:
+    """status 的在途场外基金申购：``pending_fund_orders``（订单列表）+ ``pending_fund_orders_line``（一行人话）。"""
+    from datetime import datetime
+
+    from openinvest.calc.fund_rules import CN_TZ, pending_summary_line
+    pending = pm.pending_fund_orders()
+    if not pending:
+        return {}
+    return {"pending_fund_orders": pending,
+            "pending_fund_orders_line": pending_summary_line(pending, datetime.now(CN_TZ).date().isoformat())}
+
+
 def build_status_view() -> Dict[str, Any]:
-    """v2 通用化：从 cash dict + holdings list 读，对外保持原 JSON 结构兼容老 agent"""
-    from openinvest.utils.gold_price import get_gold_snapshot
+    """v2 通用化：从 cash dict + holdings list 读，所有持仓同一条定价路径（utils.quotes.get_quote）。
+
+    不认 symbol 名：黄金克价口径按 proxy_kind / kind=metal 判断（_is_gold_gram），AUD 等外币段按
+    现金/持仓的币种出现与否判断。没持有的东西不拉数、不输出（也不把它的行情回填进行情库）。
+    """
     from openinvest.core.portfolio_manager import PortfolioManager
     from openinvest.utils.fx import get_fx_rate, total_portfolio_value_cny, unvalued
     from openinvest.utils.quotes import get_quote
     pm = PortfolioManager()
 
     cash_cny = pm.cash_amount("CNY")
-    aud_cash = pm.cash_amount("AUD")
-    ndq_h = pm.holdings.find("NDQ.AX")
-    gold_h = pm.holdings.find("GC=F")
-    ndq_shares = float(ndq_h.get("units", 0) or 0) if ndq_h else 0.0
-    gold_grams = float(gold_h.get("units", 0) or 0) if gold_h else 0.0
-    gold_avg = float(gold_h.get("avg_cost", 0) or 0) if gold_h else 0.0
+    held = [h for h in pm.holdings if h.get("symbol") and not h.get("is_tracking_only")]
 
-    # ndq / gold / AUD 段只在用户真持有时才拉数和输出——没持有的用户不该看到这几个历史
-    # 硬编码的 NDQ.AX / 黄金 / AUDCNY 段（也不该把这几个 symbol 回填进他的行情库）。
-    # 持有时保留原有专用定价分支（GC=F 按 CNY/克，不能走 get_quote 的 USD/oz）。
-    aud_relevant = ndq_h is not None or "AUD" in pm.cash or any(
-        str(h.get("cost_currency") or "").upper() == "AUD" for h in pm.holdings
-    )
-    ndq_price = _safe_close("NDQ.AX") if ndq_h else 0.0
-    audcny = (get_fx_rate("AUD", "CNY") or 0.0) if aud_relevant else 0.0
-    snap = get_gold_snapshot(offset_pct=0.0) if gold_h else None
-    gold_now = snap.spot_cny_per_gram if snap else 0.0
+    # 外币段：现金或持仓用到的非 CNY 币种 → 汇率（拉不到就不出这个键，不编）
+    ccys = ({str(c).upper() for c in pm.cash} | {str(h.get("cost_currency") or "").upper() for h in held}) - {"", "CNY"}
+    fx_rates = {c: get_fx_rate(c, "CNY") for c in sorted(ccys)}
+    audcny = fx_rates.get("AUD") or 0.0
 
     # 2026-05-19 (A6 修复): total_assets_cny 之前写死 cash + aud*fx + ndq*price*fx +
     # gold*price，fork 用户的 AAPL/0700.HK/BTC-USD 全漏算。改走 utils.fx.total_portfolio_value_cny
     # 通用化遍历所有 holdings + 多币种 cash 折算到 CNY。
     current_prices: Dict[str, float] = {}
     quote_meta: Dict[str, Dict[str, Any]] = {}
-    for h in pm.holdings:
-        sym = str(h.get("symbol") or "")
-        if not sym or h.get("is_tracking_only"):
-            continue
-        if sym == "NDQ.AX":
-            current_prices[sym] = ndq_price
-        elif sym == "GC=F":
-            current_prices[sym] = gold_now
-        else:
-            quote = get_quote(h)
-            if quote is not None and math.isfinite(quote.price) and quote.price > 0:
-                current_prices[sym] = quote.price
-                quote_meta[sym] = {
-                    "last_updated": quote.last_updated,
-                    "is_stale": quote.is_stale,
-                    "source": (quote.extra or {}).get("source", "yfinance"),
-                    "extra": quote.extra or {},
-                }
+    gold_extra: Optional[Dict[str, Any]] = None   # 克价口径持仓的 quote.extra（金价 USD/oz、USDCNY）
+    for h in held:
+        sym = str(h["symbol"])
+        gram = _is_gold_gram(h)
+        quote = get_quote({**h, "proxy_kind": "gold_cny_per_gram"} if gram else h)
+        if quote is not None and math.isfinite(quote.price) and quote.price > 0:
+            current_prices[sym] = quote.price
+            quote_meta[sym] = {
+                "last_updated": quote.last_updated,
+                "is_stale": quote.is_stale,
+                "source": (quote.extra or {}).get("source", "yfinance"),
+                "extra": quote.extra or {},
+            }
+            if gram and gold_extra is None:
+                gold_extra = quote.extra or {}
     total_cny, _value_status = total_portfolio_value_cny(pm, current_prices, base="CNY")
+
+    # 账户业绩（TWR / XIRR / 回撤 / vs 基准）：账本重放 + 行情库估值，与 openinvest performance 同一函数。
+    # 失败不阻断 status（持仓/现金是硬需求，业绩是附加块）。
+    try:
+        from openinvest.services.account_performance import build_account_performance
+        performance = build_account_performance(pm)
+    except Exception as e:  # noqa: BLE001
+        performance = {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    # 每标的报警线（C8）：strategy.target_assets[].alerts → 阈值与离触发线的距离（求值与哨兵共用 services/price_alerts）
+    from openinvest.services.price_alerts import evaluate_symbol, fetch_quote
+    alert_cfg = {a["symbol"]: a["alerts"] for a in (pm.strategy.get("target_assets") or [])
+                 if a.get("symbol") and a.get("alerts")}
+
+    def _alerts_for(sym: str, h: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Optional[float]]:
+        """(该标的各线求值, 求值用的现价)。没设线 → ([], None)。"""
+        if sym not in alert_cfg:
+            return [], None
+        try:
+            price = current_prices.get(sym)
+            meta = quote_meta.get(sym, {})
+            extra, updated = meta.get("extra"), meta.get("last_updated")
+            if price is None and (h is None or h.get("is_tracking_only")):
+                # 追踪仓 / 没持仓行的跟踪标的 status 本来不拉价，设了线的才补拉（在持仓拉价失败的不重试）
+                q = fetch_quote(sym, h)
+                if q is not None and math.isfinite(q.price) and q.price > 0:
+                    price, extra, updated = q.price, q.extra, q.last_updated
+            return evaluate_symbol(sym, alert_cfg[sym], h, price=price, extra=extra, last_updated=updated), price
+        except Exception as e:  # noqa: BLE001  报警线只是附加信息，不拖垮 status
+            log.warning("status alerts(%s) 求值失败: %s", sym, e)
+            return [], None
 
     holding_views: List[Dict[str, Any]] = []
     for h in pm.holdings:
@@ -97,9 +177,13 @@ def build_status_view() -> Dict[str, Any]:
         if price is not None and math.isfinite(price) and price > 0:
             market_value = price * units
             pnl = (price - avg_cost) * units if avg_cost > 0 else None
+            ccy = str(h.get("cost_currency") or "CNY").upper()
+            rate = 1.0 if ccy == "CNY" else fx_rates.get(ccy)
             view.update({
                 "current_price": round(price, 6),
                 "market_value": round(market_value, 2),
+                # 折人民币市值：外币持仓一视同仁（取代以前只有 NDQ.AX 才有的 ndq.value_cny）；汇率拉不到 → null
+                "market_value_cny": round(market_value * rate, 2) if rate else None,
                 "pnl": round(pnl, 2) if pnl is not None else None,
                 "pnl_pct": round((price / avg_cost - 1) * 100, 2) if avg_cost > 0 else None,
                 **quote_meta.get(sym, {}),
@@ -108,10 +192,42 @@ def build_status_view() -> Dict[str, Any]:
             view.update({
                 "current_price": None,
                 "market_value": None,
+                "market_value_cny": None,
                 "pnl": None,
                 "pnl_pct": None,
             })
+        view["alerts"], alert_price = _alerts_for(sym, h)
+        if view.get("current_price") is None and alert_price is not None:  # 追踪仓：线是按哪个价算的要看得见
+            view["current_price"] = round(alert_price, 6)
         holding_views.append(view)
+    # 设了报警线但没有持仓行的跟踪标的：也要让用户在 status 里看到线与距离（追踪仓行，无仓位）。
+    # 键与普通行对齐（拉不到价 = null），外部脚本按 h["current_price"] 取值不会 KeyError
+    held_syms = {str(h.get("symbol")) for h in pm.holdings}
+    for sym in (x for x in alert_cfg if x not in held_syms):
+        alerts, alert_price = _alerts_for(sym, None)
+        holding_views.append({
+            "symbol": sym, "units": 0, "is_tracking_only": True,
+            "current_price": round(alert_price, 6) if alert_price is not None else None,
+            "market_value": None, "market_value_cny": None, "pnl": None, "pnl_pct": None,
+            "alerts": alerts,
+        })
+
+    # 克价口径持仓（黄金）汇总块——兼容老 agent 读 status["gold"]；多个克价持仓合并，逐仓明细看 all_holdings
+    gold_hs = [h for h in held if _is_gold_gram(h)]
+    gold_block: Dict[str, Any] = {}
+    if gold_hs:
+        grams = sum(float(h.get("units", 0) or 0) for h in gold_hs)
+        gold_avg = sum(float(h.get("units", 0) or 0) * float(h.get("avg_cost", 0) or 0) for h in gold_hs) / grams if grams else 0.0
+        gold_now = next((current_prices[str(h["symbol"])] for h in gold_hs if str(h["symbol"]) in current_prices), None)
+        gold_block = {
+            "grams": grams,
+            "avg_cost_cny_per_gram": round(gold_avg, 4),
+            # 金价拉不到就是 null，不再拿 0 当现价算出"亏光"的 pnl
+            "now_cny_per_gram": round(gold_now, 2) if gold_now else None,
+            "value_cny": round(gold_now * grams, 2) if gold_now else None,
+            "pnl_cny": round((gold_now - gold_avg) * grams, 2) if gold_now and gold_avg else None,
+            "pnl_pct": round(((gold_now / gold_avg) - 1) * 100, 2) if gold_now and gold_avg > 0 else None,
+        }
 
     return {
         "user": {
@@ -121,35 +237,30 @@ def build_status_view() -> Dict[str, Any]:
         "cash": {
             "cny": round(cash_cny, 2),
             **({
-                "aud": round(aud_cash, 2),
-                "aud_in_cny": round(aud_cash * audcny, 2) if audcny else None,
-            } if aud_relevant else {}),
+                "aud": round(pm.cash_amount("AUD"), 2),
+                "aud_in_cny": round(pm.cash_amount("AUD") * audcny, 2) if audcny else None,
+            } if "AUD" in ccys else {}),
             # v2 通用：列出所有币种（其他 agent 想读非 CNY/AUD 时方便）
             "all_currencies": pm.cash,
         },
-        **({"ndq": {
-            "shares": ndq_shares,
-            "price_aud": round(ndq_price, 2),
-            "value_cny": round(ndq_shares * ndq_price * audcny, 2) if audcny and ndq_price else None,
-        }} if ndq_h else {}),
-        **({"gold": {
-            "grams": gold_grams,
-            "avg_cost_cny_per_gram": gold_avg,
-            "now_cny_per_gram": round(gold_now, 2),
-            "value_cny": round(gold_now * gold_grams, 2),
-            "pnl_cny": round((gold_now - gold_avg) * gold_grams, 2) if gold_avg else 0,
-            "pnl_pct": round(((gold_now / gold_avg) - 1) * 100, 2) if gold_avg > 0 else 0,
-        }} if gold_h else {}),
+        **({"gold": gold_block} if gold_block else {}),
         # v2 新增：完整 holdings 数组（其他 yfinance symbol 也能被 agent 看到）
         "all_holdings": holding_views,
         "total_assets_cny": total_cny,
+        # 真实账户业绩：twr_30d / twr_ytd / twr_all / xirr / max_drawdown / volatility_annual /
+        # benchmark / data_quality（基准币种）；历史不足 → {"status": "insufficient_history"}
+        "performance": performance,
+        # 最近 30 天分红 / 利息合计（没有记录就不出这个键）
+        **({"income_30d": income} if (income := _income_30d(pm)) else {}),
+        # 在途场外基金申购（ADR-027 D6）：现金已扣、份额待确认，total_assets_cny 已按面值含它；没有在途单就不出这两个键
+        **_pending_fund_fields(pm),
         # 拉不到汇率 / 价格、没算进 total 的条目——有就列出来，别让总资产悄悄偏小
         **({"total_assets_excludes": unvalued(_value_status)} if unvalued(_value_status) else {}),
-        "fx": {"audcny": round(audcny, 4)} if aud_relevant else {},
+        "fx": {f"{c.lower()}cny": round(r, 4) for c, r in fx_rates.items() if r},
         "live_prices": {
-            "gold_usd_per_oz": snap.gold_usd_per_oz if snap else None,
-            "usdcny": snap.usdcny_rate if snap else None,
-        } if gold_h else {},
+            "gold_usd_per_oz": (gold_extra or {}).get("gold_usd_per_oz"),
+            "usdcny": (gold_extra or {}).get("usdcny_rate"),
+        } if gold_block else {},
     }
 
 
@@ -251,7 +362,7 @@ def build_what_if_view(
         if str(h.get("kind")) == "metal":
             cur_prices[sym] = cur_gold
         else:
-            cur_prices[sym] = _safe_close(sym)
+            cur_prices[sym] = _safe_close(sym) or 0.0   # 本函数内 0 = 拉不到 → 下游 _value_in_cny 记「未计入」
         new_prices[sym] = cur_prices[sym]
 
     # 应用 --symbol/--pct/--price 通用参数
@@ -268,7 +379,7 @@ def build_what_if_view(
             return {
                 "status": "error",
                 "error": f"{symbol} 不在持仓里",
-                "hint": f"用 `run.sh status` 看你有哪些持仓；或先用 GUI / `POST /api/holdings/{symbol}` 加进去再跑 what_if",
+                "hint": f"用 `run.sh status` 看你有哪些持仓。{symbol} 已在别处持有 → `run.sh buy {symbol} --existing-position …`（MCP：`record_existing_position`，不扣现金）；新买入才用 `run.sh buy`（MCP：`buy`）。记进去再跑 what_if",
             }
         if price is not None:
             new_prices[symbol] = float(price)
@@ -362,6 +473,17 @@ def build_what_if_view(
             "delta_cny": round(new_v - cur_v, 2),
         }
 
+    # 在途场外基金申购（ADR-027）：现金已扣、份额未到，按面值进两个总额（情景不动它）——否则总额和 delta_pct 的分母少一笔
+    for o in pm.pending_fund_orders():
+        v = to_base(str(o.get("currency") or "CNY").upper(), float(o.get("amount") or 0), "CNY")
+        if v is None:
+            excluded.append(f"在途 {o.get('symbol')}")
+            continue
+        cur_total += v
+        new_total += v
+        breakdown[f"pending:{o.get('symbol')}"] = {"in_transit_fund_order": True, "cur_value_cny": round(v, 2),
+                                                   "scenario_value_cny": round(v, 2), "delta_cny": 0.0}
+
     delta = new_total - cur_total
     return {
         "status": "ok",
@@ -396,9 +518,13 @@ INIT_PAYLOAD_SHAPE: Dict[str, Any] = {
 def build_doctor_view(root: Path) -> Dict[str, Any]:
     """健康自检：onboarding 是否完成？所有外部依赖可达？
 
-    给 Claude 看的 JSON：每一项是 ok / missing / unreachable，附 hint 教 Claude
+    给 Claude 看的 JSON：每一项是 ok / missing / needs_migration / warning / optional_*，附 hint 教 Claude
     怎么修。让 Claude 第一次帮用户跑 status 失败时，先 doctor 看到底差什么，
     再决定走 AskUserQuestion 还是直接 init。
+
+    总 status 只看 onboarding 必需项（memory 未初始化 / portfolio 是 v1 旧格式 → needs_setup）；
+    LLM key / 邮件凭据 / .env 文件缺失是 **optional_***：Coordinator 路径本来就不要 LLM key（#444），
+    缺了不该让 agent 切去 invest-setup 重装——只有 Direct 路径（direct_ready）要 key。
 
     Args:
         root: 项目根（CLI 传 scripts.skill.ROOT——测试会 patch 它；web_api 传自己的 repo root）
@@ -453,57 +579,82 @@ def build_doctor_view(root: Path) -> Dict[str, Any]:
         ),
     })
 
-    # 2) .env 凭据
+    # 黄金行口径（#443）：GC=F 必须 CNY/克。旧版本留下的 USD/oz 行会被估成假浮亏，定投（dca_daily）因此每天报错、
+    # 用户却看不到定投已停——给一条非阻塞 warning（数据要修，但不是 onboarding 没做完，不能让 status 变 needs_setup）。
+    holdings = (getattr(portfolio_doc, "metadata", None) or {}).get("holdings") if portfolio_doc and not portfolio_v1 else None
+    gold_row = next((h for h in holdings if isinstance(h, dict) and str(h.get("symbol") or "").strip().upper() == "GC=F"),
+                    None) if isinstance(holdings, list) else None
+    if gold_row:
+        from openinvest.core.portfolio_manager import gold_booking
+        row_ccy = str(gold_row.get("cost_currency") or "CNY").upper()
+        try:
+            gold_booking("GC=F", row_ccy, str(gold_row.get("unit_label") or "克"), row_ccy)
+        except ValueError as e:
+            checks.append({
+                "name": "gold_booking",
+                "status": "warning",
+                "detail": f"GC=F 持仓按 {row_ccy} / {gold_row.get('unit_label')!r} 记账，不是 人民币/克：{e}",
+                "hint": (
+                    "会被估成假浮亏 / 假浮盈，定投（dca_daily）买黄金也会每天报错。先和用户确认，再 "
+                    "`delete_holding --symbol GC=F --force` 删掉这一行，按 CNY/克 重新记"
+                    "（已持有的用 `record_existing_position`，不扣现金；units=克数，price=CNY/克，kind=metal，unit_label=克）。"
+                ),
+            })
+
+    # 2) .env 凭据（全是可选项：Coordinator 路径零凭据，Direct 路径才要 LLM key，邮件只影响 daily_report 发信）
     env_path = root / ".env"
     # LLM_API_KEY 优先；兼容老 fork 用户的 DEEPSEEK_API_KEY
-    has_deepseek = bool(os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY"))
+    has_llm_key = bool(os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY"))
     has_email_sender = bool(os.getenv("EMAIL_SENDER"))
     has_email_pass = bool(os.getenv("EMAIL_PASSWORD"))
+    has_email = has_email_sender and has_email_pass
     checks.append({
         "name": ".env_file",
-        "status": "ok" if env_path.exists() else "missing",
+        "status": "ok" if env_path.exists() else "optional_for_coordinator",
         "detail": str(env_path) if env_path.exists() else f"{env_path} 不存在",
         "hint": (
             None if env_path.exists() else
-            f"让用户自己在 {env_path} 写 LLM_API_KEY= / EMAIL_SENDER= / EMAIL_PASSWORD="
-            "（都可选；不要在对话里收集密钥），或在自己的终端里跑 `run.sh init`"
+            f"可选：Direct 路径 / 发邮件才需要凭据，让用户自己在 {env_path} 写 LLM_API_KEY= / EMAIL_SENDER= / "
+            "EMAIL_PASSWORD=（不要在对话里收集密钥），或在自己的终端里跑 `run.sh init`；也可直接设进进程环境变量。"
         ),
     })
     checks.append({
-        "name": "deepseek_key",
-        "status": "ok" if has_deepseek else "missing",
+        "name": "llm_key",
+        "status": "ok" if has_llm_key else "optional_for_coordinator",
         "detail": (
-            "LLM_API_KEY / DEEPSEEK_API_KEY 已设" if has_deepseek
+            "LLM_API_KEY / DEEPSEEK_API_KEY 已设" if has_llm_key
             else "LLM_API_KEY / DEEPSEEK_API_KEY 均缺失"
         ),
         "hint": (
-            None if has_deepseek else
-            "向用户引导：去 https://platform.deepseek.com 注册 → API keys 页面创建 "
-            f"→ 用户自己把 LLM_API_KEY=sk-xxxx 写进 {env_path}（不要在对话里收集）。"
-            "没有 key 仍可用 Coordinator 路径，但无人值守的 cron 跑不了。"
+            None if has_llm_key else
+            "可选：只有 Direct 路径（run_committee / 无人值守 cron）需要；Coordinator 路径（prepare_committee + "
+            "spawn 4 subagent）不需要，别为这个重装。要用 Direct 时让用户自己把 LLM_API_KEY=sk-xxxx 写进 "
+            f"{env_path}（不要在对话里收集）；默认 DeepSeek（https://platform.deepseek.com），"
+            "换 OpenAI 兼容的其他厂商再设 LLM_BASE_URL / LLM_MODEL。"
         ),
     })
     checks.append({
         "name": "gmail_credentials",
-        "status": "ok" if (has_email_sender and has_email_pass) else "missing",
+        "status": "ok" if has_email else "optional_for_email",
         "detail": (
             f"sender={os.getenv('EMAIL_SENDER')}, password set"
-            if (has_email_sender and has_email_pass) else
+            if has_email else
             "EMAIL_SENDER 或 EMAIL_PASSWORD 缺失"
         ),
         "hint": (
-            None if (has_email_sender and has_email_pass) else
-            "Gmail 必须用 App Password（不是登录密码），需先开 2FA 然后去 "
-            "https://myaccount.google.com/apppasswords 生成 16 位 App Password。"
-            f"用户自己写进 {env_path}（不要在对话里收集）；未配置时 daily_report 仍能跑完，只是不发邮件。"
+            None if has_email else
+            "可选：只影响 daily_report 发邮件（未配置时日报仍能跑完，只是不发信），与 Coordinator / Direct 路径无关。"
+            "要发信时 Gmail 必须用 App Password（不是登录密码），需先开 2FA 然后去 "
+            f"https://myaccount.google.com/apppasswords 生成 16 位 App Password，用户自己写进 {env_path}"
+            "（不要在对话里收集）。"
         ),
     })
 
     # 3) LLM key 实测可达（audit PM Major: 失败前置）
     # 用统一的 utils.llm 读 base_url/key，支持 LLM_* 切千问/智谱
-    deepseek_reachable = "skipped"
-    deepseek_detail = "LLM_API_KEY / DEEPSEEK_API_KEY 未设，跳过实测"
-    if has_deepseek:
+    llm_reachable = "skipped"
+    llm_detail = "LLM_API_KEY / DEEPSEEK_API_KEY 未设，跳过实测"
+    if has_llm_key:
         try:
             import requests
             from openinvest.utils.llm import get_llm_config_safe
@@ -517,25 +668,25 @@ def build_doctor_view(root: Path) -> Dict[str, Any]:
                 timeout=8,
             )
             if r.status_code == 200:
-                deepseek_reachable = "ok"
-                deepseek_detail = f"LLM API ({_llm_base}) 响应 200，key 有效"
+                llm_reachable = "ok"
+                llm_detail = f"LLM API ({_llm_base}) 响应 200，key 有效"
             elif r.status_code == 401:
-                deepseek_reachable = "auth_failed"
-                deepseek_detail = f"LLM API ({_llm_base}) 返回 401，key 无效或已过期"
+                llm_reachable = "auth_failed"
+                llm_detail = f"LLM API ({_llm_base}) 返回 401，key 无效或已过期"
             else:
-                deepseek_reachable = "unreachable"
-                deepseek_detail = f"LLM API ({_llm_base}) 返回 HTTP {r.status_code}"
+                llm_reachable = "unreachable"
+                llm_detail = f"LLM API ({_llm_base}) 返回 HTTP {r.status_code}"
         except Exception as e:
-            deepseek_reachable = "network_error"
-            deepseek_detail = f"无法连接 LLM API: {type(e).__name__}: {e}"
+            llm_reachable = "network_error"
+            llm_detail = f"无法连接 LLM API: {type(e).__name__}: {e}"
     checks.append({
-        "name": "deepseek_reachable",
-        "status": deepseek_reachable if deepseek_reachable in ("ok", "skipped") else "missing",
-        "detail": deepseek_detail,
+        "name": "llm_reachable",
+        "status": llm_reachable if llm_reachable in ("ok", "skipped") else "optional_for_coordinator",
+        "detail": llm_detail,
         "hint": (
-            None if deepseek_reachable in ("ok", "skipped") else
-            "去 https://platform.deepseek.com 检查 key 是否被禁用 / 余额不足。"
-            "失败时仍可用 Claude skill 模式跑 prepare_committee。"
+            None if llm_reachable in ("ok", "skipped") else
+            "只影响 Direct 路径：检查 key 是否被禁用 / 余额不足 / LLM_BASE_URL 是否可达。"
+            "失败时仍可用 Coordinator 路径跑 prepare_committee。"
         ),
     })
 
@@ -552,32 +703,41 @@ def build_doctor_view(root: Path) -> Dict[str, Any]:
         "hint": None,
     })
 
-    # 4) Python venv（skill 本身能跑到这里就证明 venv ok，但报告上有更友好）
-    checks.append({
-        "name": "python_venv",
-        "status": "ok",
-        "detail": f"running on {sys.version.split()[0]}",
-        "hint": None,
-    })
+    # 4) Python venv：git clone 形态的遗留项（跑到这里就证明 venv ok，只报告版本）。
+    # uvx / wheel 形态下数据目录里没有 pyproject.toml + skills/（同 paths._detect_root 的 clone 判据），没有 venv 可言 → 跳过
+    if (root / "pyproject.toml").exists() and (root / "skills").is_dir():
+        checks.append({
+            "name": "python_venv",
+            "status": "ok",
+            "detail": f"running on {sys.version.split()[0]}",
+            "hint": None,
+        })
 
     # 5) GUI 壳层已退役（2026-07-05）——web_gui 体检项随之删除，GUI 重做时另起前端
 
-    overall = "ready" if all(c["status"] == "ok" for c in checks) else "needs_setup"
+    # 只有 onboarding 必需项（memory 未初始化 / portfolio v1 待迁移）挡路；optional_* / skipped 不算
+    blocking = [c["name"] for c in checks
+                if c["status"] not in ("ok", "skipped", "warning") and not c["status"].startswith("optional")]
+    overall = "ready" if not blocking else "needs_setup"
 
     # ready_for_subcommands 兼容旧字段；新增分路径就绪标志：
     # - coordinator_ready：Claude Code 走 prepare_committee + spawn 4 subagent，
     #   不需要 DeepSeek key（用 Claude 订阅扮演 worker）
     # - direct_ready：任意 agent 走 run_committee，需要 DeepSeek key 跑 4 角色
-    # 旧 ready_for_subcommands 之前要求 has_deepseek，会让 Coordinator 用户被
+    # 旧 ready_for_subcommands 之前要求 LLM key，会让 Coordinator 用户被
     # 误判"还没就绪" → agent 反复引导去注册 DeepSeek，体验糟糕
+    from openinvest import __version__  # 远端 CLI 靠它判断 hub 是否支持幂等键（#432 评审第 3 条）
+
     return {
         "status": overall,
+        "version": __version__,
         "ready_for_subcommands": memory_ok,  # 等价于 coordinator_ready
         "coordinator_ready": memory_ok,
-        "direct_ready": memory_ok and has_deepseek,
+        "direct_ready": memory_ok and has_llm_key,
         "next_step": (
-            "用户已就绪。Claude Code 用户直接调 status / prepare_committee；"
-            "其他 agent（Cursor/Cline/Codex）走 run_committee（需 DEEPSEEK_API_KEY）"
+            "用户已就绪（不要切 invest-setup）。Coordinator 路径（Claude Code / Hermes）直接调 status / "
+            "prepare_committee；Direct 路径（Cursor/Cline/Codex/cron）走 run_committee，"
+            + ("LLM key 已配置" if has_llm_key else "需要先配 LLM_API_KEY，见 checks 里 llm_key 的 hint（可选项，缺了只是 Direct 路径不可用）")
             if overall == "ready" else
             f"portfolio.md 是 v1 旧格式：先跑 `{migrate_cmd}`，再看其他 status≠ok 的项"
             if portfolio_v1 else

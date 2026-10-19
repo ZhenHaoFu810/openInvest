@@ -79,6 +79,18 @@ def get_llm_config_safe(
     return api_key, base_url, model, provider
 
 
+
+def reasoning_by_agent() -> bool:
+    """需要推理的活由宿主 Agent 做（后端不调模型）？2026-10-18 插件不持 key（P2）。
+
+    `INVEST_REASONING_BY=agent|backend` 显式指定；不设时按有没有 LLM key 自动判：
+    没 key → agent（新闻排队、触发的委员会排队，等 Agent 来取），有 key → backend（旧行为）。
+    """
+    mode = os.getenv("INVEST_REASONING_BY", "").strip().lower()
+    if mode in ("agent", "backend"):
+        return mode == "agent"
+    return not get_llm_config_safe()[0]
+
 def supports_json_output(model: Optional[str] = None, base_url: Optional[str] = None) -> bool:
     """是否【尝试】response_format={"type":"json_object"}（DeepSeek JSON Output 是 GA，
     且 json_object 本就是 OpenAI 标准参数，多数兼容 provider 都支持）。
@@ -150,6 +162,31 @@ def get_thinking_disable_kwargs(model: Optional[str] = None) -> dict:
         return {"extra_body": {"thinking": "disabled"}}
     # DeepSeek 格式
     return {"extra_body": {"thinking": {"type": "disabled"}}}
+
+
+def is_claude(model: Optional[str] = None) -> bool:
+    # 子串判：覆盖网关前缀（anthropic/claude-…、anthropic.claude-…）。
+    # ponytail: 老 Claude（≤4.6）也跟着走下面两条规则；真要钉老模型再细分
+    return "claude" in (model or get_llm_config_safe()[2]).lower()
+
+
+def sampling_kwargs(model: Optional[str], temperature: float) -> dict:
+    """``chat.completions.create`` 的 temperature kwargs。
+
+    Claude 4.7 起（含 Sonnet/Opus 5.x）temperature 只收默认值，传 <1 直接 400
+    （OpenAI 兼容层同样），委员会每次调用都会被吞成 [WORKER_UNAVAILABLE] → 静默 HOLD。
+    claude-* 一律不传；其他 provider 原样。
+    """
+    return {} if is_claude(model) else {"temperature": temperature}
+
+
+def json_object_kwargs(model: Optional[str]) -> dict:
+    """``response_format={"type": "json_object"}`` kwargs。
+
+    Anthropic 兼容层对 json_object 直接 400（只收 json_schema，文档写的"忽略"与实测不符，
+    2026-10-18）。claude-* 不传，靠 prompt 要求纯 JSON——实测 Sonnet 5.5 吐裸 JSON 可直接 loads。
+    """
+    return {} if is_claude(model) else {"response_format": {"type": "json_object"}}
 
 
 # NOTE 2026-05-19: 之前有个 needs_reasoning_carry(model) helper 按 model 名嗅探

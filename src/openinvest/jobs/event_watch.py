@@ -198,8 +198,20 @@ def run(
     if not unseen_items:
         return {"status": "ok", "fetched": len(raw_items), "new_events": 0, "triggered": 0}
 
-    normalized: List[NormalizedEvent] = normalize(unseen_items)
-    log.info(f"[event_watch] normalized {len(normalized)} events")
+    # agent 模式：后端不调模型，新闻排队等宿主 Agent 结构化后经 ingest_event 交回
+    # （交回时才入库、才过触发闸）。这一轮到此为止，不计 normalize_failed。
+    from openinvest.utils.llm import reasoning_by_agent
+    if reasoning_by_agent():
+        from openinvest.services.agent_queue import enqueue_news
+        queued = 0 if dry_run else enqueue_news(unseen_items)
+        log.info(f"[event_watch] agent 模式：{queued} 条新闻排队待 Agent 归一化")
+        return {"status": "ok", "fetched": len(raw_items), "new_events": 0,
+                "queued_for_agent": queued, "triggered": 0}
+
+    norm_stats: Dict[str, int] = {}
+    normalized: List[NormalizedEvent] = normalize(unseen_items, stats=norm_stats)
+    log.info(f"[event_watch] normalized {len(normalized)} events "
+             f"(failed batches {norm_stats.get('failed_batches', 0)}/{norm_stats.get('batches', 0)})")
 
     # 入库 + 收集新事件
     new_events: List[Dict[str, Any]] = []
@@ -234,6 +246,8 @@ def run(
         "status": "ok",
         "fetched": len(raw_items),
         "new_events": len(normalized),
+        # 看门狗读这个：归一化失败批数（缺 key / 额度 / 解析失败），job 本身仍算 success
+        "normalize_failed": norm_stats.get("failed_batches", 0),
         **trig,
         "dry_run": dry_run,
     }

@@ -176,6 +176,8 @@ alloc_aggressiveness 0.06 vs 0.25 reward 几乎相同；regime 阈值变化也�
 
 ## 主张 7：WealthContextOfficer 解决"低现金=高风险"误判
 
+> **已退役（历史记录）**：WealthContextOfficer 于 2026-07-08（`a425e9d`）删除，`src/` 零引用；下文实测与路径均为当时快照。Risk Officer 现统一按 portfolio cash 判流动性。
+
 **问题**（2026-05-12 用户实盘报告）：
 > "agent 一直说我现金太少，让我卖掉换现金。但实际我的现金 backup 还有家族，
 > 这些只是零花钱。"
@@ -299,6 +301,249 @@ python -m scripts.archive.rl_optimize_prompts \
 
 完整流程见 [`docs/training_report.md`](../training_report.md)（约 1200 行原始数据），
 方法论解释见 [11-rl-training.md](11-rl-training.md)。
+
+---
+
+## 主张 8：计分板诚实化——没有一个裁决桶好于"永远喊同一个方向"（2026-10-17）
+
+2026-10 全面评审发现计分板把结果做漂亮了三处：UNCLEAR（CIO 解析不出合法裁决）被
+`.get(verdict, "flat")` 折进 HOLD 桶；HOLD "命中" = 市场没动，但没减基率；命中率没有置信区间。
+修法（PR 计分板诚实化）：
+
+- **UNCLEAR 独立桶，不计命中**：`review_calc.VERDICT_BUCKETS` 含 UNCLEAR，`review_one` 不给它打 hits，
+  `export_accuracy` 公开 JSON 多一个 `unclear.total`。
+- **每桶同尺子基率 + 提升 + Wilson 95% CI**：基率 = 同桶样本里"一个永远喊这个方向的傻瓜"的命中率
+  （ACCUMULATE 按涨 >0 计命中，基率就是 P(涨 >0)；HOLD 是 P(留在 flat band 内)）。
+  `lift = hit_rate − base_rate`。**注意**：若错拿 `directions.up`（涨 > flat band，口径更严）当基率，
+  ACCUMULATE 会被高估成 +15pp——这是实现时真踩过的坑，测试 `test_input_health.py` 守着。
+- **强制 HOLD / 残缺输入单独计数不剔除**：transcript 新增 `## Input Health (deterministic)` 块
+  （哪些输入为空、行情最后一根、worker 失败、规则改写了什么、是否强制 HOLD），
+  `verdict_review` 据此标 `forced_hold_count` / `degraded_input_count`；老存档退回 "HOLD 且自报 ≤0.4" 启发式。
+- **同日重跑不再覆盖**：live 重跑把旧 transcript 归档到 `<date>/runs/`，`<sym>.md` 仍是当日最新。
+
+实测（live 全量 390 条 → holdout 323，30d 窗口 n=246，2026-10-17 重算）：
+
+| Verdict | N | 30d 命中 | 同尺子基率 | 提升 | 95% CI |
+|---|---|---|---|---|---|
+| ACCUMULATE | 32 | 26.7% | 29.7% | −3.0pp | 14–44% |
+| HOLD | 267 | 67.7% | 68.7% | −1.0pp | 61–74% |
+| TRIM | 18 | 66.7% | 70.3% | −3.6pp | 44–84% |
+| UNCLEAR | 6 | 不计 | — | — | — |
+
+**结论**：三个桶的提升全部为负且 CI 都覆盖基率——现在的委员会与"永远 HOLD / 永远喊涨"在统计上
+无法区分。这不是新发现（主张 1 的 100% HOLD 复读机、主张 3 的方向准确率不高），新的是它现在
+每天自动算出来并带区间，不再靠人眼对比两张表。后续任何"改进"必须让某个桶的提升 CI 下界过 0。
+
+复现：`INVEST_HOME=<只读拷贝> uv run python -m openinvest.jobs.verdict_review` → `docs/verdict_accuracy.md`；
+`uv run python scripts/export_accuracy.py` → `docs/accuracy_summary.json`。
+
+### 8.1 反事实账本（Track A3，2026-10-17）
+
+命中率只回答"方向对没对"，不回答"照做赚不赚、比基准强不强"。每条裁决现在配两个反事实
+（`review_calc.counterfactual_pnl` / `verdict_review._benchmark_return`）：
+
+- **同窗口基准超额** `excess_returns[w]` = 标的收益 − 组合基准（`config portfolio.benchmark_symbol`，默认 510300.SS）同窗口收益。
+  verdict 无关，所以 HOLD 也有：它回答"你拿着的东西这段时间跑没跑赢基准"。
+- **照做净损益** `followed_pnl[w]`（基准币种）= 按 CIO 金额执行并在窗口末平仓、扣往返成本（`ROUNDTRIP_COST_BPS` 按市场后缀的保守估计）、对比留现金。
+  买侧 = 金额 × (收益 − 成本)；卖侧 = |金额| × (−收益 − 成本)。HOLD 金额为 0，不算钱。
+
+实测（同一批 live holdout 323 条，30d 窗口）：
+
+| Verdict | N(有基准) | 30d 超额均值 | 跑赢基准 | N(有金额) | 照做净收益率* | 照做为正 |
+|---|---|---|---|---|---|---|
+| ACCUMULATE | 30 | −2.4pp | 27% | 28 | −6.9% | 29% |
+| HOLD | 198 | −1.1pp | 35% | — | — | — |
+| TRIM | 18 | −3.0pp | 39% | 17 | +4.9% | 71% |
+| 全部有金额 | | | | 45 | **+3.2%** | |
+
+\* 照做净收益率 = Σ净损益 / Σ|CIO 建议金额|（名义金额加权，扣往返成本，30d）。本页只给比率；绝对金额在本机
+`docs/verdict_accuracy.md`（gitignored）里，不进公开仓库。
+
+**解读**（都要带 n 看）：买侧照做在扣成本后是亏的（名义加权 −6.9%），且被买的标的 30 天内 73% 跑输沪深300——
+与主张 8 的"提升为负"互相印证。拿着的持仓整体也跑输基准 1.1pp。**唯一赚钱的是减仓**：17 次 TRIM 照做净赚 +4.9%
+（71% 为正，Wilson 95% 区间约 47–88%）。这与委员会"结构性不会卖"（评审 A3：7 条规则全朝 HOLD 推、0 条朝离场推）
+放在一起看，说明被压制的恰好是有价值的那一侧——但 n=17、名义加权对个别大额减仓敏感，只能当 B5（解锁基本面离场）
+的立项依据，不能当结论。
+
+局限：成本是常量表不是券商实价；基准对黄金/美股用沪深300 是用户配置口径（fork 用户改 `benchmark_symbol`）；
+金额是 CIO 建议额不是实际成交额；窗口末平仓是假设；**币种**：标的收益按报价币种算（美股是 USD 收益），金额却是
+基准币种，汇率变动没算进去，超额也是拿报价币种收益减基准——中途改过基准币种的行不进金额账本（按 transcript 的金额币种过滤）。
+方向由 verdict 定、金额取绝对值（regex 时代 TRIM 负号曾出过 bug；本次复核 390 条存档符号 0 条异常）。
+公开 JSON 只出比率（`excess_mean` / `beat_benchmark_rate`，按 `n_benchmark` 抑制 n<30），不出金额。
+
+### 8.2 自报置信度校准 + 裁决中性度（评审路线 Sprint 2 · A5，2026-10-17）
+
+展示层早就不给用户看 CIO 自报的 confidence（改成"同类决议 30 天后怎样"的查表），但自报分仍落盘、仍进
+transcript。这一节回答两个量化问题：**自报分到底有没有信息**、**裁决分布和市场实际分布差多少**。
+只测量与展示，裁决逻辑一个字没动。实现：`review_calc.calibration_summary` / `neutrality_summary`（纯函数）→
+`verdict_review` summary 的 `calibration` / `neutrality` 两节 → `docs/verdict_accuracy.md` 两张小表；
+中性度一行进日报（email / chat 同一文本；复盘结果超过 3 天就不出这行）；公开 JSON 每个窗口只加整体数字 `calibration: {ece, brier, base_rate_brier, n, n_excluded, n_zero_conf}`。
+
+**怎么算**：把自报 confidence 当"命中概率"，和 30d 实际命中（`hits["30d"]`）对账。
+Brier = mean(自报 − 命中)²；基率 Brier = 一个永远报"整样本平均命中率"的傻瓜的 Brier（= p̄(1−p̄)）；
+ECE = Σ 档权重 × |档平均自报 − 档命中率|。分档（左闭右开，0.6 归 0.6–0.7、0.8 归 0.7–0.8）：≤0.4 / 0.4–0.6 / 0.6–0.7 / 0.7–0.8 / >0.8。
+样本 = live、非污染、非周末重复、30d 已成熟、有方向的裁决（UNCLEAR 不打 hits，自然排除；强制 HOLD 的 ≤0.4 行照算）。
+自报恰为 0.0 的行是 `cio_parse` 解析失败的兜底值、不是"0% 把握"，不进校准，单列 `n_zero_conf`（本样本 0 条，下表数字不变）。
+n<30 的档不出数字（红线 #2）。
+
+实测（live 干净样本 n=246，30d 窗口，2026-10-17 重算）：
+
+| 自报档 | N | 平均自报 | 实际命中率 | 95% CI | 本档 Brier | 本档基率 Brier |
+|---|---|---|---|---|---|---|
+| ≤0.4 | 49 | 0.39 | 53.1% | 39–66% | 0.272 | 0.258 |
+| 0.4–0.6 | 42 | 0.54 | 61.9% | 47–75% | 0.230 | 0.236 |
+| 0.6–0.7 | 90 | 0.63 | 71.1% | 61–80% | 0.218 | 0.213 |
+| 0.7–0.8 | 62 | 0.74 | 58.1% | 46–70% | 0.274 | 0.246 |
+| >0.8 | 3 | — | — | — | — | — |
+| **整体** | 246 | | 62.6% | | **0.2452** | **0.2341** |
+
+整体 ECE = 0.114。
+
+**结论**：(1) 自报分的 Brier（0.245）**不优于**常数预测（0.234）——"自报 0.7"并不比"自报 0.6"更可能对；
+(2) 非单调：0.6–0.7 档 71.1% 反而高于 0.7–0.8 档 58.1%（差 13pp，两比例 z≈1.7，**不显著**，别当成"高置信更差"）；
+(3) 自报分几乎是几个常量——246 条只有 20 个不同取值，0.4 / 0.55 / 0.6 / 0.62 / 0.65 / 0.75 六个值占 80%。
+与展示层改用查表的决定一致：自报分没有可校准的信息。
+
+**裁决中性度**（同一批 live 干净样本里 30d 已成熟的 252 条，含 UNCLEAR 6 条）：
+
+| | HOLD | ACCUMULATE | TRIM | BUY | SELL | UNCLEAR |
+|---|---|---|---|---|---|---|
+| 裁决占比 | 78.6% | 11.9% | 7.1% | 0% | 0% | 2.4% |
+
+| 同期市场（directions，verdict 无关） | 横盘 | 下跌 | 上涨 |
+|---|---|---|---|
+| 占比 | 68.7% | 19.8% | 11.5% |
+
+一行人话（日报同款）："过去 252 条已成熟裁决（30d）中 79% 是 HOLD，同期市场 69% 横盘（20% 下跌 / 12% 上涨）；BUY 0 条、SELL 0 条。"
+HOLD 比横盘占比高约 10pp，且一次 BUY / SELL 都没有——与主张 8 的"提升为负"、A3 的"结构性不会卖"互相印证。
+
+局限：相邻交易日的 30d 窗口高度重叠，真实独立样本远少于 n，CI 比表里更宽；HOLD（命中 = 市场横盘）占样本 80%，
+整体校准主要是 HOLD 的校准，HOLD 与方向性裁决的"命中"含义不同，分开看要等方向性样本 ≥30（ACCUMULATE 30 条边缘、TRIM 18 条）；
+自报分本身也只是 CIO 的一次采样——A4 在同一输入上重跑 90 次（`experiments/verdict_variance/`）：自报分 90/90 全是 0.62（标准差 0），方向翻转率 26.7%（8/30 条，只对应 4 个标的），其中一个标的就是 11 次 ACCUMULATE / 10 次 HOLD 的抛硬币；而生产里 2026-09-16 起的 84 条里已有 89% 自报恰好 0.62（其中只有 3 条 30d 已成熟，还没进上面的表）——等它们成熟，校准表会被一个常量档主导。公开 JSON 的 calibration 受"互补抑制"约束：
+`base_rate_brier = p̄(1−p̄)` 一步还原整体命中率，所以只要窗口的 `direction_hit_rate` 被抑制（有方向桶 n<30，当前 TRIM 18 条），
+该窗口校准数字也置 null；被校准排除的行数 `n_excluded = sample_size − n`（不管原因：confidence 缺失 / 非数字 / 恰为 0.0）落在 (0, 30) 时同理（校准排除了那几行而 `direction_hit_rate` 含它们，p̄ 与 n 的差能逆算这几行的命中）——当前只有 30d 窗口出数字。
+
+复现：`INVEST_HOME=<只读拷贝> uv run python -m openinvest.jobs.verdict_review` → `docs/verdict_accuracy.md`「置信度校准」「裁决中性度」两节。
+
+### 8.3 B4 四臂 A/B：对照 / 密封投票 / 辩论 / macro-soft（评审路线 B4 + #461，2026-10）
+
+> **实验已开跑，判读日期 = 开跑日 + 65 天。** 开跑日 = 舰队 crontab 加上新 flag 之后第一个落盘日
+> （以 `memory/.backtest_{sealed,debate,macrosoft}/` 里最早的日期目录为准）。
+> 一句话翻译：舰队每天多跑三臂对照（同一批输入上：角色不互相看 + 每个标的跑三次投票 / live 日报同款的 4 轮辩论 /
+> Macro 偏空时打折而不否决），你收到的裁决不变；65 天后出判读。
+
+**只加实验臂，不改任何 live 裁决**，方式同 T2 置信度臂：产物只在数据目录（`.backtest_sealed/` / `.backtest_debate/` / `.backtest_macrosoft/`、
+`.dreams/verdict_review_<臂>.jsonl`、`docs/verdict_accuracy_arms.md`，均 gitignored），不进 live 命中率页 / 公开 JSON / confidence_lookup。
+每臂和现有舰队产物（对照臂，rounds=1 单次抽样）同日同标的、同一份输入（含同一份 `macro_view`），只多**一个**变量：
+
+| 臂 | 多的那个变量 | 回答 |
+|---|---|---|
+| sealed | 每标的独立抽 N=3 次 rounds=1，按严格多数聚合；最大票占比代替自报置信度；金额取多数票中位数 | Q1 投票有没有用（A4：同输入重跑方向翻转 26.7%、自报置信度恒 0.62） |
+| debate | rounds=4 单次抽样（= `daily_report` 的 `max_debate_rounds=4`） | Q2 辩论有没有害（调研：多轮辩论趋同、囤现金；舰队对照臂本来就是 rounds=1） |
+| macro-soft | CIO 规则 2 在“Macro risk_off 且 STRENGTH<8”时由否决改为打折（金额 ×(10−STRENGTH)/10；≥8 仍否决） | Q3 [#461](https://github.com/longsizhuo/openInvest/issues/461)：#256 修数据窗口后 Macro 恒为 risk_off，Quant 看多的行全被压成 HOLD |
+
+**判据（开跑前冻结）**：过其一才起草 live 切换提案（另一个 PR，附一句话信号翻译 + 确定性回算差异报告，用户签字）：
+
+- **H1**（sealed 准）：整侧 30d「提升」的 95% CI 下界 > 0。
+- **H2**（sealed 稳）：配对逐日方向翻转显著少于对照臂（精确符号检验 p < 0.05）且 HOLD 占比不显著更多；功效闸：非全票一致的行 < 30 判“功效不足”。
+- **H3**（macro-soft 值）：被“解锁”的买入（macro-soft 买、对照臂同日同标的没买）成熟 n ≥ 30，30d 相对基准超额均值 95% CI 下界 > 0，且 30d 照做净收益率（反事实账本，扣往返成本）> 0。
+- debate 臂不设通过门槛，是对照：与对照臂比 HOLD 占比、逐日翻转、提升。
+
+都没过就关臂，negative result 写回本节。判读 +65 天（不是 +35）：30d 窗口要满，且需要约 35 个交易日的成熟样本；+35 天时只有头约 5 天的决议满了窗口。
+成本三臂合计 ≈ +¥27 / 月（总舰队 ≈ ¥9 → ¥36）。
+
+**读之前先知道**：(1) sealed 与对照臂都是 rounds=1，sealed 隔离的是“多数票 + 分裂度”；(2) 自 10-08 起对照臂约 330 行 0 行非 HOLD，原因是 Macro 恒为 risk_off（#461），
+所以 H1 / H2 在 Macro 回到 neutral 前很可能“功效不足”，macro-soft 臂就是为在这个饱和下拿到有分歧的行；(3) 首跑：macro-soft 臂在 Macro risk_off 下出现了对照臂没有的
+ACCUMULATE（备忘录逐字执行“不否决 + 折扣”），其余臂与 #461 的现象一致。
+设计、聚合规则、变体原文与开关、成本明细、判据全文与全部局限见 [`experiments/sealed_vote/README.md`](../../experiments/sealed_vote/README.md)。
+
+结果：**未出**（判读日前不写任何数字）。
+
+### 8.4 换模型后实验怎么延续（#483，2026-10-18 起）
+
+> 一句话翻译：复盘页和公开数据现在**按模型分开算**，换模型不会把新旧账混在一起；
+> 新模型（Sonnet 5.5）的账从 2026-10-19 起另开一本，数够了才出数字，在此之前旧模型的数字不受影响。
+
+2026-10-18 生产委员会的 LLM 从 `deepseek-v4-flash` 换成 `claude-sonnet-5-5`（[#483](https://github.com/longsizhuo/openInvest/pull/483)）。
+8 / 8.1 / 8.2 的计分板、校准、中性度、反事实账本、置信度查表此前都把两种模型的裁决混在一起算——
+换模型后实验没法继续（新模型的 n=0 被旧模型的 n=300 淹没，看不出变没变）。现在每条裁决带一个派生字段
+`model_era = "<谁跑的>:<模型名>"`（`review_calc.model_era_of`，单一可信源；落进 `verdict_review.jsonl`）：
+
+| 人群 | 谁在跑 | 模型 | model_era | 备注 |
+|---|---|---|---|---|
+| live Direct（日报 cron / `run_committee`） | 后端 Direct 路径 | `claude-sonnet-5-5`（2026-10-19 起的 transcript） | `direct:claude-sonnet-5-5` | Input Health 的 `model` = 落盘时刻的全局 LLM 配置 |
+| Hermes Coordinator | Hermes 的 `delegate_task` 子代理 | Claude Haiku（如 `claude-haiku-5-5`） | `hermes:claude-haiku-5-5` | **host 必须传** `save_committee --model <名>`（MCP：`submit_committee(..., model=<名>)`）；没传记 `unknown`（`hermes:unknown` / `claude:unknown`），不猜 |
+| 纸面舰队 + B4 四臂 | 后端 Direct 路径（cron 钉 DeepSeek） | `deepseek-v4-flash` | `direct:deepseek-v4-flash` | 舰队继续钉 DeepSeek，见下。对照臂 / T2 臂的 transcript 自 2026-10-18 起在 Input Health 记 `model`；更早的行没记，是 `direct:unknown`（复盘的“不止一个模型”警告不把 unknown 当一个模型） |
+| 老存档（没有 Input Health 块） | — | 决议日 ≤ 2026-10-18 的 Direct 行一律 DeepSeek | `direct:deepseek-v4-flash(pre-health)` | 10-18 之后没块的 → `unknown`（不猜）。transcript 有 `**Provider**: X (skill mode)` 行的是 Coordinator 老存档（模型名当时不落盘），归 `X:unknown`，不混进 DeepSeek 基线（live 里目前 6 条 claude） |
+
+**哪些数字按模型分开了**（只测量 / 展示，裁决逻辑一个字没动）：
+
+- **复盘页**（`docs/verdict_accuracy.md`）新增「按模型」一节：holdout 内按 `model_era` 分子桶，各自 n、命中、同尺子基率 / 提升 / CI、反事实账本、校准、中性度；
+  原来的全局校准 / 中性度节标明「全部模型合并」。
+- **公开 JSON**（`docs/accuracy_summary.json`）每个窗口加 `by_model: {<model_era>: {sample_size, direction_hit_rate, ...}}`（同一份窗口聚合 + 同一套 n<30 抑制；模型名不算敏感）。
+  **互补抑制**：窗口合计是公开的，而命中数、命中总数、Brier×n、市场标签数这些量跨模型都是可加的——某个模型的某个量因 n<30 被藏、窗口合计和其余模型的同一个量都公开，
+  「窗口 − 其余模型」就能精确还原那几行。所以**按量族逐个检查**（命中总数 / 各方向桶的命中·提升·CI / 各桶超额 / 校准 / 市场基率 / 各桶 base_rate）：
+  某族在某模型里"有数据却被藏"且窗口该族公开 → 其余模型的同一族也置 null（计数保留）。方向桶粒度也算（评审 #497 的复现：
+  A 看涨 35 条 + B 看涨 5 条，窗口桶 − A 的桶 = B 的 4/5）。同时，方向桶里的 `base_rate`（口径与命中同尺子，HOLD 桶的 base_rate 就是命中率）在样本 <30 时一律抹掉。
+  实际效果：新模型 30d 还没有成熟样本（sample_size=0）时旧模型数字照出；新模型成熟到 1–29 条、或某个方向桶还小的那一段，旧模型对应的 `by_model` 数字也暂时置 null，到 ≥30 条两边一起出。
+- **置信度查表**（邮件 / 事件提醒 / API 里「同类 HOLD 之后 30 天……」那串字）只用与**当前 config 的模型**同口径的样本；
+  某个 verdict 同模型样本不足 30 → 退回包内默认表（只含舰队 DeepSeek 样本），并注明
+  「默认表，deepseek-v4-flash 舰队样本，当前 claude-sonnet-5-5 样本不足」。**所以 Sonnet 期里查表显示的是 DeepSeek 默认表的数**，不是 Sonnet 的；这是有意的，要等同模型样本 ≥30。
+  **只用 Coordinator 的用户**（没有 Direct 配置）同理：过滤用的是 `LLM_MODEL`（没配时取默认 `deepseek-v4-flash`），而他们自己的 live 行是 `claude:unknown` / `hermes:<model>`，
+  对不上，本机表是空的、全部退到默认表，展示串只写「默认表」（默认表的模型和他们“当前配置”都是 deepseek，不加“当前模型样本不足”那段）。
+  这是行为变化：合入前这些行进本机表，合入后不进。想继续用自己的 Coordinator 样本，就把 `LLM_MODEL` 设成 host 传给 `--model` 的那个名字。
+- **B4 四臂报告**（`docs/verdict_accuracy_arms.md`）的臂一览加「模型」列；臂间 / 臂与对照臂用了不止一个模型时报告里直接警告。
+
+**子桶的闸按「30d 已成熟可评分行数」，不是总行数**：Sonnet 期的行要等 30 个日历日才有 `hits["30d"]`，
+总行数先到 30 并不意味着有可展示的数。n<30 的子桶报告页只给 n（含 `n_matured_30d`）。
+
+**Sonnet 期什么时候有数字**：生产每个工作日约 4 条 live 裁决（周末休市资产的周末决议被剔除）。
+总行数到 30 约在 2026-10-28；但 30d 成熟要到决议日 +30 天，所以 30d 命中 / 校准 / 中性度的 n≥30 最早在 **2026-11-27 前后**（不是 11 月中）。
+在那之前「按模型」一节里 Sonnet 那行只有 n。看进度（只读、不写）：
+
+```bash
+# Sonnet 期 live 裁决条数与 30d 已成熟条数（model_era = direct:claude-sonnet-5-5）
+uv run python - <<'PY'
+import json, pathlib
+rows = [json.loads(l) for l in pathlib.Path("memory/.dreams/verdict_review.jsonl").read_text().splitlines()]
+s = [r for r in rows if r.get("model_era") == "direct:claude-sonnet-5-5" and r.get("source") == "live"]
+print("sonnet rows", len(s), "matured 30d", sum(1 for r in s if "30d" in r.get("hits", {})))
+PY
+```
+
+**舰队四臂继续钉 DeepSeek，判读日 2026-12-22 不变。** 8.3 回答的是"结构"问题（投票 / 辩论 / macro-soft 有没有用），
+需要的是各臂之间只差一个变量；中途把舰队换成 Sonnet 会让臂内数据一半 DeepSeek 一半 Sonnet，对照臂也要跟着换，等于重开实验。
+所以 Sonnet 的账只从 live Direct 这一本里长，舰队这本不动。四臂报告现在标模型，若有人改了舰队的 `LLM_MODEL`，报告会直接警告。
+
+**舰队里的 Sonnet 模型臂**（`backtest_committee --sonnet-arm`）：舰队其余臂钉 DeepSeek，但"换模型本身"的效应需要同一批输入上的配对对照，
+live 每天只有 ~4 条，Sonnet 期的样本要等很久。这一臂同一批标的、live 配置（rounds=1、单次抽样）只把 LLM 换成 Sonnet 5.5
+（config `fleet.sonnet_arm`，key 来自环境变量 `FLEET_SONNET_API_KEY`），每天 ≈ 50 条；Macro 由 Sonnet 自己生成，所以复盘不按 `macro_shared` 剔行，
+在 `docs/verdict_accuracy_arms.md` 单列「模型对照」与对照臂同日同标的配对（差异 = 整条流水线换模型的总效应；稳定度那组 n/a）。
+每天 ≈ ¥20（实测 ¥0.405/标的 + ¥0.143 Macro，50 标的）。设计、cron 行、成本明细见 [`experiments/paper_fleet/README.md`](../../experiments/paper_fleet/README.md)。
+
+**#461 宏观否决要在 Sonnet 跑满一周后重看 Macro 信号分布。** #461 的前提是"Macro 恒为 risk_off、把 Quant 看多的行全压成 HOLD"，
+这是在 DeepSeek 上观察到的；换模型后 Macro 的 SIGNAL 分布可能不是同一个样子。Sonnet 期满一周（2026-10-26 前后）后，统计 `memory/.committee` 近 7 天的 Macro SIGNAL，
+并和换模型前的同长度窗口比（只看分布，不改判据）：
+
+```bash
+# 近 7 个有裁决的日期目录里，Macro Strategist 段的 SIGNAL 分布（live；Sonnet 期）
+cd memory/.committee && for d in $(ls -d 20??-??-?? | tail -7); do for f in $d/*.md; do
+  awk '/^## Macro Strategist/{m=1;next} m&&/^SIGNAL:/{print $2; exit}' "$f"; done; done | sort | uniq -c | sort -rn
+# 换模型前同长度窗口（DeepSeek 期）：把 tail -7 换成 tail -14 | head -7
+```
+
+**Sonnet 方差基线**（A4 在 Sonnet 上重测）见 [`experiments/verdict_variance/README.md`](../../experiments/verdict_variance/README.md) 的「Sonnet 5.5 基线」一节。
+DeepSeek 基线（26.7% / 自报分恒 0.62）不能直接外推到 Sonnet，所以同一天、同一批 30 条上两个模型各重跑 90 次（Sonnet ¥55.68，DeepSeek ¥0.60）：
+
+| | DeepSeek 同日对照 | Sonnet 5.5 |
+|---|---|---|
+| 方向翻转率（30 条） | 20.0%（6/30，区间 9.5–37%） | 6.7%（2/30，区间 1.8–21%） |
+| 自报置信度 | 90/90 = 0.62，标准差 0 | 不是常数：0.55–0.62，68% 恰好 0.60，条内标准差均值 0.010 |
+| 建议金额变异（有非 0 的条） | 6 条，CV 均值 1.33 | 2 条（CV=√3），另 28 条三次全 0 |
+| 裁决分布（90 次） | ACCUMULATE 9 / HOLD 81 | HOLD 88 / TRIM 2 / ACCUMULATE 0 |
+
+读法：Sonnet 方向上更稳（原来抛硬币的那个标的 18/18 全 HOLD），但稳是几乎不动换来的；有效样本只有 4 个输入，两个翻转率的区间重叠，别写成“显著更稳”。
+自报置信度不再是常数，但是否带信息要等 Sonnet 期的校准样本（上面的进度命令）。
 
 ---
 

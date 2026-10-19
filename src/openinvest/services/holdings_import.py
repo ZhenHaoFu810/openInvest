@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from openinvest.core.portfolio_manager import gold_booking
+
 _HOLDINGS_PARSE_SYSTEM_PROMPT = """你是金融数据解析助手。把用户的自然语言持仓描述解析成严格 JSON。
 
 输出 schema（无 markdown 无解释）：
@@ -43,6 +45,7 @@ Symbol 映射规则：
 - 澳股: ticker + .AX (NDQ.AX)
 - 加密: 大写 + -USD (BTC-USD, ETH-USD)
 - 黄金/纸黄金/积存金: GC=F (浙商/工行/招行积存金都映射到 GC=F，渠道写银行名)
+  黄金按用户给的币种 / 单位**原样输出**（GC=F 入账要求 CNY/克；USD/盎司会被拒并提示用户按 CNY/克补录），**不要自行换算汇率**，没给单位就留空
 - 中国场外公募基金: FUND:<六位基金代码>（例如 123456 → FUND:123456），kind=fund；
   绝对不要追加 .SS/.SZ。用户只给“持有金额/持仓收益”而没给份额和成本时，
   原样输出 market_value 和 pnl，units/avg_cost 先填 0，后端会按最新单位净值换算。
@@ -78,7 +81,7 @@ def _parse_holdings_with_llm(
     """
     from openai import OpenAI
 
-    from openinvest.utils.llm import get_llm_config_safe, needs_thinking_disabled
+    from openinvest.utils.llm import get_llm_config_safe, json_object_kwargs, needs_thinking_disabled, sampling_kwargs
     _ak, _bu, _m, _p = get_llm_config_safe()
     base_url = base_url or _bu
     model = model or _m
@@ -94,8 +97,8 @@ def _parse_holdings_with_llm(
             {"role": "system", "content": _HOLDINGS_PARSE_SYSTEM_PROMPT},
             {"role": "user", "content": description},
         ],
-        temperature=0.0,
-        response_format={"type": "json_object"},
+        **sampling_kwargs(model, 0.0),
+        **json_object_kwargs(model),
         extra_body=extra_body or None,
     )
     raw = resp.choices[0].message.content or "{}"
@@ -222,11 +225,14 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
       - holdings：只加 portfolio 里**还没有**的 symbol；已存在的跳过并报告（不覆盖 units/均价）
       - cash：每个币种只在当前余额为 0 时填入；已有余额的跳过并报告（不覆盖）
     重复导入因此幂等，绝不撕裂已有真实数据。返回 summary 给调用方展示。
+      - 黄金（GC=F）必须 CNY/克（同 buy 的 gold_booking）；USD/盎司等被拒的行进
+        ``rejected_holdings: {symbol: 正确写法}``，不入账、不影响其他行，用户照提示 `buy` 手记。
     """
     holdings_in = parsed.get("holdings") or []
     cash_in = parsed.get("cash") or {}
     added: List[str] = []
     skipped: List[str] = []
+    rejected: Dict[str, str] = {}
     cash_set: Dict[str, float] = {}
     cash_skipped: Dict[str, float] = {}
 
@@ -239,6 +245,14 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             if norm["symbol"] in existing:
                 skipped.append(norm["symbol"])
+                continue
+            try:
+                # 黄金口径与 buy / record_existing_position 同一道闸（#457）；非 GC=F → None
+                # existing=True：导入的是已有仓位，示例给 --existing-position / record_existing_position（不扣现金，CR #499）
+                norm.update(gold_booking(norm["symbol"], norm["cost_currency"], norm["unit_label"], None,
+                                         existing=True) or {})
+            except ValueError as e:
+                rejected[norm["symbol"]] = str(e)   # 只拒这一行，其余持仓照常入账
                 continue
             holdings.append(norm)
             existing.add(norm["symbol"])
@@ -259,6 +273,7 @@ def commit_parsed(pm: Any, parsed: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "added_holdings": added,
         "skipped_holdings": skipped,
+        "rejected_holdings": rejected,
         "cash_set": cash_set,
         "cash_skipped": cash_skipped,
     }

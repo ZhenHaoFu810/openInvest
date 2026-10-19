@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from openinvest.jobs.review_calc import build_confidence_lookup
+from openinvest.jobs.review_calc import DEFAULT_LOOKUP_MODEL, build_confidence_lookup
 from openinvest.jobs.verdict_review import DEFAULT_LOOKUP_PATH, review_fleet
 
 
@@ -20,6 +20,7 @@ def main() -> None:
     data = build_confidence_lookup([], review_fleet())
     assert all(c["n_live"] == 0 for c in data["by_verdict"].values())   # 只含舰队
     data["source"] = "fleet"
+    data["model"] = DEFAULT_LOOKUP_MODEL   # 舰队钉 DeepSeek；展示端据此在当前模型不同时注明默认表不是它的样本
     data["generated_on"] = date.today().isoformat()
     DEFAULT_LOOKUP_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n",
                                    encoding="utf-8")

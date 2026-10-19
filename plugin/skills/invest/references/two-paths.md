@@ -22,7 +22,7 @@ or "can non-Claude agents use this / 非 Claude 的 agent 能用吗".
 | Cost | Zero cost to the project; covered by the user's existing subscription | ~¥0.01-0.03 per run (DeepSeek pricing; can be ¥0 with a free-tier provider) |
 | Information isolation | Real subprocesses/isolated subtasks (independent contexts) | Same process, prompt-string isolation |
 | Latency | ~2-5 minutes (a bit slower per run) | ~15-60s (fast + parallel) |
-| Persistence | `memory/.committee/<date>/<sym>.md` with `Provider: <your brand> (skill mode)` | Same file, with `Provider: deepseek` |
+| Persistence | `memory/.committee/<date>/<sym>.md` with `Provider: <your brand> (skill mode)`; pass `save_committee --model <name>` so Input Health records which model played the roles (omitted = `unknown`) | Same file, with `Provider: deepseek`; Input Health `model` = the configured `LLM_MODEL` |
 | SSE live stream | ❌ None | ✅ `/api/committee/live/{task_id}` (Web-API-triggered version only; the API is deprecated, used for remote hub mode) |
 | Credential requirements | No key needed | `LLM_API_KEY` MUST be configured (any OpenAI-compatible endpoint; free-tier providers work) |
 

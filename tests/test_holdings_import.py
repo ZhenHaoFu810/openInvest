@@ -141,6 +141,29 @@ def test_commit_non_destructive():
     assert pm.reloaded
 
 
+def test_commit_rejects_usd_ounce_gold_but_keeps_other_rows():
+    """#462：黄金按 USD/盎司解析 → 与 buy 同一道 gold_booking 闸拒收；整批不失败，其他行照常入账。"""
+    pm = FakePM({"holdings": [], "cash": {}})
+    s = commit_parsed(pm, {"holdings": [
+        {"symbol": "GC=F", "kind": "metal", "units": 2, "avg_cost": 2300, "cost_currency": "USD", "unit_label": "盎司"},
+        {"symbol": "510300.SS", "kind": "etf", "units": 3000, "avg_cost": 4.2},
+    ]})
+    assert s["added_holdings"] == ["510300.SS"]
+    assert "CNY" in s["rejected_holdings"]["GC=F"]
+    assert "existing" in s["rejected_holdings"]["GC=F"]   # 已有仓位补录提示，照抄不会二次扣现金
+    assert [h["symbol"] for h in pm.state["holdings"]] == ["510300.SS"]
+
+
+def test_commit_books_cny_gram_gold_with_proxy_kind():
+    pm = FakePM({"holdings": [], "cash": {}})
+    s = commit_parsed(pm, {"holdings": [
+        {"symbol": "GC=F", "kind": "stock", "units": 5, "avg_cost": 880, "cost_currency": "CNY", "unit_label": "g"},
+    ]})
+    assert s["added_holdings"] == ["GC=F"] and s["rejected_holdings"] == {}
+    gold = pm.state["holdings"][0]
+    assert gold["proxy_kind"] == "gold_cny_per_gram" and gold["kind"] == "metal" and gold["unit_label"] == "克"
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))

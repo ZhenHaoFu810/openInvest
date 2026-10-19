@@ -7,7 +7,19 @@
 - 绝对不输出 symbol / threshold / verdict 原文 / asset / 任何持仓字段
 - 只输出命中率聚合数字 + 样本量
 - 周末休市资产的周末决议（周五样本的重复）剔除，只输出被剔条数 weekend_dup_excluded
-- by_direction 按 bullish / bearish / hold 分组（不出现具体标的）
+- by_direction 按 bullish / bearish / hold / unclear 分组（不出现具体标的）；unclear 只有 total
+- 每个方向桶附同样本市场基率 base_rate、提升 lift（= rate − base_rate）、Wilson 95% 区间 ci95；
+  n<30 与 rate 一起抹掉（红线 #2）
+- 每个窗口附 calibration {ece, brier, base_rate_brier, n, n_excluded, n_zero_conf}：CIO 自报置信度的校准（A5）。
+  只出整体数字，不出分档明细；confidence 非数字 / 恰为 0.0（解析失败兜底）的行不进校准，
+  n_excluded = sample_size − n（不管原因），n_zero_conf 是其中 0.0 的条数；
+  n<30 / direction_hit_rate 被抑制 / 0<n_excluded<30 时数字置 null（计数保留）。
+  原因：base_rate_brier = p(1−p) 会泄露整体命中率，与 direction_hit_rate 相减能逆算被排除的那几行的命中
+
+- 每个窗口附 by_model {<model_era>: 同上一份窗口聚合}：换模型后新旧账分开算（model_era = "谁跑的:模型名"，如
+  direct:claude-sonnet-5-5 / hermes:claude-haiku-5-5；模型名不算敏感）。每个模型各自按 n<30 抑制；另外
+  某个量（命中总数 / 各方向桶命中 / 校准 / 市场基率 / 超额）在某模型里有数据却因 n<30 被藏、而窗口合计公开时，其余模型的同一个量
+  也置 null（互补抑制：窗口合计 − 其余模型 = 被藏的那几行；按量族逐个检查，见 _complementary_mask）
 
 用法：
     python scripts/export_accuracy.py
@@ -25,9 +37,10 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from openinvest.calc.symbols import is_closed_weekend
+from openinvest.jobs.review_calc import calibration_from_pairs, model_era_of, wilson_ci
 
 ROOT = Path(__file__).parent.parent
 
@@ -61,7 +74,21 @@ _DIRECTION_MAP: Dict[str, str] = {
     "flat": "hold",
     "hold": "hold",
     "neutral": "hold",
+    "none": "unclear",   # UNCLEAR：无期望方向，只计数不计命中（不再折进 hold）
 }
+
+def _label_true(bucket: str, row: Dict[str, Any]) -> Optional[bool]:
+    """与 verdict_review._is_hit 同一把尺子的标签（算同桶基率用）：
+    bullish = 涨 >0，bearish = 跌 <0，hold = 留在 flat band 内（directions 已按 per-row band 分好）。"""
+    ret = (row.get("actual_returns") or {}).get(HIT_HORIZON)
+    mkt = str((row.get("directions") or {}).get(HIT_HORIZON) or "").lower()
+    if bucket == "bullish":
+        return None if ret is None else float(ret) > 0
+    if bucket == "bearish":
+        return None if ret is None else float(ret) < 0
+    if bucket == "hold":
+        return None if not mkt else mkt == "flat"
+    return None
 
 
 def _parse_date(date_str: str) -> Optional[datetime]:
@@ -110,17 +137,36 @@ def _aggregate(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
     total_hit = 0
     total_count = 0
+    # UNCLEAR（expected_direction=none）：没有 hits，按"已成熟"（directions 有固定窗口）只计 total
+    unclear_total = 0
     # 同样本市场基率（issue #179 P1-A②）：同一 HIT_HORIZON 窗口里市场实际
     # up/down/flat 的占比，verdict 无关——没有它，命中率没有对照系
     #（60% 命中在 70% 单边上涨的窗口里其实是负 alpha）
     dir_counts = {"up": 0, "down": 0, "flat": 0}
     dir_total = 0
+    # 同桶"标签基率"（与命中同尺子）：bullish=P(涨>0) / bearish=P(跌<0) / hold=P(留在 band 内)
+    label_counts = {b: [0, 0] for b in ("bullish", "bearish", "hold")}   # [true, n]
+    # 反事实（只出比率，不出金额）：同窗口基准超额均值 + 跑赢基准比例
+    excess: Dict[str, List[float]] = {b: [] for b in ("bullish", "bearish", "hold")}
+
+    cal_pairs: List[Tuple[float, bool]] = []   # (CIO 自报 confidence, 命中)——只在这一层聚合成整体四个数
 
     for row in rows:
+        raw_dir = str(row.get("expected_direction") or "").lower().strip()
+        if _DIRECTION_MAP.get(raw_dir, "unclear") == "unclear":
+            if str((row.get("directions") or {}).get(HIT_HORIZON) or ""):
+                unclear_total += 1
+            continue
         # 固定窗口无命中数据 → 跳过
         is_hit = _row_is_hit(row)
         if is_hit is None:
             continue
+
+        for b in label_counts:
+            lt = _label_true(b, row)
+            if lt is not None:
+                label_counts[b][1] += 1
+                label_counts[b][0] += int(lt)
 
         raw_mkt = str((row.get("directions") or {}).get(HIT_HORIZON) or "").lower()
         if raw_mkt in dir_counts:
@@ -136,33 +182,52 @@ def _aggregate(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             )
 
         # 方向分类（不输出 verdict 原文，只用 expected_direction 映射）
-        raw_dir = str(row.get("expected_direction") or "").lower().strip()
-        bucket = _DIRECTION_MAP.get(raw_dir, "hold")
+        bucket = _DIRECTION_MAP[raw_dir]
 
         by_dir[bucket]["total"] += 1
         if is_hit:
             by_dir[bucket]["hit"] += 1
+        ex = (row.get("excess_returns") or {}).get(HIT_HORIZON)
+        if isinstance(ex, (int, float)):
+            excess[bucket].append(float(ex))
 
         total_count += 1
         if is_hit:
             total_hit += 1
+        conf = row.get("confidence")
+        if isinstance(conf, (int, float)) and not isinstance(conf, bool):
+            cal_pairs.append((float(conf), is_hit))
 
-    # 计算各方向命中率（四舍五入 2 位）
+    # 计算各方向命中率（四舍五入 2 位）+ 同桶基率 / 提升 / Wilson 95% CI
     by_dir_out: Dict[str, Any] = {}
     for bucket, counts in by_dir.items():
         t = counts["total"]
         h = counts["hit"]
+        rate = round(h / t, 4) if t > 0 else None
+        lt, ln = label_counts[bucket]
+        base = round(lt / ln, 4) if ln > 0 else None
         by_dir_out[bucket] = {
             "hit": h,
             "total": t,
-            "rate": round(h / t, 4) if t > 0 else None,
+            "rate": rate,
+            "base_rate": base,
+            "lift": round(rate - base, 4) if (rate is not None and base is not None) else None,
+            "ci95": wilson_ci(h, t),
+            "excess_mean": round(sum(excess[bucket]) / len(excess[bucket]), 4) if excess[bucket] else None,
+            "beat_benchmark_rate": (round(sum(1 for e in excess[bucket] if e > 0) / len(excess[bucket]), 4)
+                                    if excess[bucket] else None),
+            "n_benchmark": len(excess[bucket]),
         }
+    by_dir_out["unclear"] = {"hit": None, "total": unclear_total, "rate": None}
 
+    cal = calibration_from_pairs(cal_pairs, min_n=1)   # 原始统计；n<30 抑制在 _suppress_small_samples
+    cal["n_excluded"] = total_count - cal["n"]          # 进了命中率、没进校准的行（confidence 非数字 / 0.0）
     return {
         "direction_hit_rate": (
             round(total_hit / total_count, 4) if total_count > 0 else None
         ),
         "sample_size": total_count,
+        "calibration": {k: cal[k] for k in ("ece", "brier", "base_rate_brier", "n", "n_excluded", "n_zero_conf")},
         "hit_horizon": HIT_HORIZON,
         "by_direction": by_dir_out,
         "base_rate": {
@@ -201,15 +266,46 @@ def _suppress_small_samples(window: Dict[str, Any]) -> Dict[str, Any]:
     suppressed_total = 0
     for bucket, counts in by_dir.items():
         c = dict(counts)
+        if bucket == "unclear":
+            new_by_dir[bucket] = c   # 本就只有 total，没有可还原的命中率
+            continue
+        # 方向桶里的 base_rate 是「同样本里市场标签为真的占比」，口径与命中同一把尺子——HOLD 桶的 base_rate 就是
+        # P(留在 flat band)，样本只有几行时它直接等于 HOLD 命中率（by_model 里的小模型尤其如此）。样本 <30 一并抹掉。
+        if int(out.get("sample_size", 0) or 0) < MIN_SAMPLE_FOR_PUBLIC and "base_rate" in c:
+            c["base_rate"] = None
+        # 超额/跑赢比率的分母是 n_benchmark（基准覆盖不全时可能远小于 total）——按它自己的 n 抑制（CR #442 建议 2）
+        if int(c.get("n_benchmark", 0) or 0) < MIN_SAMPLE_FOR_PUBLIC:
+            for k in ("excess_mean", "beat_benchmark_rate"):
+                if k in c:
+                    c[k] = None
         if int(c.get("total", 0) or 0) < MIN_SAMPLE_FOR_PUBLIC:
             c["rate"] = None
             c["hit"] = None
+            # lift = rate − base 可一步还原 rate；CI 的中点也能反推——一并抹掉；超额/跑赢比率同一纪律
+            for k in ("lift", "ci95", "excess_mean", "beat_benchmark_rate"):
+                if k in c:
+                    c[k] = None
             n_suppressed += 1
             suppressed_total += int(c.get("total", 0) or 0)
         new_by_dir[bucket] = c
     out["by_direction"] = new_by_dir
     if 0 < suppressed_total < MIN_SAMPLE_FOR_PUBLIC:
         out["direction_hit_rate"] = None
+
+    # calibration：n<30 抹数字（n 保留）。另：base_rate_brier = p̄(1−p̄) 一步还原整体命中率，
+    # 所以只要 direction_hit_rate 被抑制（含上面的互补抑制），校准数字也必须一并抹掉，
+    # 否则小桶 hit 可由 p̄ × n − Σ 其余桶 hit 减法逆算
+    # 另：校准样本排除了一些行（confidence 非数字 / 0.0），direction_hit_rate 含它们——校准 n 与 sample_size 的差
+    # 加上 p̄ 能逆算这几行的命中，所以被排除行数 n_excluded = sample_size − calibration.n（不管原因）落在
+    # (0, 30) 时同样置 null（同互补抑制纪律）；0 条或 ≥30 条不受影响
+    cal = out.get("calibration")
+    if cal:
+        n_excluded = int(out.get("sample_size", 0) or 0) - int(cal.get("n", 0) or 0)
+        if (int(cal.get("n", 0) or 0) < MIN_SAMPLE_FOR_PUBLIC
+                or out.get("direction_hit_rate") is None
+                or 0 < n_excluded < MIN_SAMPLE_FOR_PUBLIC):
+            out["calibration"] = {k: (v if k in ("n", "n_excluded", "n_zero_conf") else None)
+                                  for k, v in cal.items()}
 
     # base_rate 是市场属性不是模型业绩，但小样本占比同样噪音大且可被截图误读——
     # 同一 n<30 纪律
@@ -219,6 +315,91 @@ def _suppress_small_samples(window: Dict[str, Any]) -> Dict[str, Any]:
             k: (None if k != "n" else v) for k, v in br.items()
         }
     return out
+
+
+# ---- by_model 的跨模型互补抑制 ----
+# 窗口合计（direction_hit_rate / by_direction / calibration / base_rate）是公开的，且每个量 × 它的公开计数都是跨模型可加的
+# （hit、命中总数 = rate×n、Brier×n、市场标签数 = 占比×n）。所以只要某个模型的某个量因 n<30 被藏掉、而窗口合计和其余模型的同一个量都公开，
+# 「窗口 − 其余模型」就能精确还原被藏的那几行（评审 #497：方向桶粒度、命中总数、校准、市场基率都是这条通道）。
+# 做法：按「量族」检查——某族在某模型里**有数据却被藏**（计数>0、数字 None）且窗口该族是公开的 → 其余模型的同一族也置 None
+# （藏的未知质量 ≥ 其余模型的计数 ≥ 30，没法单点还原）。宁可多藏：被藏模型 ≥2 个或汇总 ≥30 条也照藏。
+# 族 = (名字, 要藏的叶子路径[第一个叶子也是“是否公开”的判据], 计数路径)
+def _families() -> List[Tuple[str, List[Tuple[str, ...]], Tuple[str, ...]]]:
+    fams: List[Tuple[str, List[Tuple[str, ...]], Tuple[str, ...]]] = [
+        ("hit_rate", [("direction_hit_rate",)], ("sample_size",)),
+        ("calibration", [("calibration", k) for k in ("ece", "brier", "base_rate_brier")], ("calibration", "n")),
+        ("base_rate", [("base_rate", k) for k in ("up", "down", "flat")], ("base_rate", "n")),
+    ]
+    for b in ("bullish", "bearish", "hold"):
+        fams += [
+            (f"{b}_hit", [("by_direction", b, k) for k in ("hit", "rate", "lift", "ci95")], ("by_direction", b, "total")),
+            (f"{b}_excess", [("by_direction", b, k) for k in ("excess_mean", "beat_benchmark_rate")],
+             ("by_direction", b, "n_benchmark")),
+            (f"{b}_base", [("by_direction", b, "base_rate")], ("sample_size",)),
+        ]
+    return fams
+
+
+def _get(d: Any, path: Tuple[str, ...]) -> Any:
+    for k in path:
+        d = d.get(k) if isinstance(d, dict) else None
+    return d
+
+
+def _null(d: Dict[str, Any], path: Tuple[str, ...]) -> bool:
+    """把叶子置 None；真的改动了一个非 None 值才返回 True（给不动点循环判停）。"""
+    cur: Any = d
+    for k in path[:-1]:
+        cur = cur.get(k) if isinstance(cur, dict) else None
+    if isinstance(cur, dict) and cur.get(path[-1]) is not None:
+        cur[path[-1]] = None
+        return True
+    return False
+
+
+_CAL_PATHS = [("calibration", k) for k in ("ece", "brier", "base_rate_brier")]
+
+
+def _complementary_mask(window: Dict[str, Any], models: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """见上。window = 窗口公开聚合；models = {model_era: 该模型的公开聚合}。返回新 dict（深拷贝，不改入参）。
+
+    跨族：_suppress_small_samples 在单个模型内的规则「direction_hit_rate 为 None ⇒ calibration 数字也为 None」
+    （base_rate_brier = p̄(1−p̄) 会把命中率还原出来）必须在被互补掩码后继续成立——某模型的 direction_hit_rate 被上面的
+    族掩码置 None，而它的校准数字还留着，就能由 p̄ 得到它的命中总数，再 窗口 − 其余模型 还原被藏模型（安全评审 #497）。
+    所以「族掩码」和「hit_rate 为 None ⇒ 校准为 None」循环到不再变化为止（校准被藏又会让校准族去藏别的模型）。"""
+    import copy
+    out = copy.deepcopy(models)
+    for _ in range(len(_families()) + 2):
+        changed = False
+        for a in out.values():
+            if _get(a, ("direction_hit_rate",)) is None:
+                for path in _CAL_PATHS:
+                    changed |= _null(a, path)
+        for _name, paths, count_path in _families():
+            hidden = {e for e, a in out.items()
+                      if int(_get(a, count_path) or 0) > 0 and _get(a, paths[0]) is None}
+            if hidden and _get(window, paths[0]) is not None:
+                for e, a in out.items():
+                    if e not in hidden:
+                        for path in paths:
+                            changed |= _null(a, path)
+        if not changed:
+            break
+    return out
+
+
+def _by_model(rows: List[Dict[str, Any]], window_public: Dict[str, Any]) -> Dict[str, Any]:
+    """窗口内按 model_era 分模型聚合（每个模型 = 一份 _aggregate + 红线 #2 抑制，再做跨模型互补抑制）。
+
+    model_era 取行里的字段；老 jsonl 没有就按同一个纯函数从 input_health + date 重算。
+    window_public = 该窗口已抑制的公开聚合（互补抑制要看窗口那一族是不是公开的）。
+    """
+    by_era: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        era = str(r.get("model_era") or "") or model_era_of(r.get("input_health"), str(r.get("date") or ""))
+        by_era.setdefault(era, []).append(r)
+    agg = {era: _suppress_small_samples(_aggregate(rs)) for era, rs in sorted(by_era.items())}
+    return _complementary_mask(window_public, agg)
 
 
 def _filter_by_window(
@@ -236,6 +417,11 @@ def _filter_by_window(
         if dt is not None and dt >= cutoff:
             result.append(row)
     return result
+
+
+def _with_by_model(subset: List[Dict[str, Any]]) -> Dict[str, Any]:
+    public = _suppress_small_samples(_aggregate(subset))
+    return {**public, "by_model": _by_model(subset, public)}
 
 
 def build_summary(jsonl_path: Path) -> Dict[str, Any]:
@@ -264,7 +450,7 @@ def build_summary(jsonl_path: Path) -> Dict[str, Any]:
         "windows": {
             # 红线 #2：公开输出抹掉小样本命中率（_aggregate 仍算原始统计，
             # 抑制只发生在对外这一层）
-            name: _suppress_small_samples(_aggregate(subset))
+            name: _with_by_model(subset)
             for name, subset in windows.items()
         },
     }

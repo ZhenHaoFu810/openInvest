@@ -199,3 +199,89 @@ def test_prepare_committee_event_brief_empty_store_graceful(_mock_world, monkeyp
     out = cr.prepare_committee_brief("TEST.AX")
     assert out["event_brief"] == ""
     assert out["sentiment_brief"] == SENT
+
+
+def test_prepare_committee_quant_prompts_name_no_tools(_mock_world, capfd):
+    """B3 的 Coordinator 路径对照：subagent 拿到的 Quant prompt 同样不得命令它调工具
+    （Direct 路径钉在 tests/test_quant_prompt_no_phantom_tools.py；两条路径共用 build_quant_prompt，
+    这里防以后 prompt 分叉）。market_data 以 `# 市场数据` 标题贴给 Quant，prompt 指向的就是它。"""
+    from openinvest.capabilities.tools import TOOL_IMPL
+    from openinvest.cli import cmd_prepare_committee
+
+    cmd_prepare_committee(argparse.Namespace(symbol="TEST.AX"))
+    raw = capfd.readouterr().out
+    out = json.loads(raw[raw.index("{"):])
+
+    for key in ("quant_round1", "quant_round2_after_risk"):
+        prompt = out["prompts"][key]
+        for tool in TOOL_IMPL:
+            assert f"{tool}(" not in prompt, f"prompts.{key} 不得写调用 {tool}(...)"
+    assert "# 市场数据" in out["prompts"]["quant_round1"]
+    assert "# 市场数据:" in out["instructions"]   # 协议确实把 market_data 贴在这个标题下
+
+
+def test_prepare_committee_risk_prompt_names_no_tools_and_real_headings(_mock_world, capfd):
+    """#476 的 Coordinator 路径对照：Risk prompt 不得命令它调工具（Direct 路径钉在
+    tests/test_risk_prompt_no_phantom_tools.py），且 prompt 里给 Coordinator 的两个块标题
+    必须和 instructions 模板真正粘贴的标题一致——模板改了标题这里要红。"""
+    from openinvest.capabilities.tools import TOOL_IMPL
+    from openinvest.cli import cmd_prepare_committee
+
+    cmd_prepare_committee(argparse.Namespace(symbol="TEST.AX"))
+    raw = capfd.readouterr().out
+    out = json.loads(raw[raw.index("{"):])
+
+    prompt = out["prompts"]["risk_round1"]
+    for tool in TOOL_IMPL:
+        assert f"{tool}(" not in prompt, f"prompts.risk_round1 不得写调用 {tool}(...)"
+    assert "你有工具可调用" not in prompt
+    for heading in ("# 用户持仓:", "# 长期模式:"):
+        assert heading in out["instructions"], f"instructions 不再以 {heading} 粘贴，risk_officer.md 的指向要跟着改"
+
+
+def test_prepare_facts_feed_save_defense_and_regime(_mock_world, monkeypatch):
+    """SENTINEL（P1）：真跑 prepare → save。prepare 落盘的事实 key（regime_brief / sentiment_brief）
+    或 regime brief 的行格式一改，save 端会静默退回"从 transcript 解析"——这里会红。"""
+    import openinvest.core.committee.persist as persist
+    import openinvest.core.runner.coordinator as cr
+    monkeypatch.setattr(cr, "load_sentiment_brief", lambda *a, **k: "INDEP_DEFENSE_FLAG: on")
+    monkeypatch.setattr(persist, "_capture_macro_context", lambda **kw: {})
+    brief = cr.prepare_committee_brief("TEST.AX")
+    assert "path_profile" not in brief  # ……但不进出题内容（省 ~3K 字符）
+    facts = cr._load_brief_facts("TEST.AX")
+    assert "path_profile" in facts      # 快照留着（交卷 / 路径快照用）……
+    assert facts and facts["regime_brief"] and "INDEP_DEFENSE_FLAG: on" in facts["sentiment_brief"]
+    seen = {}
+    real = cr.parse_cio_memo
+    monkeypatch.setattr(cr, "parse_cio_memo", lambda t, **kw: seen.update(kw) or real(t, **kw))
+    # transcript 故意不抄任何确定性行
+    res = cr.save_committee_transcript(
+        "TEST.AX", "=== CIO ===\nVERDICT: HOLD\nCONFIDENCE: 0.5\nDOMINANT_VIEW: macro\nSUGGESTED_ALLOC_CNY: 0\n")
+    assert seen["defense_flag_on"] is True
+    assert seen["regime"] == cr.regime_label_from_text(facts["regime_brief"]) and seen["regime"]
+    assert '"facts_source": "prepare"' in open(res["saved"], encoding="utf-8").read()
+
+
+def _call_mcp(name, args):
+    import asyncio
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from openinvest.connectors.mcp_server import mcp
+
+    async def go():
+        async with create_connected_server_and_client_session(mcp) as client:
+            return await client.call_tool(name, args)
+    return asyncio.run(go())
+
+
+def test_mcp_prepare_committee_tool(_mock_world):
+    ok = _call_mcp("prepare_committee", {"symbol": "TEST.AX"})
+    assert not ok.isError
+    import json
+    assert ok.structuredContent is None                     # 只回一份，不附结构化副本
+    out = json.loads(ok.content[0].text)
+    assert "path_profile" not in out
+    assert out["regime_brief"] and out["prompts"]["cio"] and "submit_committee" in out["instructions"]
+    bad = _call_mcp("prepare_committee", {"symbol": "NOT.IN.STRATEGY"})
+    assert bad.isError and "target_assets" in bad.content[0].text

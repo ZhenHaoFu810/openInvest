@@ -37,6 +37,9 @@ def _isolate_invest_env(monkeypatch):
     from openinvest.core.config import reset_config
     for key in [k for k in os.environ if k.startswith("INVEST_")] + list(OUTBOUND_KEYS):
         monkeypatch.delenv(key, raising=False)
+    # 测试环境没有 LLM key，reasoning_by_agent() 自动判会落到 agent 模式；既有测试断言的是
+    # backend 行为，默认钉 backend，测 agent 模式的测试在 body 里 setenv("…", "agent")
+    monkeypatch.setenv("INVEST_REASONING_BY", "backend")
     reset_config()
     yield
     reset_config()
@@ -49,3 +52,11 @@ def _isolate_memory_root(tmp_path, monkeypatch):
     需要特定目录的测试照常在 test body 里 patch MEMORY_ROOT（晚于本 fixture，不冲突）。"""
     import openinvest.core.memory_store as ms
     monkeypatch.setattr(ms, "MEMORY_ROOT", tmp_path / "_memory_root")
+
+
+@pytest.fixture(autouse=True)
+def _no_digest_calendar_network(monkeypatch):
+    """日报"今日持仓归因"的财报 / 除息日历是该段联网的一步（yfinance Ticker.calendar；基准刷新另走 account_performance）。
+    测试默认当取不到（→ "无数据源"），任何经 daily_report.run 的测试都不会真发请求；
+    要测日历的测试显式给 build_holdings_digest 传 calendar_fn。"""
+    monkeypatch.setattr("openinvest.services.holdings_digest._yf_calendar", lambda symbol: {})

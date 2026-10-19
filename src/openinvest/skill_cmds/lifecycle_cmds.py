@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from openinvest.core.memory_store import MemoryStore
+from openinvest.core.portfolio_manager import gold_booking
 
 from openinvest.services.skill_views import INIT_PAYLOAD_SHAPE
 from openinvest.skill_cmds._helpers import _print_json
@@ -63,7 +64,7 @@ from openinvest.services.holdings_import import (  # noqa: E402
 
 def _write_v2_portfolio(
     cash: Dict[str, float], holdings: List[Dict[str, Any]], *, fresh: bool = False,
-) -> None:
+) -> Dict[str, str]:
     """把 LLM 解析出的 v2 schema 直接覆盖写 memory/portfolio.md。
 
     在 migrate_profile.py 跑完之后调用 —— migrate 写的是 v1 兜底 portfolio.md，
@@ -77,6 +78,9 @@ def _write_v2_portfolio(
 
     fresh=True：portfolio.md 不是要保护的真实数据（init 前不存在，或 --force 时仍是 init 兜底），
     由 cmd_init 判定，见 _untouched_init_fallback。fresh 只跳过拒绝，不跳过备份。
+
+    返回 ``rejected_holdings: {symbol: 原因}``：黄金（GC=F）必须 CNY/克（同 buy / import 的
+    gold_booking），不合规的行不写、不影响其他行，也不让 init 整体失败（#501）。
     """
     store = MemoryStore()
     # 先备份（不论 fresh 与否）：任何覆盖/拒绝前现有 portfolio.md 都留一份，事故可恢复
@@ -105,20 +109,28 @@ def _write_v2_portfolio(
         "cash": {k: float(v) for k, v in cash.items() if v},
         "holdings": [],
     }
+    rejected: Dict[str, str] = {}
     for h in holdings:
         sym = str(h.get("symbol") or "").strip()
         if not sym:
             continue  # 跳过 LLM 漏 symbol 的脏行
-        portfolio_data["holdings"].append({
+        row = {
             "symbol": sym,
             "kind": str(h.get("kind") or "other"),
             "units": float(h.get("units", 0) or 0),
             "unit_label": str(h.get("unit_label") or ""),
             "avg_cost": float(h.get("avg_cost", 0) or 0),
-            "cost_currency": str(h.get("cost_currency") or "CNY"),
+            "cost_currency": str(h.get("cost_currency") or "CNY").upper(),
             "channel": str(h.get("channel") or "未指定"),
             "display_name": str(h.get("display_name") or sym),
-        })
+        }
+        try:  # 黄金口径与 buy / import --commit 同一道闸（#457）；非 GC=F → None；fresh init 没有旧持仓
+            # 没给单位按克（同 buy 的默认单位语义、同 import 的 normalizer 默认值）；给了 oz / 盎司才拒
+            row.update(gold_booking(sym, row["cost_currency"], row["unit_label"] or "克", None, existing=True) or {})
+        except ValueError as e:
+            rejected[sym] = str(e)   # existing=True：示例是 --existing-position，照抄不扣现金
+            continue
+        portfolio_data["holdings"].append(row)
 
     body_lines = ["# 当前持仓", ""]
     body_lines.append("## 现金")
@@ -148,6 +160,7 @@ def _write_v2_portfolio(
         "不要手动编辑 frontmatter。",
     ]
     store.write("portfolio", "state", portfolio_data, "\n".join(body_lines) + "\n")
+    return rejected
 
 
 def _untouched_init_fallback() -> bool:
@@ -305,6 +318,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     _v2_write_error = ""
     _v2_written = False
     _parse_failed = False
+    _rejected: Dict[str, str] = {}
 
     if not holdings_v2 and holdings_text:
         # 优先 LLM_API_KEY（通用），兼容 DEEPSEEK_API_KEY（fork 用户老 env）
@@ -366,7 +380,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     if holdings_v2 and (holdings_v2.get("cash") or holdings_v2.get("holdings")):
         try:
-            _write_v2_portfolio(
+            _rejected = _write_v2_portfolio(
                 holdings_v2.get("cash", {}) or {},
                 holdings_v2.get("holdings", []) or [],
                 fresh=_portfolio_fresh,
@@ -377,7 +391,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             _v2_write_error = str(exc)
             holdings_parse_note += f"; v2 write failed: {exc!s}"
     # 写失败时 parsed holdings 只是预览，不能让 agent 当成已入账读给用户确认
-    _holdings_written = bool(holdings_v2.get("holdings")) and not _v2_write_error
+    _holdings_written = len(holdings_v2.get("holdings") or []) > len(_rejected) and not _v2_write_error   # 被拒的不算写入
     # 场外基金净值源全挂 → 0 份入账；点名写进 note，否则 agent 只看到 "parsed via LLM"
     _fund_warnings = list(holdings_v2.get("warnings") or []) if _holdings_written else []
     if _fund_warnings:
@@ -494,6 +508,10 @@ def cmd_init(args: argparse.Namespace) -> None:
             "想让服务器后台每天自动跑，那时候再去 platform.deepseek.com 注册 key 填 .env。"
         )
 
+    if _rejected:  # parsed_holdings_for_user_review 里仍有这些行，必须点名它们没入账
+        next_step_text = (f"**{len(_rejected)} 只持仓被拒、没有写入**（`rejected_holdings` 逐只给了原因和正确写法）。"
+                          "先告诉用户，并按提示补录。" + next_step_text)
+
     if profile_note.startswith("user.md unchanged"):
         next_step_text = (f"**名字/风险偏好没有更新**（{profile_note}）。告诉用户这一点；风险偏好只能是 "
                           "Conservative / Balanced / Aggressive。" + next_step_text)
@@ -508,7 +526,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "migrate_stderr": result.stderr[-500:] if result.stderr else "",
         "migrate_returncode": result.returncode,
         "holdings_parse_note": holdings_parse_note or "no holdings_description provided",
-        "holdings_count": len((holdings_v2 or {}).get("holdings", [])),
+        "holdings_count": len((holdings_v2 or {}).get("holdings", [])) - len(_rejected),   # 实际写入的行数
         "parsed_holdings_for_user_review": (
             # 把 LLM 解析出来的 holdings 原样回放给 agent，让 agent 把它读给用户确认
             # 一遍："我理解你持有：A 3000 股 4.2 元、B 5 万现金。对吗？"——避免
@@ -517,6 +535,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         ),
         "user_review_required": _holdings_written,
         "cash_recorded": _cash_recorded,
+        **({"rejected_holdings": _rejected} if _rejected else {}),
         "profile_note": profile_note,
         "next_step": next_step_text,
     })

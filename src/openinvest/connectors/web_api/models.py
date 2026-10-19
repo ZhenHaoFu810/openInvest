@@ -1,7 +1,7 @@
 """Pydantic 请求/响应模型 — 从 web_api.py 拆分（定义不变）。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +27,7 @@ class GoldHolding(BaseModel):
     grams: float = Field(..., description="持仓克数")
     avg_cost_cny_per_gram: float = Field(..., description="加权均价 CNY/g")
     spot_cny_per_gram: Optional[float] = Field(None, description="实时现货价 CNY/g（yfinance）")
-    bank_cny_per_gram: Optional[float] = Field(None, description="渠道参考克价（含点差，渠道由 strategy/INVEST_GOLD_CHANNEL 决定）")
+    bank_cny_per_gram: Optional[float] = Field(None, description="渠道参考克价（含点差，渠道由 strategy.target_assets[GC=F] 决定）")
     offset_pct: float = Field(0.0, description="渠道点差（spot → 实际买入克价的溢价）")
     market_value_cny: Optional[float] = Field(None, description="持仓现值 CNY")
     pnl_cny: Optional[float] = Field(None, description="浮盈 CNY")
@@ -213,7 +213,7 @@ class HoldingsImportResponse(BaseModel):
     """POST /api/holdings/import 返回 — parsed 预览 +（commit 时）写入 summary"""
     parsed: Dict[str, Any] = Field(..., description="LLM 解析出的 {cash, holdings}")
     committed: bool = Field(..., description="是否已落盘")
-    summary: Optional[Dict[str, Any]] = Field(None, description="commit 时的 {added_holdings, skipped_holdings, cash_set, cash_skipped}")
+    summary: Optional[Dict[str, Any]] = Field(None, description="commit 时的 {added_holdings, skipped_holdings, rejected_holdings, cash_set, cash_skipped}")
 
 
 # 注：v2 通用 cash CRUD（/api/cash/{currency}/deposit|withdraw）放在文件末尾，
@@ -247,34 +247,6 @@ class SymbolSearchResponse(BaseModel):
 
 
 # ===== 写操作请求模型 =====
-
-class DepositRequest(BaseModel):
-    """POST /api/deposit body"""
-    currency: Literal["cny", "aud"] = Field("cny", description="cny=人民币 / aud=澳元")
-    amount: float = Field(..., gt=0, description="正数金额")
-
-
-class WithdrawRequest(BaseModel):
-    """POST /api/withdraw body"""
-    currency: Literal["cny", "aud"] = Field("cny", description="cny=人民币 / aud=澳元")
-    amount: float = Field(..., gt=0, description="正数金额")
-
-
-class GoldTradeRequest(BaseModel):
-    """POST /api/gold/buy 和 /api/gold/sell 共用 body"""
-    grams: float = Field(..., gt=0, description="买入/卖出克数")
-    price_per_gram: float = Field(..., gt=0, description="单价 CNY/g")
-
-
-class GoldSetRequest(BaseModel):
-    """POST /api/gold/set body — 直接覆盖克数（不计流水，仅校正用）"""
-    grams: float = Field(..., ge=0, description="目标克数（≥0）")
-
-
-class GoldOffsetRequest(BaseModel):
-    """POST /api/gold/offset body — 报当日实际买入克价，反推渠道点差"""
-    bank_price: float = Field(..., gt=0, description="当日实际买入克价 CNY/g（任何银行/纸黄金渠道都通用）")
-
 
 class WriteResponse(BaseModel):
     """写操作统一响应：返回新写入字段 + history 是否记录"""
@@ -797,8 +769,8 @@ class DecisionIntervention(BaseModel):
 
 
 class DecisionMatchedTrade(BaseModel):
-    """自动匹配到的成交（源 trades.db）"""
-    id: int
+    """自动匹配到的成交（源 trades.db 的整数 id，或 portfolio_history.jsonl 的 "history:<行号>"）"""
+    id: Union[int, str]
     ts: str
     direction: str
     units: float
@@ -887,6 +859,8 @@ class SkillBuyRequest(BaseModel):
     currency: Optional[str] = None
     kind: Literal["equity", "etf", "metal", "crypto", "bond", "fund", "other"] = "equity"
     unit_label: str = "股"
+    # 可选幂等键（ADR-016）：也可走 `Idempotency-Key` header；同 key 第二次 → {"status": "duplicate"}
+    idempotency_key: Optional[str] = None
 
 
 class SkillSellRequest(BaseModel):
@@ -894,12 +868,16 @@ class SkillSellRequest(BaseModel):
     symbol: str
     units: float
     price: float
+    # 可选幂等键（ADR-016）：也可走 `Idempotency-Key` header；同 key 第二次 → {"status": "duplicate"}
+    idempotency_key: Optional[str] = None
 
 
 class SkillCashRequest(BaseModel):
     """POST /api/skill/deposit|withdraw body"""
     currency: str
     amount: float
+    # 可选幂等键（ADR-016）：也可走 `Idempotency-Key` header；同 key 第二次 → {"status": "duplicate"}
+    idempotency_key: Optional[str] = None
 
 
 class SkillDeleteHoldingRequest(BaseModel):
@@ -917,6 +895,8 @@ class CommitteeSaveRequest(BaseModel):
     """POST /api/committee/save body"""
     symbol: str
     transcript: str = Field(..., description="6 段 '=== ROLE ===' 分隔的 transcript 全文")
+    provider: str = Field("", description="实际扮演 4 角色的 agent 品牌（claude/hermes/...）；空 = claude")
+    model: str = Field("", description="实际扮演 4 角色的模型名（如 claude-haiku-5-5）；空 = unknown")
 
 
 # ============ config-via-API（ADR-017）============
@@ -965,11 +945,6 @@ __all__ = [
     "HoldingPatchRequest",
     "SymbolSearchResult",
     "SymbolSearchResponse",
-    "DepositRequest",
-    "WithdrawRequest",
-    "GoldTradeRequest",
-    "GoldSetRequest",
-    "GoldOffsetRequest",
     "WriteResponse",
     "CommitteeRunRequest",
     "CommitteeRunResponse",

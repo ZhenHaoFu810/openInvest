@@ -7,11 +7,25 @@ import inspect
 import pytest
 
 EXPECTED_TOOLS = {
+    # 健康自检：纯 MCP agent（无 Bash 权限）的第一步，与 CLI `doctor` 同源（#444）
+    "doctor",
     "status", "strategy", "history", "live_prices", "what_if", "discipline",
     "decisions", "explain_decision", "record_execution", "ingest_event",
     "buy", "sell", "deposit", "withdraw", "run_committee",
+    # Agent 自己编排委员会（Coordinator）：出题 / 收卷，后端不调模型（2026-10-18 插件不持 key）
+    "prepare_committee", "submit_committee",
+    # agent 模式待办队列：后端不调模型时新闻 / 触发的重跑排队给 Agent
+    "pending_news", "pending_committees",
+    # 日报：agent 模式只读当天交卷，没交卷的列 missing_verdicts
+    "daily_report",
+    # 再平衡清单：只出清单不下单（读持仓，顾问模式拒绝）
+    "rebalance_plan",
     # 补录用系统前就持有的仓位（不扣现金）：独立工具，老 server 上 Unknown tool 而不是静默扣现金
     "record_existing_position",
+    # 账本活动（ADR-027 PR2）：interest 并入 record_dividend 的 kind、tax 并入 record_fee 的 kind
+    "record_dividend", "record_fee", "record_split", "record_return_of_capital",
+    # 场外基金两段式（ADR-027 PR3）：下单扣现金记在途 → 按净值确认 / 撤销
+    "place_fund_order", "confirm_fund_order", "cancel_fund_order",
     # strategy 写操作（issue #179：读写对等）
     "set_allocations", "track_asset", "untrack_asset",
     # 新闻源管理（用户级额外源，顾问模式放行——只动本实例 rss_feeds.yml）
@@ -47,12 +61,18 @@ def test_every_tool_dispatches_off_the_event_loop():
 
 
 READONLY_TOOLS = {
-    "status", "strategy", "history", "live_prices", "what_if", "discipline",
-    "decisions", "explain_decision", "news_sources",
+    "doctor", "status", "strategy", "history", "live_prices", "what_if", "discipline",
+    "decisions", "explain_decision", "news_sources", "rebalance_plan",
 }
-# destructive 桶：动钱 4 件 + untrack_asset / remove_news_source（删配置条目，client 该弹确认）
+# destructive 桶：动钱 4 件 + 账本活动 4 件（动现金 / 改持仓数量与成本）+ 场外基金两段式 3 件 + untrack_asset / remove_news_source（删配置条目，client 该弹确认）
 MONEY_TOOLS = {"buy", "sell", "deposit", "withdraw", "record_existing_position",
+               "record_dividend", "record_fee", "record_split", "record_return_of_capital",
+               "place_fund_order", "confirm_fund_order", "cancel_fund_order",
                "untrack_asset", "remove_news_source"}
+
+
+# 写、非资金、但重复调用会累加记录（反事实干预 / dream 事件）
+NON_IDEMPOTENT_WRITES = {"submit_committee", "daily_report"}
 
 
 def test_tool_annotations():
@@ -67,6 +87,9 @@ def test_tool_annotations():
             assert ann.readOnlyHint is True, name
         elif name in MONEY_TOOLS:
             assert ann.readOnlyHint is False and ann.destructiveHint is True, name
+        elif name in NON_IDEMPOTENT_WRITES:
+            assert ann.readOnlyHint is False and ann.destructiveHint is False \
+                and ann.idempotentHint is False, name
         else:  # record_execution / run_committee / ingest_event：写但幂等
             assert ann.readOnlyHint is False and ann.destructiveHint is False \
                 and ann.idempotentHint is True, name
@@ -124,16 +147,27 @@ def test_advisory_mode_blocks_non_whitelisted_tools(monkeypatch):
     from openinvest.connectors import mcp_server as m
 
     calls = {
-        "status": {}, "history": {}, "strategy": {}, "discipline": {}, "decisions": {},
+        "doctor": {}, "status": {}, "history": {}, "strategy": {}, "discipline": {}, "decisions": {},
         "what_if": {"symbol": "GC=F"},
+        "rebalance_plan": {},
         "buy": {"symbol": "GC=F", "units": 1, "price": 1},
         "record_existing_position": {"symbol": "GC=F", "units": 1, "price": 1},
         "sell": {"symbol": "GC=F", "units": 1, "price": 1},
         "deposit": {"currency": "CNY", "amount": 1},
         "withdraw": {"currency": "CNY", "amount": 1},
+        "record_dividend": {"symbol": "GC=F", "amount": 1, "currency": "CNY"},
+        "record_fee": {"amount": 1, "currency": "CNY"},
+        "record_split": {"symbol": "GC=F", "ratio": 2},
+        "record_return_of_capital": {"symbol": "GC=F", "amount": 1, "currency": "CNY"},
+        "place_fund_order": {"symbol": "FUND:110020", "amount": 1},
+        "confirm_fund_order": {"order_id": "x"},
+        "cancel_fund_order": {"order_id": "x"},
         "set_allocations": {"target_allocation_stock": 0.7, "target_allocation_cash": 0.3},
         "track_asset": {"symbol": "GC=F"},
         "untrack_asset": {"symbol": "GC=F"},
+        "prepare_committee": {"symbol": "GC=F"},
+        "submit_committee": {"symbol": "GC=F", "transcript": "=== CIO ===\nVERDICT: HOLD"},
+        "pending_news": {}, "pending_committees": {}, "daily_report": {},
         "record_execution": {"decision_id": "2026-01-01/GC=F", "executed": True},
         "ingest_event": {"title": "t", "url": "https://x.co/a"},
     }
@@ -175,6 +209,7 @@ CLI_ALIASES = {
     "record_existing_position": ("buy", "--existing-position"),
     "add_news_source": ("news_sources", "--add"),
     "remove_news_source": ("news_sources", "--remove"),
+    "submit_committee": ("save_committee", "--model"),   # MCP 的 model 参数 ↔ CLI --model（复盘按 provider:model 分桶）
 }
 
 

@@ -1,0 +1,485 @@
+"""真实账户业绩（IO 壳）：重放账本 → 日度 NAV 序列 → calc.account_metrics
+
+数据源：
+- ``memory/portfolio_history.jsonl``（PortfolioManager buy/sell/deposit/withdraw、CommSec 邮件、
+  web_api 黄金记账、DCA 对账）——交易与外部现金流
+- ``memory/portfolio.md``——**当前真实状态**；账本早于系统上线的持仓/现金没有记录，所以
+  序列锚定在当前状态：开盘状态 = 当前 − Σ账本增量（``data_quality.unreconciled`` 列出），
+  保证序列末日 = status 的总资产
+- ``db/market_data.db``——收盘价、汇率（只读库，不走网络；缺价日前值填充并计数）
+
+估值复用全仓库唯一总资产实现 ``utils.fx.total_portfolio_value``（``rate_override`` 喂当日汇率），
+成本兜底 / 缺价缺汇率口径与 status 完全一致。
+
+价格口径（ADR-027 PR2，``price_basis``）：``daily_prices.close`` 是复权价（拆股 + 分红都复权），账本里的
+分红现金是真钱，历史市值再用复权价就把同一笔分红算两次。所以某 symbol 在所需日期范围内（成立日前最后一根 bar
+起到今天）``close_raw`` **每一天都有** → 用原始价（``price_basis[sym] = "raw"``）；只要缺一天就**整只**回退
+复权价（``"adjusted"``），绝不在一条序列里混用两种口径。场外基金（东方财富前复权净值）与黄金克价代理
+（期货 / 外汇没有分红，复权价 == 原始价）没有 close_raw，恒为 ``adjusted``。基准（total-return 比较）始终读复权价。
+
+外部现金流（进 TWR 分母、XIRR 现金流）：deposit / withdraw、``funding_source=external_funding``
+的买入与 DCA 对账、赠金，以及 manual_override / delete_holding 这类无现金对手的持仓修正
+（按当日收盘估值）。buy(cash_deduct) / sell / CommSec 成交是现金↔持仓的内部转换，不是现金流。
+dividend / interest / fee / tax / return_of_capital 是**内部流**（ADR-027 D4）：现金进 NAV、不进 TWR 分母与
+XIRR 现金流——它们就是账户的收益 / 成本；split 零现金效应，只影响数量口径（见 ``_events_of``）。
+
+场外基金两段式（ADR-027 D4）：``fund_order_placed`` 把现金搬进**在途**（NAV 不变，在途按面值计入当日 NAV），
+``fund_order_confirmed`` 当日用份额 × 净值替换在途面值，``fund_order_cancelled`` 把在途退回现金——三者都是内部流，
+不进 TWR 分母。在途余额与持仓 / 现金一样锚定当前状态（开盘在途 = 当前在途 − Σ账本增量），通过 ``total_portfolio_value`` 的
+``pending_fund_orders`` 读口计入（与 status 同一实现）。
+
+网格 = 持仓标的交易日并集（非自然日）；周末记的交易挂到下一个交易日估值。
+"""
+from __future__ import annotations
+
+import logging
+import math
+from collections import defaultdict
+from datetime import date
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+
+from openinvest.calc.account_metrics import XIRR_MIN_SPAN_DAYS, account_metrics
+from openinvest.calc.gold import GOLD_OZ_PER_GRAM
+from openinvest.calc.ledger_replay import PENDING_SIGN, external_flow, later_split_factors, replay_ledger
+from openinvest.core.portfolio_manager import PortfolioManager
+from openinvest.core.schemas import Activity
+from openinvest.db.market_store import MarketStore
+from openinvest.utils.base_currency import base_currency
+from openinvest.utils.eastmoney_fund import canonical_fund_symbol, extract_fund_code
+from openinvest.utils.exchange_fee import get_history_data
+from openinvest.utils.fx import total_portfolio_value, unvalued
+from openinvest.utils.quotes import is_eastmoney_fund
+
+log = logging.getLogger(__name__)
+
+# web_api /api/gold/* 记账用的符号；对应 proxy_kind=gold_cny_per_gram 的持仓（symbol 通常 GC=F）
+GOLD_LEDGER_SYMBOL = "GOLD-CNY"
+GOLD_PROXY_KIND = "gold_cny_per_gram"
+# 黄金流水在当前持仓里没有对应行（已卖光 + delete_holding）时的估值配置：不依赖持仓元数据
+_GOLD_LEDGER_HOLDING = {"symbol": GOLD_LEDGER_SYMBOL, "proxy_kind": GOLD_PROXY_KIND,
+                        "yfinance_proxy": "GC=F", "cost_currency": "CNY"}
+_ALL_ROWS = 100000
+# 复权价里已经含了的收入类活动（分红 / 退回本金；DRIP 的再买入另按 source=drip 判）：见 build_account_performance
+_PRICED_IN_ACTIONS = frozenset({"dividend", "return_of_capital"})
+
+
+# ---------- 1. 账本 → 事件 ----------
+
+def _events_of(activities: List[Activity]) -> List[Dict[str, Any]]:
+    """Activity（日期升序）→ 回放事件 dict。事件字段：date / symbol / units（增量）/ cash_ccy / cash（增量）/
+    flow_ccy / flow（外部现金流，+入 −出）/ correction（True = 持仓修正，现金流按当日市价在估值时补算）/
+    pending（场外基金在途面值的增减，``cash_ccy`` 计价）。不能回放的行（unknown / 没有可用日期 / 数值解析失败）不产生事件。
+
+    ``units`` 是**拆股后口径**的增量（行情库的价格——复权价和 close_raw 都一样——已按拆股调整，数量必须同口径，
+    见 calc.ledger_replay 的"价格口径"）：每笔买卖 / 修正的数量 × 此后同标的所有 split 的 ratio 之积；
+    split 自己在这个口径下是空操作（units=0）。账本里没有 split 时与旧行为逐字一致。"""
+    factors = later_split_factors(activities)
+    return [
+        {"date": a.trade_date, "symbol": a.symbol or "",
+         "units": 0.0 if a.action == "split" else a.units_effect * factors.get(a.seq, 1.0),
+         "cash_ccy": a.currency, "cash": a.cash_effect,
+         "flow_ccy": a.currency, "flow": external_flow(a), "correction": a.correction,
+         # 场外基金在途余额增减（面值，a.currency 计价）；只有 fund_order_* 才带这个键（没有场外基金单的账本事件逐字不变）
+         **({"pending": PENDING_SIGN[a.action] * (a.amount or 0.0)} if a.action in PENDING_SIGN else {})}
+        for a in activities if a.replayable
+    ]
+
+
+def _ledger_events(records: List[Dict[str, Any]], alias: Dict[str, str]) -> Tuple[List[Dict[str, Any]], int]:
+    """账本记录 → 事件 dict（日期升序）。返回 (events, 跳过的未知 action / 无日期行数)。
+    解析全在 ``calc.ledger_replay.replay_ledger``（manual_override / delete_holding 的绝对值→增量在那里折叠）。"""
+    activities, state = replay_ledger(records, alias=alias)
+    return _events_of(activities), state.unknown
+
+
+def _register_ledger_symbols(by_sym: Dict[str, Dict[str, Any]], activities: List[Activity]) -> None:
+    """账本里出现过、当前持仓已没有的 symbol（卖光 + delete_holding 是正常流程）：元数据从流水推——
+    计价币种取该 symbol 第一条记录的 currency，黄金流水固定按 gold_cny_per_gram（不然 AUD 持仓会被
+    当人民币估值、黄金历史全部无法估值，回撤/波动算成天文数字——CR 阻塞项）。unknown 行也算（symbol 照登记）。"""
+    for a in activities:
+        sym = a.symbol or ""
+        if not sym or sym in by_sym or a.action in ("deposit", "withdraw"):
+            continue
+        if sym == GOLD_LEDGER_SYMBOL:
+            by_sym[sym] = dict(_GOLD_LEDGER_HOLDING)
+        else:
+            by_sym[sym] = {"symbol": sym, "cost_currency": a.currency, "_from_ledger": True}
+
+
+# ---------- 2. 行情库读序列 ----------
+
+def _db_closes(store: MarketStore, symbol: str) -> Optional[pd.Series]:
+    """行情库里该 symbol 的收盘序列（index=YYYY-MM-DD 字符串，升序）；没有 → None。"""
+    try:
+        df = store.get_history_df(symbol, days=_ALL_ROWS)
+    except Exception as e:  # noqa: BLE001
+        log.warning("account_performance: 读 %s 行情失败: %s", symbol, e)
+        return None
+    if df is None or df.empty or "Close" not in df:
+        return None
+    s = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    s = s[s > 0]
+    if s.empty:
+        return None
+    s.index = [ts.strftime("%Y-%m-%d") for ts in s.index]
+    return s[~s.index.duplicated(keep="last")].sort_index()
+
+
+def _raw_closes(store: MarketStore, symbol: str) -> Optional[pd.Series]:
+    """行情库该 symbol 的原始价序列（index 同 _db_closes；NaN = 该日没有 close_raw）；没有 / 读不了 → None。
+    读失败按「没有 raw」处理（回退复权价），不拖垮估值。"""
+    try:
+        df = store.get_close_pair_df(symbol)
+    except Exception as e:  # noqa: BLE001
+        log.debug("account_performance: 读 %s close_raw 失败（按无原始价处理）: %s", symbol, e)
+        return None
+    if df is None or df.empty or "CloseRaw" not in df:
+        return None
+    s = pd.to_numeric(df["CloseRaw"], errors="coerce")
+    s.index = [ts.strftime("%Y-%m-%d") for ts in s.index]
+    return s[~s.index.duplicated(keep="last")].sort_index()
+
+
+def _pick_basis(adj: pd.Series, raw: Optional[pd.Series], since: Optional[str],
+                gaps: Optional[Dict[str, Any]] = None, sym: str = "") -> Tuple[pd.Series, str]:
+    """(价格序列, "raw" | "adjusted")：所需范围（``since`` 当天或之前的最后一根 bar 起；since=None = 全部）内
+    复权序列的每一天 ``raw`` 都有正值 → 原始价；缺任意一天 → 整只复权价。不混用。
+
+    「有一部分 raw、但范围内缺了几天」是**悄悄翻口径**的情形（betashares 兜底 / 黄金缓存 / backtest 预热只写 close，
+    yfinance 又没补上）：整段历史 NAV 会换成复权价、已记的分红被移出回放。此时打 warning，并把缺口记进
+    ``gaps[sym] = {missing_days, first, last}``（→ ``data_quality.price_basis_gaps``）。从没回填过 raw
+    （范围内一天都没有）是正常的未回填状态，不算缺口、不吵。"""
+    if raw is None:
+        return adj, "adjusted"
+    start = max(adj.index.searchsorted(since, side="right") - 1, 0) if since else 0
+    need = adj.index[start:]
+    r = raw.reindex(need)
+    if len(need) and r.notna().all() and (r > 0).all():
+        return r, "raw"
+    bad = r.index[~(r.notna() & (r > 0))]
+    if len(bad) and len(bad) < len(need):
+        if gaps is not None:
+            gaps[sym] = {"missing_days": int(len(bad)), "first": bad[0], "last": bad[-1]}
+        log.warning("account_performance: %s 的 close_raw 在所需范围内缺 %d 天（%s ~ %s），整只回退复权价；"
+                    "跑 `openinvest backfill_raw_close` 补齐", sym, len(bad), bad[0], bad[-1])
+    return adj, "adjusted"
+
+
+def _price_series(store: MarketStore, symbol: str, holding: Optional[Dict[str, Any]],
+                  since: Optional[str] = None, gaps: Optional[Dict[str, Any]] = None) -> Tuple[Optional[pd.Series], str]:
+    """(持仓按 cost_currency 计价的收盘序列, price_basis)。口径与 utils.quotes.get_quote 一致：
+    黄金代理 = GC=F USD/oz ÷ 31.1035 × USDCNY；场外基金读 FUND:<code>；其余直接按 symbol/proxy。
+    价格口径见模块 docstring：只有直读 yfinance 的标的有机会用原始价，黄金代理 / 场外基金恒为 adjusted。"""
+    h = holding or {}
+    proxy = str(h.get("yfinance_proxy") or symbol)
+    if (not h or h.get("_from_ledger")) and extract_fund_code(symbol):
+        # 已删掉的场外基金持仓：元数据没了，按代码读 FUND:<code>
+        return _db_closes(store, canonical_fund_symbol(symbol)), "adjusted"
+    if str(h.get("proxy_kind") or "") == GOLD_PROXY_KIND:
+        oz, usdcny = _db_closes(store, proxy), _db_closes(store, "USDCNY=X")
+        if oz is None or usdcny is None:
+            return None, "adjusted"
+        # 只在 GC=F 的交易日上出点（汇率前值填充到这些日期）：FX 对偶有周末行，不该把周末拉进估值网格
+        fx_on_oz = usdcny.reindex(sorted(set(oz.index) | set(usdcny.index))).ffill().reindex(oz.index)
+        both = pd.DataFrame({"oz": oz, "fx": fx_on_oz}).dropna()
+        return ((both["oz"] / GOLD_OZ_PER_GRAM * both["fx"]).rename(symbol) if not both.empty else None), "adjusted"
+    if h and is_eastmoney_fund(h):
+        return _db_closes(store, canonical_fund_symbol(symbol)), "adjusted"
+    adj = _db_closes(store, proxy)
+    if adj is None:
+        return None, "adjusted"
+    return _pick_basis(adj, _raw_closes(store, proxy), since, gaps, symbol)
+
+
+def _fx_series(store: MarketStore, ccy: str, base: str) -> Optional[pd.Series]:
+    """ccy → base 的日度汇率序列（直接对 / 反向对取倒数 / 经 USD 交叉），只读库。"""
+    if ccy == base:
+        return None
+    direct = _db_closes(store, f"{ccy}{base}=X")
+    if direct is not None:
+        return direct
+    inverse = _db_closes(store, f"{base}{ccy}=X")
+    if inverse is not None:
+        return 1.0 / inverse
+    if "USD" in (ccy, base):
+        return None
+    leg1, leg2 = _fx_series(store, ccy, "USD"), _fx_series(store, "USD", base)
+    if leg1 is None or leg2 is None:
+        return None
+    grid = sorted(set(leg1.index) | set(leg2.index))
+    both = pd.DataFrame({"a": leg1, "b": leg2}).reindex(grid).ffill().dropna()
+    return (both["a"] * both["b"]) if not both.empty else None
+
+
+def _at(series: Optional[pd.Series], day: str) -> Tuple[Optional[float], bool]:
+    """序列在 ``day`` 的值（≤ day 的最后一个）；返回 (value, 是否前值填充)。"""
+    if series is None or series.empty:
+        return None, False
+    pos = series.index.searchsorted(day, side="right") - 1
+    if pos < 0:
+        return None, False
+    v = float(series.iloc[pos])
+    return (v if math.isfinite(v) and v > 0 else None), series.index[pos] != day
+
+
+# ---------- 3. 主入口 ----------
+
+# 机器可读 reason 之外给一句人话：不读 skill 文案的 agent 也别把 insufficient_history 当故障
+_INSUFFICIENT_MSG = "账户历史不足 2 个交易日，记满后出现"
+
+def build_account_performance(pm: Optional[PortfolioManager] = None, *, today: Optional[str] = None,
+                              base: Optional[str] = None) -> Dict[str, Any]:
+    """status["performance"] / 日报"账户业绩"段共用的业绩块。
+
+    历史不足 2 个估值日（或没有账本）→ ``{"status": "insufficient_history", ...}``。
+    """
+    pm = pm or PortfolioManager()
+    base = (base or base_currency()).upper()
+    today = today or date.today().strftime("%Y-%m-%d")
+    store = MarketStore()
+
+    holdings = [dict(h) for h in pm.holdings if not h.get("is_tracking_only")]
+    by_sym = {str(h.get("symbol")): h for h in holdings}
+    alias = {GOLD_LEDGER_SYMBOL: s for s, h in by_sym.items() if str(h.get("proxy_kind") or "") == GOLD_PROXY_KIND}
+    activities, replay_state = replay_ledger(pm.store.read_history(), alias=alias)
+    events, skipped = _events_of(activities), replay_state.unknown
+    if not events:
+        return {"status": "insufficient_history", "reason": "no_ledger", "base_currency": base,
+                "message": _INSUFFICIENT_MSG}
+    _register_ledger_symbols(by_sym, activities)   # 账本里有、持仓里已没有的 symbol：元数据从流水推
+
+    # 价格序列（只读库）与价格口径先定——下面要据此决定哪些收入类事件进回放
+    first_day = events[0]["date"]
+    symbols = set(by_sym) | {ev["symbol"] for ev in events if ev["symbol"] or ev["units"]}   # 无 symbol 的利息 / 费用只动现金
+    basis_gaps: Dict[str, Any] = {}
+    priced = {sym: _price_series(store, sym, by_sym.get(sym), since=first_day, gaps=basis_gaps) for sym in symbols}
+    prices = {sym: p for sym, (p, _) in priced.items()}
+    price_basis = {sym: b for sym, (p, b) in priced.items() if p is not None}
+
+    # 复权价（price_basis=adjusted）已把分红当再投资折进了价格：该标的的 dividend / return_of_capital 和 DRIP 那条
+    # 再买入不进回放（= PR1 规则，绝不双计）；close_raw 补齐（backfill_raw_close）后自动改按原始价 + 账本现金入账
+    in_price = {s for s, (p, b) in priced.items() if p is not None and b == "adjusted"}
+    income_in_price: Dict[str, int] = defaultdict(int)
+    kept: List[Dict[str, Any]] = []
+    for ev, is_income in zip(events, [a.action in _PRICED_IN_ACTIONS or a.source == "drip"
+                                      for a in activities if a.replayable]):
+        if is_income and ev["symbol"] in in_price:
+            income_in_price[ev["symbol"]] += 1
+        else:
+            kept.append(ev)
+    events = kept
+
+    # 开盘状态 = 当前 − Σ账本增量（账本早于系统上线的部分）
+    delta_units: Dict[str, float] = defaultdict(float)
+    delta_cash: Dict[str, float] = defaultdict(float)
+    delta_pending: Dict[str, float] = defaultdict(float)
+    for ev in events:
+        if ev["symbol"] or ev["units"]:
+            delta_units[ev["symbol"]] += ev["units"]
+        delta_cash[ev["cash_ccy"]] += ev["cash"]
+        delta_pending[ev["cash_ccy"]] += ev.get("pending", 0.0)
+    units: Dict[str, float] = defaultdict(float)
+    for sym in set(by_sym) | set(delta_units):
+        units[sym] = float(by_sym.get(sym, {}).get("units") or 0) - delta_units.get(sym, 0.0)
+    cash: Dict[str, float] = defaultdict(float)
+    for ccy in {str(c).upper() for c in pm.cash} | set(delta_cash):
+        cash[ccy] = float(pm.cash.get(ccy, 0) or 0) - delta_cash.get(ccy, 0.0)
+    # 场外基金在途余额（面值，按币种）：同样锚定当前（pm.pending_fund_orders 是唯一读口）
+    pending: Dict[str, float] = defaultdict(float)
+    for o in pm.pending_fund_orders():
+        pending[str(o.get("currency") or "CNY").upper()] += float(o.get("amount") or 0)
+    for ccy in set(pending) | set(delta_pending):
+        pending[ccy] -= delta_pending.get(ccy, 0.0)
+    unreconciled = {
+        "units": {s: round(v, 6) for s, v in units.items() if abs(v) > 1e-9},
+        "cash": {c: round(v, 2) for c, v in cash.items() if abs(v) > 0.005},
+        **({"pending": {c: round(v, 2) for c, v in pending.items() if abs(v) > 0.005}}
+           if any(abs(v) > 0.005 for v in pending.values()) else {}),
+    }
+
+    # 汇率序列（只读库，一次）
+    ccys = {str(c).upper() for c in cash} | {str(c).upper() for c in pending} | {
+        "CNY" if str(by_sym.get(s, {}).get("proxy_kind") or "") == GOLD_PROXY_KIND
+        else str(by_sym.get(s, {}).get("cost_currency") or "CNY").upper() for s in units
+    }
+    fx = {c: _fx_series(store, c, base) for c in ccys if c != base}
+
+    grid = sorted({d for s in prices.values() if s is not None for d in s.index if first_day <= d <= today})
+    if len(grid) < 2:
+        return {"status": "insufficient_history", "reason": "fewer_than_2_valuation_days",
+                "base_currency": base, "since": first_day, "message": _INSUFFICIENT_MSG}
+    # 事件挂到 ≥ 事件日的第一个网格日（周末记的交易在下一交易日估值）；晚于网格的挂末日
+    by_day: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for ev in events:
+        pos = min(pd.Index(grid).searchsorted(ev["date"], side="left"), len(grid) - 1)
+        by_day[grid[pos]].append(ev)
+
+    def _holding_snapshot(sym: str) -> Dict[str, Any]:
+        h = by_sym.get(sym, {})
+        gold = str(h.get("proxy_kind") or "") == GOLD_PROXY_KIND
+        return {"symbol": sym, "units": units[sym], "avg_cost": h.get("avg_cost", 0),
+                "cost_currency": "CNY" if gold else str(h.get("cost_currency") or "CNY").upper()}
+
+    def _market(day: str) -> Tuple[Dict[str, Optional[float]], Dict[str, Optional[float]], Dict[str, bool]]:
+        """当日价格 / 汇率（≤ day 最后一个）+ 每个标的当天是否前值填充。"""
+        px, ff = {}, {}
+        for sym, s in prices.items():
+            px[sym], ff[sym] = _at(s, day)
+        return px, {c: _at(s, day)[0] for c, s in fx.items()}, ff
+
+    def _value(px: Dict[str, Optional[float]], rates: Dict[str, Optional[float]]) -> Tuple[float, Dict[str, str]]:
+        snap = SimpleNamespace(
+            cash=dict(cash), holdings=[_holding_snapshot(s) for s in units],
+            # 在途面值：与 status 同一个 total_portfolio_value 读口（PortfolioManager.pending_fund_orders 的回放版）
+            pending_fund_orders=lambda: [{"currency": c, "amount": v, "status": "placed"}
+                                         for c, v in pending.items() if abs(v) > 1e-9])
+        return total_portfolio_value(snap, px, base, rate_override=rates)
+
+    def _to_base(ccy: str, amount: float, rates: Dict[str, Optional[float]]) -> Optional[float]:
+        rate = 1.0 if ccy == base else rates.get(ccy)
+        return amount * rate if rate is not None else None
+
+    rows: List[Tuple[str, float, float, float]] = []
+    opening_nav, _ = _value(*_market(grid[0])[:2])
+    filled_days, unconverted_flows, cost_fallback, last_status = 0, 0, set(), {}
+    for day in grid:
+        inflow = outflow = 0.0
+        px, rates, ff = _market(day)   # 一天只取一次：修正事件取价与收盘估值共用
+        for ev in by_day.get(day, ()):
+            if ev["symbol"]:
+                units[ev["symbol"]] += ev["units"]
+            cash[ev["cash_ccy"]] += ev["cash"]
+            pending[ev["cash_ccy"]] += ev.get("pending", 0.0)
+            flow_ccy, flow = ev["flow_ccy"], ev["flow"]
+            if ev["correction"]:
+                h = _holding_snapshot(ev["symbol"])
+                p = px.get(ev["symbol"]) or float(h["avg_cost"] or 0)
+                flow_ccy, flow = h["cost_currency"], ev["units"] * p
+            if not flow:
+                continue
+            v = _to_base(flow_ccy, flow, rates)
+            if v is None:
+                unconverted_flows += 1
+                continue
+            if v > 0:
+                inflow += v
+            else:
+                outflow += -v
+        nav, status = _value(px, rates)
+        filled_days += int(any(ff[s] and units[s] > 0 for s in prices))
+        cost_fallback |= {k for k, v in status.items() if v == "cost_fallback"}
+        last_status = status
+        rows.append((day, nav, round(inflow, 2), round(outflow, 2)))
+
+    cfg_symbol = _benchmark_symbol()
+    bench = _benchmark_closes(store, cfg_symbol, today) if cfg_symbol else {}
+    out = account_metrics(rows, opening_nav, today, benchmark_symbol=cfg_symbol if bench else "",
+                          benchmark_closes=bench)
+    bench_missing = None
+    if cfg_symbol and not bench:
+        bench_missing = {"symbol": cfg_symbol, "reason": "no_data"}
+    elif cfg_symbol and out.get("benchmark") is None:
+        bench_missing = {"symbol": cfg_symbol, "reason": "starts_after_inception"}
+    out["status"] = "ok"
+    if out.get("xirr") is None:   # null 不是故障：说明原因（<30 天不报，或现金流求不出根）
+        span = (date.fromisoformat(rows[-1][0]) - date.fromisoformat(rows[0][0])).days
+        out["xirr_note"] = (f"历史不足 {XIRR_MIN_SPAN_DAYS} 天不报" if span < XIRR_MIN_SPAN_DAYS
+                            else "现金流无法求解 XIRR（缺少正负两向现金流或无解）")
+    out["base_currency"] = base
+    out["price_basis"] = price_basis   # {symbol: "raw" | "adjusted"}，见模块 docstring
+    out["opening_nav"] = round(opening_nav, 2)
+    out["data_quality"] = {
+        "days": len(rows),
+        "filled_days": filled_days,
+        "events": len(events),
+        "skipped_events": skipped,
+        "unconverted_flows": unconverted_flows,
+        "cost_fallback": sorted(cost_fallback),
+        "unvalued": unvalued(last_status),
+        "unreconciled": unreconciled,
+        # 这些标的记了分红 / 退回本金 / DRIP，但价格口径是复权价（缺 close_raw）：复权价里已含，故未入账业绩；
+        # 跑 `openinvest backfill_raw_close` 后改按原始价 + 账本现金计入。{symbol: 未入账的条数}
+        **({"income_in_adjusted_price": dict(income_in_price)} if income_in_price else {}),
+        # 有一部分 close_raw、但所需范围内缺了几天 → 整只回退复权价的标的：{symbol: {missing_days, first, last}}（补齐后自动回到 raw）
+        **({"price_basis_gaps": basis_gaps} if basis_gaps else {}),
+        **({"benchmark_unavailable": bench_missing} if bench_missing else {}),
+    }
+    return out
+
+
+def _benchmark_symbol() -> str:
+    from openinvest.core.config import load_config
+    return str(getattr(load_config().portfolio, "benchmark_symbol", "") or "").strip()
+
+
+# 基准 symbol → 本进程今天已经走过一次 get_history_data（库 + yfinance 增量）的日期。没人持有基准，
+# 其他路径不会替它刷新；但 status / MCP status 被 agent 高频调时也不该每次都打一次 yfinance
+# （库里缺当天 bar 的周末 / 收盘前每次都会请求）——每进程每天最多刷一次，其余只读库。
+_BENCH_REFRESHED: Dict[str, str] = {}
+
+
+def _benchmark_closes(store: MarketStore, symbol: str, today: str) -> Dict[str, float]:
+    """基准收盘 {date: close}：每进程每天最多经 get_history_data 刷一次，之后只读行情库；失败返回空。"""
+    if _BENCH_REFRESHED.get(symbol) != today:
+        try:
+            get_history_data(symbol, "max")
+            _BENCH_REFRESHED[symbol] = today
+        except Exception as e:  # noqa: BLE001
+            log.warning("account_performance: 基准 %s 刷新失败，用库里已有的: %s", symbol, e)
+    s = _db_closes(store, symbol)
+    return {} if s is None else {d: float(v) for d, v in s.items()}
+
+
+# ---------- 4. 渲染（日报 / 邮件） ----------
+
+def _pct(v: Optional[float]) -> str:
+    return "n/a" if v is None else f"{v:+.2f}%"
+
+
+def render_performance_md(perf: Dict[str, Any]) -> str:
+    """日报"账户业绩"段（markdown，邮件 HTML 与 chat 变体同一文本）。不可用时一行说明。"""
+    if perf.get("status") != "ok":
+        return f"- 账户业绩：历史不足（{perf.get('reason', perf.get('status'))}），记满 2 个交易日后出现"
+    dq = perf.get("data_quality") or {}
+    mdd = perf.get("max_drawdown") or {}
+    b = perf.get("benchmark")
+    lines = [
+        f"- TWR（时间加权）：30 天 {_pct(perf.get('twr_30d'))} ｜ 今年 {_pct(perf.get('twr_ytd'))}"
+        f" ｜ 自 {perf.get('since')} {_pct(perf.get('twr_all'))}",
+        f"- XIRR（年化金额加权）：{_pct(perf.get('xirr'))}"
+        + ("（历史 < 30 天不报）" if perf.get("xirr") is None else ""),
+        f"- 最大回撤：{_pct(mdd.get('pct'))}"
+        + (f"（{mdd.get('peak')} → {mdd.get('trough')}）" if mdd.get("pct") else "")
+        + f" ｜ 年化波动：{_pct(perf.get('volatility_annual'))}",
+    ]
+    if b:
+        lines.append(f"- vs 基准 {b['symbol']}（同窗口）：基准 {_pct(b.get('return_same_window'))}"
+                     f"，超额 {_pct(b.get('excess'))}，跑赢天数 {b.get('beat_days_pct', 0):.0f}%")
+    elif dq.get("benchmark_unavailable"):
+        bu = dq["benchmark_unavailable"]
+        why = "基准历史晚于账户成立日" if bu.get("reason") == "starts_after_inception" else "行情不可用"
+        lines.append(f"- vs 基准 {bu.get('symbol')}：{why}")
+    notes = []
+    if dq.get("filled_days"):
+        notes.append(f"{dq['filled_days']} 天缺价前值填充")
+    if dq.get("cost_fallback"):
+        notes.append("按成本价计入：" + "、".join(dq["cost_fallback"]))
+    if dq.get("unvalued"):
+        notes.append("未计入：" + "、".join(dq["unvalued"]))
+    if dq.get("price_basis_gaps"):
+        notes.append("原始价缺口、整只按复权价：" + "、".join(
+            f"{k}（缺 {v['missing_days']} 天，{v['first']} ~ {v['last']}）" for k, v in sorted(dq["price_basis_gaps"].items()))
+            + "（openinvest backfill_raw_close 补齐）")
+    if dq.get("income_in_adjusted_price"):
+        notes.append("分红 / 再投资已含在复权价里、未重复入账：" + "、".join(sorted(dq["income_in_adjusted_price"]))
+                     + "（跑 openinvest backfill_raw_close 后按原始价 + 账本现金计入）")
+    if dq.get("unreconciled", {}).get("units") or dq.get("unreconciled", {}).get("cash"):
+        notes.append("账本早于系统的开盘持仓按成立日估值（status performance.data_quality.unreconciled）")
+    lines.append(f"- 数据：{dq.get('days')} 个交易日" + ("；" + "；".join(notes) if notes else ""))
+    return "\n".join(lines)
+
+
+__all__ = ["build_account_performance", "render_performance_md", "GOLD_LEDGER_SYMBOL"]

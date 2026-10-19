@@ -1,0 +1,71 @@
+{
+ "meta": {
+  "n": 3,
+  "limit": 30,
+  "max_rounds": 1,
+  "model": "deepseek-v4-flash"
+ },
+ "summary": {
+  "n_items": 30,
+  "distinct_symbols": 4,
+  "n_runs": 90,
+  "direction_flip_rate": 0.2,
+  "direction_flip_ci95": [
+   0.095,
+   0.373
+  ],
+  "pair_flip_rate": 0.133,
+  "label_flip_rate": 0.2,
+  "conf_std_mean": 0.0,
+  "conf_std_median": 0.0,
+  "alloc_cv_mean": 1.3257,
+  "alloc_cv_median": 1.366,
+  "alloc_cv_n_items": 6,
+  "alloc_all_zero_items": 24,
+  "rerun_vs_orig_direction_diff_rate": 0.089,
+  "by_symbol": {
+   "A": {
+    "n_items": 11,
+    "n_runs": 33,
+    "verdict_counts": {
+     "HOLD": 33
+    },
+    "pair_flip_rate": 0.0,
+    "conf_mean": 0.62,
+    "conf_std": 0.0
+   },
+   "B": {
+    "n_items": 8,
+    "n_runs": 24,
+    "verdict_counts": {
+     "HOLD": 24
+    },
+    "pair_flip_rate": 0.0,
+    "conf_mean": 0.62,
+    "conf_std": 0.0
+   },
+   "C": {
+    "n_items": 6,
+    "n_runs": 18,
+    "verdict_counts": {
+     "ACCUMULATE": 8,
+     "HOLD": 10
+    },
+    "pair_flip_rate": 0.5229,
+    "conf_mean": 0.62,
+    "conf_std": 0.0
+   },
+   "D": {
+    "n_items": 5,
+    "n_runs": 15,
+    "verdict_counts": {
+     "ACCUMULATE": 1,
+     "HOLD": 14
+    },
+    "pair_flip_rate": 0.1333,
+    "conf_mean": 0.62,
+    "conf_std": 0.0
+   }
+  }
+ }
+}

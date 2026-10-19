@@ -19,6 +19,11 @@ class PortfolioConfig:
     """基准币种：总资产 / 可投子弹 / 委员会金额字段与阈值都按它算（2026-10 第 1 步）。
     阈值仍按人民币标定、运行时换算（utils/base_currency）。ISO 三字母码；改它=迁移，历史记录不跟着变。"""
     base_currency: str = "CNY"
+    # 账户业绩 vs 基准的标的（yfinance symbol）：status performance.benchmark / 日报"账户业绩"段。
+    # 默认沪深 300 ETF（510300.SS）：指数本身 000300.SS 在 Yahoo 只回 1 根 bar（2026-10 实测，
+    # core/benchmarks 折线图缓存同样只有 1 个点），ETF 全历史可用。持有跟踪它的 ETF 时自相关，
+    # 换一个"不持有的市场"（^GSPC / VAS.AX …）。空串 = 不比。
+    benchmark_symbol: str = "510300.SS"
 
 
 @dataclass(frozen=True)
@@ -233,6 +238,18 @@ class DCAConfig:
 
 
 @dataclass(frozen=True)
+class AutopilotConfig:
+    """全自动模拟账户（paper autopilot，jobs/paper_autopilot.py）
+
+    运行在独立 INVEST_HOME 里的 opt-in 执行层：把当日委员会裁决按确定性规则在本地账本上成交。
+    不下真单、不碰真实账户。dataclass 默认=禁用：fork 用户 / 生产 hub 未开启时 job 直接 no-op。
+    """
+    enabled: bool = False                       # 总开关（默认关）
+    commission_bps: float = 3.0                 # 买卖双边手续费（万分之几）
+    min_order_cny: float = 500.0                # 折算后小于它的单不下（记 skip too_small）
+
+
+@dataclass(frozen=True)
 class EventConfig:
     """事件感知与向量召回（Event RAG & Event Watcher）参数
     
@@ -242,6 +259,10 @@ class EventConfig:
     rag_window_days: int = 7                    # 向量召回新闻事件的最长历史天数
     rag_min_severity: str = "mid"               # 向量召回新闻事件的最低严重度级别
     rag_top_k: int = 8                          # 每个标的召回的新闻事件最大数量
+    # 同论点（转载/改写稿）在 brief 里最多出几条，超出的折叠，并在保留条 claim 行末标 "(×N 来源)"；
+    # EVENT_STANCE 计数随 brief 同步。0 = 不归并。同论点 = 影响标的集合 / stance / severity / 来源身份
+    # （agent vs 爬虫）都相同 + 整句 claim 相似度 >= 0.85 + 数字按顺序一致，详见 core/runner/event_format.py。
+    max_corroboration: int = 1
     max_per_source: int = 15                    # 每次拉取新闻的最大条数
     # #153②：RSS 泛头条预过滤——标题/摘要含 watched 别名或 macro 关键词才进 LLM
     # 归一化（审计：两个泛头条 feed 占 72% 产出、92% 事件与持仓无关）。
@@ -277,6 +298,44 @@ class StalenessConfig:
 
 
 @dataclass(frozen=True)
+class SchedulerConfig:
+    """调度器运维参数（不进 API_SETTABLE：ping URL 本身是凭据，只经 env / yaml 配）"""
+    # healthchecks.io 式外部心跳 URL；空 = 不发。调度器每 5 分钟 GET 一次，失败只记日志。
+    # env: INVEST_SCHEDULER_HEARTBEAT_URL。用法见 docs/wiki/08-deployment.md。
+    heartbeat_url: str = ""
+
+
+@dataclass(frozen=True)
+class FundConfig:
+    """场外公募基金两段式（ADR-027 D5，calc/fund_rules.py）
+
+    ``confirm_lag_days``：下单后第几个交易日确认份额（T = 定价日，确认日 = T + lag），按基金类型取；
+    类型从东方财富基金概况推断（QDII / FOF），取不到按 ``default`` 并在记录里标 ``lag_source=default``。
+    YAML 里只写想改的键（dict 与默认值深合并）：``fund: {confirm_lag_days: {qdii: 3}}``。
+    不进 API_SETTABLE（dict 型）；改 defaults.yaml 的 fund: 段。
+    """
+    confirm_lag_days: dict = field(default_factory=lambda: {"default": 1, "qdii": 2, "fof": 2})
+
+
+@dataclass(frozen=True)
+class SonnetArmConfig:
+    """纸面舰队「Sonnet 模型臂」（scripts/backtest_committee.py --sonnet-arm）的 LLM 覆盖。
+
+    只在该臂作用域内覆盖 utils.llm.get_llm_config*；其余臂 / live 照旧读全局 LLM_*（舰队 cron 钉 DeepSeek）。
+    API key 不进配置：只存**环境变量名**（api_key_env），值由 cron 从 .env 注入，别写进仓库。
+    """
+    model: str = "claude-sonnet-5-5"
+    base_url: str = "https://api.anthropic.com/v1"   # Anthropic 的 OpenAI 兼容端点（生产委员会同款）
+    api_key_env: str = "FLEET_SONNET_API_KEY"
+
+
+@dataclass(frozen=True)
+class FleetConfig:
+    """纸面舰队实验臂配置（不进 API_SETTABLE：嵌套 + 含端点；改 defaults.yaml 的 fleet: 段）"""
+    sonnet_arm: SonnetArmConfig = field(default_factory=SonnetArmConfig)
+
+
+@dataclass(frozen=True)
 class TunableConfig:
     """所有可调参数的顶层容器"""
     language: LanguageConfig = field(default_factory=LanguageConfig)
@@ -291,5 +350,9 @@ class TunableConfig:
     oracle_accuracy: OracleAccuracyConfig = field(default_factory=OracleAccuracyConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)
     dca: DCAConfig = field(default_factory=DCAConfig)
+    autopilot: AutopilotConfig = field(default_factory=AutopilotConfig)
     event: EventConfig = field(default_factory=EventConfig)
     staleness: StalenessConfig = field(default_factory=StalenessConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    fund: FundConfig = field(default_factory=FundConfig)
+    fleet: FleetConfig = field(default_factory=FleetConfig)

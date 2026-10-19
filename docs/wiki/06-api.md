@@ -49,8 +49,9 @@ open http://127.0.0.1:8765/docs
 curl http://127.0.0.1:8765/openapi.json
 ```
 
-（开发仓形态 `uvicorn openinvest.connectors.web_api:app` 也可；旧
-`uvicorn connectors.web_api:app` 是兼容 shim，文档不再教。）
+（开发仓形态 `uvicorn openinvest.connectors.web_api:app` 也可，但它**绕过** `openinvest-web` 的
+"非 loopback 绑定必须设 `INVEST_API_TOKEN`"守卫——只限本机 loopback 开发用，systemd / docker 部署一律走
+`openinvest-web`；旧 `uvicorn connectors.web_api:app` 是兼容 shim，文档不再教。）
 
 生产部署：见 [08-deployment.md](08-deployment.md)。
 
@@ -103,7 +104,7 @@ curl http://127.0.0.1:8765/openapi.json
 |--------|------|------|
 | GET | `/api/history?limit=200&symbol=NDQ.AX` | 交易流水 |
 | GET | `/api/daily?since=N` | 最近 N 天每日决策快照 |
-| GET | `/api/pnl_history?since=N` | PnL 时序点（jobs/pnl_snapshot 写）|
+| GET | `/api/pnl_history?since=N` | 总权益曲线时序点（jobs/pnl_snapshot 写）：`equity_idx`＝账户 TWR 指数（成立日 100），`total_pnl_pct`＝`equity_idx − 100`＝成立以来 TWR %；旧版点（两个固定资产的成本收益率，带 `ndq_pnl_pct`/`gold_pnl_pct`）口径不同 |
 | GET | `/api/pnl_chart.svg` | 后端自家 SVG（无 JS 也能看）|
 
 ### 策略 / 配置
@@ -163,7 +164,7 @@ curl -X POST http://127.0.0.1:8765/api/holdings -d '{
 
 `commit:false` 只解析返回预览（`parsed.{cash,holdings}`），`commit:true` **非破坏写入**：
 只新增 portfolio 里还没有的 symbol、cash 只填当前为 0 的币种，已存在的跳过
-（`summary.{added_holdings,skipped_holdings,cash_set,cash_skipped}`）。无 LLM key → 400。
+（`summary.{added_holdings,skipped_holdings,rejected_holdings,cash_set,cash_skipped}`；`rejected_holdings` = 被拒的行 `{symbol: 正确写法}`，如黄金按 USD/盎司解析会被拒，需按 CNY/克用 `buy --existing-position`（MCP `record_existing_position`）补录，不扣现金）。无 LLM key → 400。
 单一可信源 `services/holdings_import.py`，CLI `openinvest import`、onboarding 共用（原 GUI「导入持仓」已随 GUI 退役）。
 
 ```bash
@@ -171,14 +172,19 @@ curl -X POST http://127.0.0.1:8765/api/holdings/import \
   -d '{"content": "510300 ETF 3000股 成本4.2元（支付宝）\n余额宝 5万", "commit": false}'
 ```
 
-### 旧的专用端点（兼容保留）
+### 旧的专用端点（已删除）
 
-```
-POST /api/deposit     POST /api/withdraw
-POST /api/gold/buy    POST /api/gold/sell    POST /api/gold/set    POST /api/gold/offset
-```
+`POST /api/deposit` · `/api/withdraw` · `/api/gold/buy` · `/api/gold/sell` · `/api/gold/set` · `/api/gold/offset`
+六个 v1 端点（`routers/write.py`）已于 #236 删除：与 `/api/cash/{ccy}/*`、`/api/skill/*` 重复，
+且已漂移（currency 锁 cny/aud、金价卖出费率硬编码、history action 名不同），退役 GUI 之外无消费者。
+记账请用 CLI / MCP（`deposit` / `withdraw` / `buy` / `sell`），remote hub 走 `/api/skill/{deposit,withdraw,buy,sell}`
+（支持幂等键，ADR-016）；任意币种现金也可用 `/api/cash/{currency}/deposit|withdraw`。
 
-新代码请用 holdings 通用接口，专用接口仅给老前端兼容。
+> **能力移除**：`/api/gold/offset`（用户报银行当日买入克价 → 用现货价反推渠道点差 → 写回 `price_offset_pct`）的
+> **自动反推**随端点一起删了（连同 `utils/gold_price.infer_offset_pct`；CLI / MCP 从来没有等价的反推命令）。
+> 需要时手算（报价 ÷ 现货价 − 1，小数口径，范围 ±0.1）后手填：
+> CLI `track_asset --symbol GC=F --price-offset-pct 0.025` / MCP `track_asset(symbol="GC=F", price_offset_pct=0.025)`。
+> 将来想要"一句报价自动反推"，应作为 CLI 子命令 + MCP 工具重做，不要复活 REST 端点。
 
 ### 策略写
 
@@ -254,7 +260,7 @@ CLI `run_committee`（含同日缓存命中、远端 hub 模式 `INVEST_API_BASE
 邮件 / `/view` 页末尾的小字 `（自报 0.xx）` 是 CIO 自报原数；API / MCP / CLI 的 `confidence_lookup` 不带这段，自报原数照旧在 `confidence` 字段（留档）。transcript 里 `**Verdict**: X (confidence Y)`、
 verdict / 建议金额 / sanity 降级 / high_confidence_buy / 第二天 Quant/Risk 读到的历史决议全部不变。
 查表由下面的 `verdict_review` job 每天写到 `memory/.dreams/confidence_lookup.json`：样本 = live 决议 + 前瞻纸面舰队
-（`memory/.backtest/<日期>/`，日期 ≥ 2026-07-24 且文件在决议日当天/次日写出；T2 试跑臂的 `.backtest_t2conf/` 和事后补跑的回测都不进），
+（`memory/.backtest/<日期>/`，日期 ≥ 2026-07-24 且文件在决议日当天/次日写出；T2 试跑臂的 `.backtest_t2conf/`、B4 三个实验臂的 `.backtest_sealed/` / `.backtest_debate/` / `.backtest_macrosoft/` 和事后补跑的回测都不进），
 都要非污染、30d 已成熟、不是周末重复（`calc.symbols.is_closed_weekend`），不按自报分剔除（≤0.4 只在展示时打标）。
 标签同 verdict_review：T2 30d 规则（HOLD = 涨跌留在 flat band 内，有方向的 = 方向对），行情只读 `market_data.db`。
 舰队是中性持仓、没有事件/估值/情绪输入，所以每格都记来源构成 `n_live` / `n_fleet`。市场横盘基率 = 同一批样本不分 verdict 30 天落在波动带内的比例。
@@ -451,18 +457,36 @@ claude mcp add openinvest -e INVEST_HOME=<数据目录> -- uvx openinvest-mcp
   - **streamable-HTTP（`openinvest-mcp --http`，2026-07，BETA）**：remote MCP，hub 常驻
     127.0.0.1:8766（`INVEST_MCP_HOST/PORT`），spoke agent 直连 `/mcp`；鉴权复用
     `INVEST_API_TOKEN`（bearer，`/health` 豁免），stateless + SSE（请求内推进度与心跳）。
-    能力差集注记：Coordinator 协议（prepare/save_committee）与 doctor/event_check
-    仍只在 REST/CLI（Decision 5/6 刻意不进 MCP），详见 wiki 08 §9
+    能力差集注记：event_check 仍只在 REST/CLI（Decision 6），详见 wiki 08 §9。
+    Coordinator 协议 2026-10-18 起已进 MCP（`prepare_committee` / `submit_committee`，推翻 Decision 5）
   写操作与 CLI/REST 并存安全（`with_portfolio_tx` fcntl 锁同一模型）
-- **工具集**（封闭集合，以快照测试 `tests/test_mcp_server.py` 为准）：status /
-  strategy / history / live_prices / what_if / discipline / decisions /
+- **工具集**（封闭集合，以快照测试 `tests/test_mcp_server.py` 为准）：doctor / status /
+  strategy / history / live_prices / what_if / rebalance_plan / discipline / decisions /
   explain_decision / record_execution / ingest_event / buy /
-  record_existing_position / sell / deposit / withdraw / set_allocations /
+  record_existing_position / sell / deposit / withdraw / record_dividend / record_fee /
+  record_split / record_return_of_capital（ADR-027 PR2：分红·利息 / 费用·税 / 拆股 / 退回本金）/
+  place_fund_order / confirm_fund_order / cancel_fund_order（ADR-027 PR3：场外基金下单扣现金记在途 / 按净值确认 / 撤销）/ set_allocations /
   track_asset / untrack_asset / news_sources / add_news_source /
-  remove_news_source / run_committee（Direct 路径，当天已跑读缓存）。
+  remove_news_source / run_committee（Direct 路径，当天已跑读缓存）/
+  prepare_committee / submit_committee（Coordinator 路径：Agent 自己跑四个角色，后端不调模型；
+  收卷时防御 / regime 用出题时后端存下的事实判定，CIO 解析不出裁决直接拒收）。
   同步工具经线程池执行，慢 IO 不占事件循环
-- 刻意不把 81 个 REST 端点全暴露（撑爆 agent context）；Coordinator 委员会
-  workflow 也不在这里——那是 Skill 的职责（issue #133 Decision 5/6）
+- **doctor**（只读，顾问模式拒绝）：纯 MCP agent 的第一步，与 CLI `doctor` / `GET /api/doctor` 同源。
+  `status` 只看 onboarding 必需项：memory 未初始化（或 portfolio 是 v1）→ `needs_setup`，否则 `ready`；
+  缺 LLM key / 邮件凭据 / `.env` 只在对应 check 标 `optional_for_coordinator` / `optional_for_email`
+  （Coordinator 路径不需要 key，只有 Direct 路径要，见 `direct_ready`），不会让 agent 去重装
+- **目标权重**：`track_asset(symbol, target_pct=0.3)` 写单个标的、`set_allocations(target_pcts={"510300.SS": 0.3})`
+  批量写（CLI：`track_asset --target-pct 0.3` / `set_allocations --target-pct SYMBOL=0.3`，可重复）；
+  `rebalance_plan` 读它。各标的 `target_pct` 之和必须 ≤ `target_allocation_stock`，让合计超限的写入整笔回滚并报出当前合计；校验只针对这次新写的值——以前手改 `strategy.md` 留下的旧问题（如 `target_pct: 30`、合计已超）不会挡住无关的 track/untrack；
+  降股票目标时把 `target_pcts` 放进同一次 `set_allocations` 一起调（单独降会因中间态超限被拒）
+- **每标的报警线**：`track_asset(symbol, alert_price_below=900, alert_day_drop_pct=2, ...)` 写单个标的（5 个 `alert_*` 参数，
+  只覆盖传入的那几条）、`set_allocations(alerts={"GC=F": {"price_below": 900}})` 批量写（值为 null 清该条，symbol 整体为 null
+  清空）；CLI：`track_asset --alert-price-below 900` / `set_allocations --alert GC=F:price_below=900`。`status` 的
+  `all_holdings[].alerts` 返回各线与距离。哨兵按线触发（价格线 24h 冷却、日涨跌线同一交易日只报一次），**只有 `INVEST_EVENT_ALERT=1` 才发**，不触发委员会，
+  详见 [21-intel-sentinel](21-intel-sentinel.md#每标的报警线用户自设价格线--跌幅线)
+- 刻意不把 81 个 REST 端点全暴露（撑爆 agent context）。Coordinator 委员会原先也不在这里
+  （issue #133 Decision 5：当时视为 Skill 专属流程）；2026-10-18 方向改为"插件不持模型 key、
+  推理由宿主 Agent 负责"后，出题 / 收卷两个工具进了 MCP，纯 MCP 的 Agent 也能自己跑委员会
 
 ## 下一步
 

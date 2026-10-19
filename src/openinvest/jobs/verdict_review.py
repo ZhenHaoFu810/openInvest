@@ -7,11 +7,17 @@
 输出：docs/verdict_accuracy.md (gitignored, 含真数字给本地分析用)
      memory/.dreams/verdict_review.jsonl（结构化结果，给 dreaming 用）
      memory/.dreams/confidence_lookup.json（裁决旁展示的同类决议查表，D10 P1）
+     memory/.dreams/verdict_neutrality.json（裁决中性度聚合，日报读它出一行；A5）
+     memory/.dreams/verdict_review_<臂>.jsonl + docs/verdict_accuracy_arms.md（B4 实验臂 sealed / debate /
+         macrosoft + 模型臂 sonnet，review_arm / run_arms；与上面所有 live 产物物理分离，不进命中率页 / 公开 JSON / 查表）
 
 命中率定义：
 - BUY / ACCUMULATE → 后续涨 >0% = hit
 - SELL / TRIM → 后续跌 <0% = hit
-- HOLD → 波动 |return| < 3% = hit (说明"无操作"是对的)
+- HOLD → 波动 |return| < flat band = hit (说明"无操作"是对的)
+- UNCLEAR（CIO 输出解析不出合法裁决）→ **不计命中**，只计数（2026-10 之前被折进 HOLD 桶灌水）
+每桶同时给同样本市场基率、提升（命中 − 基率）与 Wilson 95% CI；强制 HOLD / 残缺输入
+（transcript 的 Input Health 块）单独计数不剔除。
 
 上下文归因（A1 增强）：
 - 事后 30 天内 VIX 变化 > 30% → 标记 "macro_shock"，verdict 错也免责
@@ -37,11 +43,19 @@ from openinvest.jobs.review_calc import (  # noqa: F401
     FLAT_CEILING_PCT,
     HIT_WINDOWS,
     K_FLAT,
+    UNCLEAR_DIRECTION,
     VerdictReview,
+    arms_report_lines,
+    counterfactual_pnl,
+    roundtrip_cost_rate,
     _bucket_lines,
+    _calibration_lines,
+    _model_lines,
+    _neutrality_lines,
     _flat_band,
     build_confidence_lookup,
     merge_confidence_lookup,
+    model_era_of,
     _is_hit,
     _summarize_bucket,
 )
@@ -150,6 +164,33 @@ def _window_return(
     if df is None:
         return None
     return forward_return(symbol, decision_date, window_days, closes=df["Close"])
+
+
+# ---------- 反事实账本（Track A3）：组合基准同窗口收益 ----------
+
+def _benchmark_symbol() -> str:
+    """config portfolio.benchmark_symbol（#433 起 status/日报同一来源）；空串 = 不配基准。"""
+    try:
+        from openinvest.core.config import load_config
+        return str(getattr(load_config().portfolio, "benchmark_symbol", "") or "").strip()
+    except Exception as e:  # noqa: BLE001
+        log.warning("_benchmark_symbol 读 config 失败，按未配置: %s", e)
+        return ""
+
+
+def _benchmark_return(symbol: str, decision_date: str, window_days: int) -> Optional[float]:
+    """基准同窗口收益：同只读库 + 缓存、同 forward_return 口径；未配置/缺数据 → None。
+    不经 _window_return（它是标的收益的口径入口，测试常 spy 它），直接走 forward_return。"""
+    if not symbol:
+        return None
+    df = _closes(symbol)
+    if df is None:
+        return None
+    try:
+        return forward_return(symbol, decision_date, window_days, closes=df["Close"])
+    except Exception as e:  # noqa: BLE001  基准算不出不影响标的复盘
+        log.warning("_benchmark_return(%s,%s,%s) → None: %s", symbol, decision_date, window_days, e)
+        return None
 
 
 # ---------- 宏观突变检测 ----------
@@ -315,19 +356,36 @@ def _build_symbol_resolver() -> Dict[str, Dict[str, Any]]:
 
 # ---------- 主流程 ----------
 
+def _review_context() -> Dict[str, str]:
+    """一次复盘只读一次的上下文：组合基准 symbol + 当前基准币种（CR #442 建议 6）。"""
+    try:
+        from openinvest.utils.base_currency import base_currency
+        base = str(base_currency() or "CNY").upper()
+    except Exception:  # noqa: BLE001
+        base = "CNY"
+    return {"benchmark_symbol": _benchmark_symbol(), "base_ccy": base}
+
+
 def review_one(
     committee_dir: Path,
     stem: str,
     resolver: Optional[Dict[str, Dict[str, Any]]] = None,
     *,
     regime: bool = True,
+    ctx: Optional[Dict[str, str]] = None,
+    source: Optional[str] = None,
 ) -> Optional[VerdictReview]:
     """对单个 verdict 文件做事后 review。
 
     stem: committee 文件名去掉 .md（可能是转义名 GC_F，也可能是 NDQ.AX）。
     resolver: 转义名 → holding 映射，用于旧文件拿回真实 symbol + proxy_kind。
     regime: False 时不算 regime_at_decision（只要标签的调用方省掉一半耗时，见 review_fleet）。
+    ctx: _review_context() 的结果（基准 symbol + 基准币种），review_all/review_fleet 算一次传入；
+        None → 本条自己读（单条调用方便，但同一次复盘应传同一份，防中途改 config 混进两个基准）。
+    source: 行的来源标签。None → 按目录推（含 "backtest" 的是 "backtest"，否则 "live"）；
+        实验臂传 "arm:<name>"（review_arm），让臂的行在任何下游里都认得出来、不会被当成 live / 舰队。
     """
+    ctx = ctx if ctx is not None else _review_context()
     decision_date = committee_dir.name  # YYYY-MM-DD
     path = committee_dir / f"{stem}.md"
     parsed = _parse_committee_file(path)
@@ -357,9 +415,16 @@ def review_one(
         asset=real_symbol,
         verdict=parsed["verdict"],
         confidence=parsed["confidence"],
-        expected_direction=EXPECTED_DIRECTION.get(parsed["verdict"], "flat"),
+        # UNCLEAR 没有期望方向（"none"）：下面不打 hits，export/summarize 都不把它当 HOLD
+        expected_direction=EXPECTED_DIRECTION.get(parsed["verdict"], UNCLEAR_DIRECTION),
         macro_at_decision=parsed["macro_at_decision"],
-        source="backtest" if "backtest" in str(committee_dir) else "live",
+        input_health=parsed.get("input_health") or {},
+        model_era=model_era_of(parsed.get("input_health"), decision_date, parsed.get("provider")),
+        alloc_cny=float(parsed.get("alloc_cny") or 0.0),
+        alloc_currency=str(parsed.get("alloc_currency") or "").upper(),
+        benchmark_symbol=ctx.get("benchmark_symbol", ""),
+        cost_rate=roundtrip_cost_rate(real_symbol),
+        source=source or ("backtest" if "backtest" in str(committee_dir) else "live"),
         # 决议日落在 LLM 训练窗口 → 记忆穿越，下游分桶/Dreaming 据此剔出业绩统计。
         # ISO 日期字典序比较等价于时间序，无需 parse。
         contaminated=decision_date <= CONTAMINATION_CUTOFF,
@@ -370,12 +435,24 @@ def review_one(
     # 改为对所有 verdict 都算 atr（带缓存）：directions 是 verdict 无关的"市场到底涨没涨"，
     # 必须和 HOLD 用同一条 flat band 才能让下游 regime 基率与 missed_up/avoided_down 口径一致。
     atr = _atr_pct_cached(real_symbol, decision_date)
+    scorable = parsed["verdict"] in EXPECTED_DIRECTION   # UNCLEAR → 只记收益/方向，不记命中
     for window in HIT_WINDOWS:
         ret = _window_return(real_symbol, holding, decision_date, window)
         if ret is not None:
             rv.actual_returns[f"{window}d"] = round(ret, 4)
             flat_th = _flat_band(atr, window) if atr is not None else 0.03
-            rv.hits[f"{window}d"] = _is_hit(parsed["verdict"], ret, flat_th)
+            if scorable:
+                rv.hits[f"{window}d"] = _is_hit(parsed["verdict"], ret, flat_th)
+            # 反事实：同窗口基准超额（所有行）+ 照做净损益（只有有金额的行）
+            bench = _benchmark_return(rv.benchmark_symbol, decision_date, window)
+            if bench is not None:
+                rv.benchmark_returns[f"{window}d"] = round(bench, 4)
+                rv.excess_returns[f"{window}d"] = round(ret - bench, 4)
+            # 币种口径（CR #442 建议 5a）：金额币种与当前基准币种不一致的行不进金额账本（老存档空=CNY）
+            if (rv.alloc_currency or "CNY") == ctx.get("base_ccy", "CNY"):
+                pnl = counterfactual_pnl(parsed["verdict"], rv.alloc_cny, ret, rv.cost_rate)
+                if pnl is not None:
+                    rv.followed_pnl[f"{window}d"] = pnl
             # 原始市场方向（verdict 无关）：给 Dreaming 算 regime 基率
             rv.directions[f"{window}d"] = (
                 "up" if ret > flat_th else ("down" if ret < -flat_th else "flat")
@@ -410,12 +487,13 @@ def review_all(*, include_backtest: bool = True, include_live: bool = True) -> L
     # 内部用文件里的 **Symbol** 行 + holdings 映射拿回真实 symbol（GC=F）再拉行情。
     # 旧 bug：直接拿 stem（GC_F/NDQ_AX）喂 yfinance → 全 404 → actual_returns 全空。
     resolver = _build_symbol_resolver()
+    ctx = _review_context()
     seen: set = set()  # (date, real_symbol) 去重，防同一 verdict 因转义产生双份
     for date_dir in sources:
         if not date_dir.is_dir():
             continue
         for md_file in date_dir.glob("*.md"):
-            rv = review_one(date_dir, md_file.stem, resolver)
+            rv = review_one(date_dir, md_file.stem, resolver, ctx=ctx)
             if not rv:
                 continue
             dedup_key = (rv.date, rv.asset, rv.source)
@@ -458,6 +536,12 @@ def write_report(reviews: List[VerdictReview], summary: Dict[str, Any]) -> Path:
     lines += _bucket_lines("Holdout（干净业绩 · cutoff 之后）", holdout)
     lines += _bucket_lines("Contaminated（记忆穿越 · cutoff 及之前）", contaminated,
                            note=contaminated.get("note"))
+    # 换模型后新旧账分开算（model_era）：按模型一节在全局校准 / 中性度之前
+    lines += _model_lines(holdout.get("by_model") or {})
+    # A5：自报置信度校准 + 裁决中性度（live 干净样本，聚合表，不含逐行数据）。这两节是全部模型合并的；
+    # 分模型的在上面「按模型」里
+    lines += _calibration_lines(summary["calibration"], " · 全部模型合并")
+    lines += _neutrality_lines(summary["neutrality"], " · 全部模型合并")
 
     # 诚实解读：仅基于 holdout（真业绩）。holdout 被 sub30 抑制或无方向性样本时退化提示。
     lines.append("\n## 诚实解读（仅基于 holdout 干净样本）\n")
@@ -526,6 +610,7 @@ def review_fleet() -> List[VerdictReview]:
     base = MemoryStore().root / ".backtest"
     matured_by = date.today() - timedelta(days=30)   # 更晚的决议 30d 窗口还没到，标签必为空
     out: Dict[Tuple[str, str], VerdictReview] = {}
+    ctx = _review_context()
     for d in sorted(base.iterdir()) if base.exists() else []:
         try:
             day = date.fromisoformat(d.name)
@@ -537,10 +622,108 @@ def review_fleet() -> List[VerdictReview]:
             written = datetime.fromtimestamp(md.stat().st_mtime).date()
             if not day <= written <= day + timedelta(days=1):
                 continue
-            rv = review_one(d, md.stem, {}, regime=False)
+            rv = review_one(d, md.stem, {}, regime=False, ctx=ctx)
             if rv:
                 out.setdefault((rv.date, rv.asset), rv)
     return list(out.values())
+
+
+# ---------- 实验臂（评审路线 B4）：独立复盘，不进任何 live 产物 ----------
+
+# 臂名 → memory/ 下的目录。scripts/backtest_committee 的 --sealed-arm / --debate-arm / --macro-soft-arm 写，本节读；
+# 目录名单一可信源在此。
+ARM_DIRS = {"sealed": ".backtest_sealed", "debate": ".backtest_debate", "macrosoft": ".backtest_macrosoft",
+            "sonnet": ".backtest_sonnet"}   # sonnet = 模型臂（换 LLM），报告里单列「模型对照」，不进四臂并排
+SEALED_ARM_SUBDIR, DEBATE_ARM_SUBDIR, MACROSOFT_ARM_SUBDIR, SONNET_ARM_SUBDIR = (
+    ARM_DIRS["sealed"], ARM_DIRS["debate"], ARM_DIRS["macrosoft"], ARM_DIRS["sonnet"])
+SEALED_ARM_NAME = "sealed"
+FLEET_CONTROL_SUBDIR = ".backtest"       # 对照臂 = 同日同标的的舰队行
+ARMS_REPORT = "verdict_accuracy_arms.md"
+
+
+def review_arm(subdir: str = SEALED_ARM_SUBDIR, *, name: str = SEALED_ARM_NAME) -> List[VerdictReview]:
+    """实验臂 memory/<subdir>/<date>/*.md → 复盘行（复用 review_one，source="arm:<name>"）。
+
+    只读该目录 + 只读 market_data.db；不写任何东西，也不碰 review_all / review_fleet 的输出，
+    所以实验臂行进不了 verdict_review.jsonl / confidence_lookup / 公开 JSON（写文件见 run_arms）。
+    未成熟的行也要（稳定度只需要逐票记录，不需要 30d 标签）。resolver={}：舰队是中性持仓，按标的原生计价。
+    """
+    base = MemoryStore().root / subdir
+    ctx = _review_context()
+    out: List[VerdictReview] = []
+    for d in sorted(base.iterdir()) if base.exists() else []:
+        try:
+            date.fromisoformat(d.name)
+        except ValueError:
+            continue
+        if not d.is_dir() or d.name < FLEET_START:
+            continue
+        for md in sorted(d.glob("*.md")):
+            rv = review_one(d, md.stem, {}, regime=False, ctx=ctx, source=f"arm:{name}")
+            if rv:
+                out.append(rv)
+    return out
+
+
+def review_arm_control(arm: List[VerdictReview], control_subdir: str = FLEET_CONTROL_SUBDIR) -> List[VerdictReview]:
+    """实验臂每一行对应的对照臂行：同日同标的的 .backtest/<date>/<sym>.md（同样 review_one，source 保持 "backtest"）。
+    对照臂当天没有该标的的文件就缺席，由 arm_vs_control 取交集。多个臂的同一 (日期, 标的) 只读一次。"""
+    base = MemoryStore().root / control_subdir
+    ctx = _review_context()
+    out: List[VerdictReview] = []
+    seen: set = set()
+    for r in arm:
+        if (r.date, r.asset) in seen:
+            continue
+        seen.add((r.date, r.asset))
+        stem = safe_symbol(r.asset)
+        if (base / r.date / f"{stem}.md").exists():
+            rv = review_one(base / r.date, stem, {}, regime=False, ctx=ctx)
+            if rv:
+                out.append(rv)
+    return out
+
+
+def write_arm_jsonl(arm: List[VerdictReview], name: str = SEALED_ARM_NAME) -> Path:
+    """实验臂行落独立 jsonl（整份覆盖，同 write_jsonl）。路径与 verdict_review.jsonl 不同名，
+    所有 live 读方都是精确路径读，读不到它。"""
+    out = MemoryStore().root / ".dreams" / f"verdict_review_{name}.jsonl"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        for r in arm:
+            f.write(json.dumps(asdict(r), ensure_ascii=False) + "\n")
+    return out
+
+
+def write_arms_report(arms: Dict[str, List[VerdictReview]], control: List[VerdictReview]) -> Path:
+    """docs/verdict_accuracy_arms.md（gitignored，同 verdict_accuracy.md）。只含聚合，无 symbol / 逐行 / 金额。"""
+    docs_dir = ROOT / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    out = docs_dir / ARMS_REPORT
+    head = ["# Verdict Accuracy Report — 实验臂（B4）",
+            f"\n*Generated: {datetime.now().isoformat(timespec='seconds')}*\n",
+            "> 🧪 **实验臂，不是 live**：本页和 `.dreams/verdict_review_<臂>.jsonl` 只服务 A/B 判读，"
+            "不进 live 命中率页 / 公开 JSON / confidence_lookup / 纪律台账。\n"]
+    out.write_text("\n".join(head + arms_report_lines(arms, control)), encoding="utf-8")
+    return out
+
+
+def run_arms() -> Dict[str, Any]:
+    """实验臂复盘入口：每个有行的臂 + 同日同标的对照行 → 四臂并排 / 配对对照 / H3 → 每臂独立 jsonl 与一份报告。
+    没有任何臂目录 / 没有任何行 → skipped（不写文件）。run() 尾巴调它，失败也不影响 live 复盘。"""
+    _CLOSES_CACHE.clear()   # 常驻 scheduler 进程：独立调用时也别吃旧快照
+    _ATR_CACHE.clear()
+    arms = {n: review_arm(sub, name=n) for n, sub in ARM_DIRS.items()}
+    arms = {n: rows for n, rows in arms.items() if rows}
+    if not arms:
+        return {"status": "skipped", "reason": "no rows under any arm dir"}
+    control = review_arm_control([r for rows in arms.values() for r in rows])
+    return {
+        "status": "ok", "arms": {n: len(rows) for n, rows in arms.items()},
+        "n_control": len(control),
+        "report": str(write_arms_report(arms, control)),
+        "jsonl": {n: str(write_arm_jsonl(rows, n)) for n, rows in arms.items()},
+    }
 
 
 CONFIDENCE_LOOKUP = "confidence_lookup"  # .dreams/confidence_lookup.json（D10 P1 展示查表）
@@ -550,9 +733,46 @@ DEFAULT_LOOKUP_PATH = Path(__file__).with_name("confidence_lookup_default.json")
 
 def write_confidence_lookup(reviews: List[VerdictReview]) -> Path:
     """每日复盘尾巴顺手刷新展示查表（纯算术）。样本 = live + 前瞻舰队。邮件/事件提醒/API 读它。"""
-    data = {**build_confidence_lookup(reviews, review_fleet()),
+    from openinvest.utils.llm import get_llm_config_safe
+    # 只用与当前 config 的模型同口径的样本（换模型后旧模型的 30d 命中率不能冒充新模型的）；
+    # 不够 30 的 verdict 在 load_confidence_lookup 里退回包内默认表并注明
+    data = {**build_confidence_lookup(reviews, review_fleet(), model=get_llm_config_safe()[2]),
             "generated_at": datetime.now().isoformat(timespec="seconds")}
     return MemoryStore().write_dream_state(CONFIDENCE_LOOKUP, data)
+
+
+NEUTRALITY = "verdict_neutrality"  # .dreams/verdict_neutrality.json（A5：日报"裁决中性度"一行的来源）
+
+
+def write_neutrality(summary: Dict[str, Any]) -> Path:
+    """每日复盘尾巴落中性度聚合（纯聚合：分布占比 + 一句人话，无 symbol）。日报读它。"""
+    data = {**summary["neutrality"], "generated_at": datetime.now().isoformat(timespec="seconds")}
+    return MemoryStore().write_dream_state(NEUTRALITY, data)
+
+
+NEUTRALITY_MAX_AGE_DAYS = 3   # 复盘 cron 停了 / 一直失败时，日报别无限期挂着最后一次的数
+
+
+def load_neutrality(*, now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """日报用：最近一次复盘的中性度（带 as_of 复盘日期）。没跑过 / 文件坏 / 样本不足（无 sentence）/
+    generated_at 缺失或超过 NEUTRALITY_MAX_AGE_DAYS 天 → None，调用方据此不出这行；
+    任何读失败只降级不阻断日报。now 仅供测试注入。"""
+    try:
+        data = MemoryStore().read_dream_state(NEUTRALITY)
+    except Exception as e:  # noqa: BLE001
+        log.warning("读裁决中性度失败，日报不出这行: %s", e)
+        return None
+    if not isinstance(data, dict) or not data.get("sentence"):
+        return None
+    try:
+        age = (now or datetime.now()) - datetime.fromisoformat(str(data.get("generated_at")))
+    except (TypeError, ValueError):
+        log.warning("裁决中性度 generated_at 缺失/非法，视为过期，日报不出这行")
+        return None
+    if age > timedelta(days=NEUTRALITY_MAX_AGE_DAYS):
+        log.warning("裁决中性度已过期 %s 天（复盘 job 可能停了），日报不出这行", age.days)
+        return None
+    return {**data, "as_of": str(data["generated_at"])[:10]}
 
 
 def _valid_lookup(read) -> Optional[Dict[str, Any]]:
@@ -572,6 +792,14 @@ def load_confidence_lookup() -> Optional[Dict[str, Any]]:
     return merge_confidence_lookup(local, default)
 
 
+def _run_arm_safely() -> None:
+    """B4 实验臂复盘（独立产物）；它出任何错都不许拖垮 live 复盘。"""
+    try:
+        run_arms()
+    except Exception as e:  # noqa: BLE001
+        log.warning("实验臂复盘失败（live 复盘不受影响）: %s: %s", type(e).__name__, e)
+
+
 def run(*, include_backtest: bool = False) -> Dict[str, Any]:
     """job entry。cron 默认只复盘 live（D4 签字方案）。
 
@@ -581,11 +809,14 @@ def run(*, include_backtest: bool = False) -> Dict[str, Any]:
     """
     reviews = review_all(include_backtest=include_backtest)
     if not reviews:
+        _run_arm_safely()
         return {"status": "skipped", "reason": "no committee verdicts to review"}
     summary = summarize(reviews)
     md_path = write_report(reviews, summary)
     jsonl_path = write_jsonl(reviews)
     write_confidence_lookup(reviews)
+    write_neutrality(summary)
+    _run_arm_safely()
     return {
         "status": "ok",
         "summary": summary,

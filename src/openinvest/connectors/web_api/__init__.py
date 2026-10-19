@@ -11,11 +11,12 @@ import logging
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-load_dotenv()
+# .env 只在 openinvest.paths 单点加载（INVEST_ROOT/.env）——原先这里的裸 load_dotenv() 会向上
+# 搜目录，worktree 里读到主 checkout 的生产 .env。放在 DEV_CORS 之前，下面的 os.getenv 才看得到。
+from openinvest.paths import INVEST_ROOT
 
 DEV_CORS = os.getenv("INVEST_WEB_DEV_CORS", "0") == "1"
 
@@ -30,7 +31,7 @@ log = logging.getLogger("web_api")
 
 app = FastAPI(
     title="invest Web API",
-    description="多资产投资 agent 系统的 REST API（被 invest-gui 前端消费）",
+    description="多资产投资 agent 系统的 REST API（deprecated：仅服务 remote hub 模式，GUI 已于 2026-07-05 退役，不再新增端点）",
     version="0.1.0",
 )
 
@@ -88,13 +89,13 @@ async def _bearer_token_auth(request, call_next):
 
 # ============ 挂载各 tag router ============
 from openinvest.connectors.web_api.routers import (  # noqa: E402
-    meta, read, holdings_write, user, write, cash_write, strategy_write,
+    meta, read, holdings_write, user, cash_write, strategy_write,
     committee, events, commsec, trades, skill,
     insights, observability, verdict_review, committee_sessions, regime, state,
     config, decisions,
 )
 
-for _m in (meta, read, holdings_write, user, write, cash_write, strategy_write,
+for _m in (meta, read, holdings_write, user, cash_write, strategy_write,
            committee, events, commsec, trades, skill,
            insights, observability, verdict_review, committee_sessions, regime, state,
            config, decisions):
@@ -104,7 +105,6 @@ for _m in (meta, read, holdings_write, user, write, cash_write, strategy_write,
 # _sync_trade_to_portfolio` 可用（测试 + CI smoke import 硬依赖）
 from openinvest.connectors.web_api.deps import get_pm  # noqa: E402,F401
 from openinvest.connectors.web_api.routers.trades import _sync_trade_to_portfolio  # noqa: E402,F401
-from openinvest.paths import INVEST_ROOT
 
 
 # GUI 壳层已退役（2026-07-05）：static/ SPA 挂载、gui_dist 同步、run.sh gui 全部删除。

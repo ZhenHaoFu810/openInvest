@@ -6,6 +6,10 @@ portfolio:
   # 基准币种（ISO 三字母）：总资产、可投子弹、委员会金额字段按它算；金额阈值按人民币标定、运行时换算。
   # env: INVEST_PORTFOLIO_BASE_CURRENCY=AUD
   base_currency: CNY
+  # 账户业绩（TWR/XIRR/回撤）对比的基准 yfinance symbol。默认沪深 300 ETF（指数 000300.SS 在 Yahoo 只回 1 根 bar）；
+  # 持有跟踪它的 ETF 时自相关，换一个不持有的市场。空串 = 不比。
+  # env: INVEST_PORTFOLIO_BENCHMARK_SYMBOL=^GSPC
+  benchmark_symbol: 510300.SS
 
 regime:
   # #113 尺度无关阈值：任意资产零配置自动适配，per_asset 表已删
@@ -105,3 +109,24 @@ reward:
   sharpe_bonus_threshold: 1.0
   lam_mdd: 1.0
   lam_return: 0.05
+
+scheduler:
+  # 外部心跳（dead-man switch）：healthchecks.io 式 ping URL，调度器每 5 分钟 GET 一次；空 = 不发。
+  # URL 本身是凭据，推荐用 env INVEST_SCHEDULER_HEARTBEAT_URL 配，别提交进仓库。
+  heartbeat_url: ""
+
+fund:
+  # 场外基金两段式（ADR-027 D5）：下单后第几个交易日确认份额（确认日 = 定价日 T + lag）。类型从东方财富基金概况推断，
+  # 取不到按 default。只写想改的键（与内置默认深合并）。dict 型，不能用 env 覆盖。
+  confirm_lag_days:
+    default: 1
+    qdii: 2
+    fof: 2
+
+fleet:
+  # 纸面舰队 Sonnet 模型臂（backtest_committee --sonnet-arm）：同一批标的、live 配置（rounds=1、单次抽样），
+  # 只把 LLM 换成这里的模型，且仅在该臂作用域内生效。key 只存环境变量名，值由 cron 从 .env 注入（别写进仓库）。
+  sonnet_arm:
+    model: claude-sonnet-5-5
+    base_url: https://api.anthropic.com/v1
+    api_key_env: FLEET_SONNET_API_KEY

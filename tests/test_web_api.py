@@ -260,20 +260,20 @@ def test_openapi_schema(client):
     assert "/api/daily" in paths
     assert "/api/health" in paths
     # PR 2 写操作 + 委员会
-    assert "/api/deposit" in paths
-    assert "/api/withdraw" in paths
-    assert "/api/gold/buy" in paths
-    assert "/api/gold/sell" in paths
-    assert "/api/gold/set" in paths
-    assert "/api/gold/offset" in paths
+    assert "/api/cash/{currency}/deposit" in paths
+    assert "/api/cash/{currency}/withdraw" in paths
+    # v1 专用写端点（#236）已删：与 cash_write / /api/skill/* 重复，且无消费者
+    for gone in ("/api/deposit", "/api/withdraw", "/api/gold/buy", "/api/gold/sell",
+                 "/api/gold/set", "/api/gold/offset"):
+        assert gone not in paths
     assert "/api/committee/run" in paths
     assert "/api/committee/{task_id}" in paths
 
 
 # ============ PR 2: 写操作端点测试 ============
 
-def test_deposit_cny(client, tmp_store):
-    r = client.post("/api/deposit", json={"currency": "cny", "amount": 1000.0})
+def test_cash_deposit_cny(client, tmp_store):
+    r = client.post("/api/cash/CNY/deposit", json={"amount": 1000.0})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ok"] is True
@@ -293,115 +293,24 @@ def test_deposit_cny(client, tmp_store):
     assert any(r["action"] == "deposit" and r["units"] == 1000.0 for r in rows)
 
 
-def test_deposit_aud(client, tmp_store):
-    r = client.post("/api/deposit", json={"currency": "aud", "amount": 50.0})
+def test_cash_deposit_aud(client, tmp_store):
+    r = client.post("/api/cash/AUD/deposit", json={"amount": 50.0})
     assert r.status_code == 200
     assert r.json()["aud_cash"] == pytest.approx(150.0)
 
 
-def test_deposit_validation(client):
-    """金额必须 > 0；负数 / 0 / 缺字段都应 422"""
-    assert client.post("/api/deposit", json={"currency": "cny", "amount": 0}).status_code == 422
-    assert client.post("/api/deposit", json={"currency": "cny", "amount": -100}).status_code == 422
-    assert client.post("/api/deposit", json={"currency": "usd", "amount": 100}).status_code == 422
-    assert client.post("/api/deposit", json={"amount": 100}).status_code == 200  # currency 默认 cny
+def test_cash_amount_must_be_positive(client):
+    """金额必须 > 0（CashWriteRequest.amount gt=0）：0 / 负数 → 422，deposit / withdraw 都守"""
+    for op in ("deposit", "withdraw"):
+        assert client.post(f"/api/cash/CNY/{op}", json={"amount": 0}).status_code == 422
+        assert client.post(f"/api/cash/CNY/{op}", json={"amount": -100}).status_code == 422
 
 
-def test_withdraw(client, tmp_store):
-    r = client.post("/api/withdraw", json={"currency": "cny", "amount": 1000.0})
+def test_cash_withdraw_cny(client, tmp_store):
+    r = client.post("/api/cash/CNY/withdraw", json={"amount": 1000.0})
     assert r.status_code == 200
     # 原 12345.67 - 1000 = 11345.67
     assert r.json()["cash_cny"] == pytest.approx(11345.67)
-
-
-def test_withdraw_insufficient_blocked(client):
-    """v2 阶段 5: AUD 余额 100 但扣 500 → 拒绝（防 AUD 现金扣成负数）"""
-    r = client.post("/api/withdraw", json={"currency": "aud", "amount": 500.0})
-    assert r.status_code == 400
-    assert "余额不足" in r.json()["detail"]
-
-
-def test_gold_buy_avg_cost(client, tmp_store):
-    """加权均价：原 50g@1000 → 再买 10g@1100 → 60g 均价应为 (50000+11000)/60 = 1016.67"""
-    r = client.post("/api/gold/buy", json={"grams": 10.0, "price_per_gram": 1100.0})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["gold_grams"] == pytest.approx(60.0)
-    assert body["gold_avg_cost_cny_per_gram"] == pytest.approx(1016.67, abs=0.01)
-    rows = tmp_store.read_history()
-    assert any(r["action"] == "bought" and r["units"] == 10.0 for r in rows)
-
-
-def test_gold_sell_with_fee(client, tmp_store):
-    """卖 10g @ 1100，手续费 0.38%：毛 11000 → 净 11000*(1-0.0038)=10958.20"""
-    r = client.post("/api/gold/sell", json={"grams": 10.0, "price_per_gram": 1100.0})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["gold_grams"] == pytest.approx(40.0)
-    # 现金 12345.67 + 10958.20 = 23303.87
-    assert body["cash_cny"] == pytest.approx(23303.87, abs=0.01)
-
-
-def test_gold_sell_insufficient(client):
-    """卖 100g 但只有 50g → 400 错误，且 portfolio 未变"""
-    r = client.post("/api/gold/sell", json={"grams": 100.0, "price_per_gram": 1100.0})
-    assert r.status_code == 400
-    # 验证持仓未变
-    g = client.get("/api/gold").json()
-    assert g["grams"] == 50.0
-
-
-def test_gold_set_no_history(client, tmp_store):
-    r = client.post("/api/gold/set", json={"grams": 99.5})
-    assert r.status_code == 200
-    assert r.json()["gold_grams"] == 99.5
-    assert r.json()["history_appended"] is False
-    assert tmp_store.read_history() == []
-
-
-def test_gold_offset_writes_strategy(client, tmp_store, monkeypatch):
-    """报浙商克价 → 反推 offset → 写回 strategy.md"""
-    # mock infer_offset_pct 返回固定值
-    monkeypatch.setattr("openinvest.connectors.web_api.routers.write.infer_offset_pct", lambda bank_price: 0.025)
-
-    r = client.post("/api/gold/offset", json={"bank_price": 1130.0})
-    assert r.status_code == 200
-    assert "0.025" in r.json()["message"] or "+2.50%" in r.json()["message"]
-    s = tmp_store.read("strategy")
-    gold = next(a for a in s.get("target_assets") if a.get("symbol") == "GC=F")
-    assert gold["price_offset_pct"] == 0.025
-
-
-def test_gold_offset_keeps_concurrent_strategy_write(client, tmp_store, monkeypatch):
-    """gold/offset 联网反推期间并发的 strategy 写不能被旧快照覆盖，且不丢其它
-    frontmatter key（#233-3：端点进线程池后并发真实发生）"""
-    import threading
-
-    with tmp_store.transaction("strategy") as tx:
-        tx["target_asset"] = "legacy-key"  # 生产 strategy.md 真有的遗留 key
-    entered, added = threading.Event(), threading.Event()
-
-    def _slow_infer(bank_price):  # 代替联网拉金价：等并发写完成再返回
-        entered.set()
-        added.wait(5)
-        return 0.025
-
-    monkeypatch.setattr("openinvest.connectors.web_api.routers.write.infer_offset_pct", _slow_infer)
-    out = {}
-    t = threading.Thread(target=lambda: out.setdefault("r", client.post("/api/gold/offset", json={"bank_price": 1130.0})))
-    t.start()
-    try:
-        assert entered.wait(5)
-        r_add = client.post("/api/strategy/asset", json={"symbol": "VAS.AX", "max_single_invest_cny": 8000})
-        assert r_add.status_code == 200
-    finally:
-        added.set()
-        t.join(10)
-    assert out["r"].status_code == 200
-    s = tmp_store.read("strategy")
-    assert "VAS.AX" in [a["symbol"] for a in s.get("target_assets")]
-    assert next(a for a in s.get("target_assets") if a["symbol"] == "GC=F")["price_offset_pct"] == 0.025
-    assert s.get("target_asset") == "legacy-key"
 
 
 def test_concurrent_deposit_no_lost_update(client, tmp_store):
@@ -409,7 +318,7 @@ def test_concurrent_deposit_no_lost_update(client, tmp_store):
     import concurrent.futures
 
     def _do_deposit():
-        return client.post("/api/deposit", json={"currency": "cny", "amount": 100}).status_code
+        return client.post("/api/cash/CNY/deposit", json={"amount": 100}).status_code
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
         codes = list(pool.map(lambda _: _do_deposit(), range(10)))
@@ -460,7 +369,7 @@ def test_committee_run_and_status_done(client, monkeypatch):
 
     # 等异步任务完成
     import time
-    deadline = time.time() + 5
+    deadline = time.time() + 15  # CI 慢机器上 5s 偶发不够（2026-10-18 #495 首跑 flake）
     final = None
     while time.time() < deadline:
         s = client.get(f"/api/committee/{task_id}")
@@ -688,8 +597,6 @@ def test_committee_view_still_running_shows_placeholder(client, tmp_store, monke
 
 def test_holdings_list_v2(client, tmp_store, monkeypatch):
     """GET /api/holdings 返回 v2 通用结构（cash + holdings）"""
-    # 模拟一次写入触发 v1→v2 自动迁移
-    client.post("/api/deposit", json={"currency": "cny", "amount": 0.01})  # 触发迁移
     r = client.get("/api/holdings")
     assert r.status_code == 200
     body = r.json()
@@ -715,8 +622,7 @@ def test_create_holding(client, tmp_store):
 
 
 def test_create_duplicate_holding_409(client, tmp_store):
-    """触发自动迁移把 NDQ 进 holdings，再 POST 同 symbol → 409"""
-    client.post("/api/deposit", json={"currency": "cny", "amount": 0.01})  # 触发迁移
+    """NDQ 已在 holdings，再 POST 同 symbol → 409"""
     r = client.post("/api/holdings", json={
         "symbol": "NDQ.AX", "kind": "etf", "cost_currency": "AUD",
     })
@@ -725,7 +631,6 @@ def test_create_duplicate_holding_409(client, tmp_store):
 
 def test_update_holding(client, tmp_store):
     """PUT /api/holdings/{symbol} 部分字段更新"""
-    client.post("/api/deposit", json={"currency": "cny", "amount": 0.01})  # 触发迁移
     r = client.put("/api/holdings/NDQ.AX", json={"display_name": "新显示名"})
     assert r.status_code == 200
     assert r.json()["display_name"] == "新显示名"
@@ -738,7 +643,6 @@ def test_update_holding_404(client):
 
 def test_delete_holding_with_units_blocked(client, tmp_store):
     """units > 0 时拒绝删除（防误删）"""
-    client.post("/api/deposit", json={"currency": "cny", "amount": 0.01})  # 触发迁移
     r = client.delete("/api/holdings/NDQ.AX")
     assert r.status_code == 400
     assert "持仓" in r.json()["detail"]
@@ -1087,12 +991,15 @@ def skill_client(client, monkeypatch):
     """skill-parity 端点用的 client。
 
     services/skill_views.py 的 builder 走**函数内延迟 import**（utils.exchange_fee /
-    utils.gold_price / utils.fx），所以要 patch 源模块属性，client fixture 只 patch
-    了 web_api 命名空间里的别名。
+    utils.gold_price / utils.fx / utils.quotes），所以要 patch 源模块属性，client fixture 只 patch
+    了 web_api 命名空间里的别名。status 的每个持仓都走 utils.quotes.get_quote（不再按 symbol 特判），
+    quotes / fx 模块各自 import 了 get_history_data / get_gold_snapshot 的引用，也要各 patch 一份，
+    否则测试会真去打 yfinance。
     """
     import openinvest.utils.exchange_fee as ef
     import openinvest.utils.fx as fx
     import openinvest.utils.gold_price as gp
+    import openinvest.utils.quotes as quotes
 
     @dataclass
     class FakeSnap:
@@ -1108,15 +1015,20 @@ def skill_client(client, monkeypatch):
         index=pd.date_range("2026-04-28", periods=5, freq="D"),
     )
     monkeypatch.setattr(ef, "get_history_data", lambda symbol, period="5d": fake_df)
+    monkeypatch.setattr(quotes, "get_history_data", lambda symbol, period="5d", **kw: fake_df)
+    monkeypatch.setattr(fx, "get_history_data", lambda symbol, period="5d", **kw: fake_df)
+    fx._RATE_CACHE.clear()
     monkeypatch.setattr(gp, "get_gold_snapshot", lambda offset_pct=0.0: FakeSnap(offset_pct=offset_pct))
+    monkeypatch.setattr(quotes, "get_gold_snapshot", lambda offset_pct=0.0: FakeSnap(offset_pct=offset_pct))
     monkeypatch.setattr(fx, "total_portfolio_value_cny", lambda pm, prices, base="CNY": (100000.0, {}))
     return client
 
 
 # cmd_status 的输出 key 集——/api/skill/status 必须与 CLI 同形状（防 local/remote 漂移）
 _CLI_STATUS_KEYS = {
-    "user", "cash", "ndq", "gold", "all_holdings",
+    "user", "cash", "gold", "all_holdings",
     "total_assets_cny", "fx", "live_prices",
+    "performance",   # 真实账户业绩块（TWR/XIRR/回撤/vs 基准），CLI / MCP / REST 同一视图
 }
 
 
@@ -1132,6 +1044,13 @@ def test_skill_status_matches_cli_shape(skill_client):
     assert b["total_assets_cny"] == 100000.0
     syms = [h["symbol"] for h in b["all_holdings"]]
     assert "NDQ.AX" in syms and "GC=F" in syms
+    # 克价口径按 proxy_kind 认（不按 symbol）：gold 汇总块 + live_prices 来自同一个 get_quote
+    assert b["gold"]["now_cny_per_gram"] == 1100.0
+    assert b["live_prices"] == {"gold_usd_per_oz": 2400.0, "usdcny": 7.2}
+    # NDQ.AX 不再有专属 ndq 块，和别的持仓一样只出现在 all_holdings
+    assert "ndq" not in b
+    ndq = next(h for h in b["all_holdings"] if h["symbol"] == "NDQ.AX")
+    assert ndq["current_price"] == 42.5 and ndq["market_value"] == pytest.approx(42.5 * ndq["units"], abs=0.01)
 
 
 def test_skill_strategy(skill_client):
@@ -1190,6 +1109,19 @@ def test_skill_buy_appends_history_with_remote_source(skill_client, tmp_store):
     assert trades[-1]["source"] == "skill_remote"
 
 
+def test_skill_deposit_idempotency_key_body_or_header_records_once(skill_client, tmp_store):
+    """/api/skill/* 接 body.idempotency_key 或 Idempotency-Key header（ADR-016）：远端 CLI
+    超时重发同 key → hub 只入账一次，第二次 200 + {"status": "duplicate"}。"""
+    body = {"currency": "CNY", "amount": 100, "idempotency_key": "dep-1"}
+    assert skill_client.post("/api/skill/deposit", json=body).json()["status"] == "ok"
+    r = skill_client.post("/api/skill/deposit", json=body)
+    assert r.status_code == 200 and r.json()["status"] == "duplicate"
+    r = skill_client.post("/api/skill/deposit", json={"currency": "CNY", "amount": 100},
+                          headers={"Idempotency-Key": "dep-1"})
+    assert r.json()["status"] == "duplicate"
+    assert PortfolioManager(store=tmp_store).cash_amount("CNY") == pytest.approx(12345.67 + 100)
+
+
 def test_skill_sell_insufficient_units_is_400(skill_client):
     r = skill_client.post("/api/skill/sell", json={
         "symbol": "NDQ.AX", "units": 99999, "price": 42.0,
@@ -1215,6 +1147,8 @@ def test_doctor_endpoint(skill_client, monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     r = skill_client.get("/api/doctor")
+    # hub 版本要能在 doctor 里看到：远端 CLI 的幂等键重试提示让 agent 据此判断 hub 是否已支持
+    assert r.json().get("version"), r.json()
     assert r.status_code == 200
     b = r.json()
     assert b["status"] in {"ready", "needs_setup"}
@@ -1295,6 +1229,26 @@ def test_committee_save_roundtrip(skill_client, tmp_store):
     assert str(tmp_store.root) in str(saved), "必须落在（测试隔离的）memory root 下"
     assert "QUANT_R1" in saved.read_text(encoding="utf-8")
     assert "verdict" in b["verdict"] and "confidence" in b["verdict"]
+
+
+def test_committee_save_records_provider_and_model(skill_client, tmp_store):
+    """hub 的 persist RPC 也要把 host 的 provider / model 落进 Input Health（复盘 model_era = provider:model）；
+    不传 = claude:unknown。"""
+    import json as _json
+    import re
+    from pathlib import Path
+    transcript = "=== CIO ===\nverdict: HOLD\nconfidence: 0.55\nalloc_cny: 0\n"
+
+    def _health(body):
+        r = skill_client.post("/api/committee/save", json={"symbol": "NDQ.AX", "transcript": transcript, **body})
+        assert r.status_code == 200
+        text = Path(r.json()["saved"]).read_text(encoding="utf-8")
+        return _json.loads(re.search(r"## Input Health.*?```json\n(.*?)\n```", text, re.S).group(1))
+
+    h = _health({"provider": "hermes", "model": "claude-haiku-5-5"})
+    assert (h["provider"], h["model"]) == ("hermes", "claude-haiku-5-5")
+    h = _health({})
+    assert (h["provider"], h["model"]) == ("claude", "unknown")
 
 
 def test_committee_save_empty_transcript_400(skill_client):
@@ -1398,6 +1352,7 @@ def test_config_endpoints_roundtrip(client):
         "verdict.cash_opportunity_cost_rule_enabled",  # ADR-024
         "verdict.gold_defense_dca_enabled", "dreaming.llm_verify_enabled",
         "dca.auto_dca_enabled", "dca.auto_dca_amount_cny",
+        "autopilot.enabled", "autopilot.commission_bps", "autopilot.min_order_cny",  # 模拟账户 autopilot
         # ADR-017: event RAG + staleness 阈值也进 config API 白名单(558d9e9)
         "event.enabled", "event.min_severity", "event.max_rounds",
         "event.max_per_source", "event.rag_top_k", "event.rag_window_days",

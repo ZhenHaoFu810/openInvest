@@ -19,8 +19,6 @@ import subprocess
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from dotenv import load_dotenv
-
 log = logging.getLogger(__name__)
 
 # 三路径统一架构（2026-05-16）：daily_report 不再直接 import core.committee 原语,
@@ -48,8 +46,6 @@ from openinvest.utils.exchange_fee import (
 )
 from openinvest.utils.gold_price import format_gold_report, get_gold_snapshot
 from openinvest.utils.quotes import get_quote, is_eastmoney_fund
-
-load_dotenv()
 
 # 数据陈旧阈值与硬熔断通过 load_config() 动态加载以支持运行时配置，env/默认只作 bootstrap
 
@@ -462,9 +458,27 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
     asset_committees: Dict[str, Dict[str, Any]] = {}
     macro_view = ""
     event_brief = ""
+    # agent 模式（后端不调模型）：委员会已由宿主 Agent 逐个 prepare → submit，这里只读当天交卷；
+    # 没交卷的标的列入 missing_verdicts（日报照出，但调用方必须当失败处理，绝不拿后端模型补跑）
+    from openinvest.utils.llm import reasoning_by_agent
+    agent_mode = reasoning_by_agent()
+    missing_verdicts: List[str] = []
 
     if not target_symbols_to_run:
         log.error("所有 target_assets 都因 staleness 被 skip; session 不跑")
+    elif agent_mode:
+        from openinvest.core.committee_runner import load_submitted_committee
+        for sym in target_symbols_to_run:
+            rec = load_submitted_committee(sym, today)
+            if rec is None:
+                missing_verdicts.append(sym)
+                skipped_assets.add(sym)
+                store.dream_event({"phase": "committee_missing", "symbol": sym, "date": today})
+                continue
+            asset_committees[sym] = rec
+        macro_view = next((r["macro_view"] for r in asset_committees.values() if r.get("macro_view")), "")
+        if missing_verdicts:
+            log.error("agent 模式：这些标的今天没有交卷 %s", missing_verdicts)
     else:
         from openinvest.core.committee_runner import run_committee_session
 
@@ -517,7 +531,9 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         friction_report=friction_report,
         event_brief=event_brief,
     )
-    final_decision_gemini = _run_gemini_cli_review(gemini_prompt)
+    # agent 模式后端不发起任何模型调用（Gemini/agy CLI 也是模型）——第二意见交给宿主 Agent
+    final_decision_gemini = ("（agent 模式：第二意见由宿主 Agent 负责，后端不发起模型调用）"
+                             if agent_mode else _run_gemini_cli_review(gemini_prompt))
 
     # 3.5) 翻译官：人话解读（一次 LLM 调用；任何失败 graceful 回落
     # builder 内的确定性一句话，邮件照发）
@@ -567,7 +583,7 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
             "path_lines": path_lines,
             "cio_memo": r["report"].cio_memo,
         })
-    if t_inputs:
+    if t_inputs and not agent_mode:   # agent 模式后端不调模型 → 用 builder 的确定性一句话
         # 只有 LLM 调用 + 输出解析在 graceful 守卫内（外部依赖才配 graceful）
         try:
             from openinvest.capabilities.sdk_agent import SDKAgent
@@ -590,6 +606,34 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         log.warning(f"纪律台账渲染失败 graceful: {e}")
         discipline_md = ""
 
+    # 账户业绩（TWR/XIRR/回撤/vs 基准，账本重放 + 行情库；零 LLM；失败不阻断报告）
+    try:
+        from openinvest.services.account_performance import (
+            build_account_performance, render_performance_md,
+        )
+        performance_md = render_performance_md(build_account_performance(pm))
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"账户业绩渲染失败 graceful: {e}")
+        performance_md = ""
+
+    # send_email=False 只会是宿主 agent cron（cmd_daily_report）调用——报告投递去
+    # Discord/Weixin/QQ 等聊天平台，走无 HTML 的 chat 变体。
+    render_target = "email" if send_email else "chat"
+
+    # 今日持仓归因（每持仓涨跌 / 对组合贡献 / 汇率 / 对比基准 + 近 7 天事件 + 未来 7 天财报·除息；
+    # 持仓行情 / 汇率 / 事件只读本地库，联网仅日历与基准刷新（后者每天一次、通常账户业绩段已刷过）；
+    # 零 LLM；失败不阻断报告，子步骤失败在段内降级为 n/a）
+    try:
+        from openinvest.services.holdings_digest import build_holdings_digest, render_digest_md
+        holdings_digest_md = render_digest_md(build_holdings_digest(pm, today=today), render_target)
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"今日持仓归因渲染失败 graceful: {e}")
+        holdings_digest_md = ""
+
+    # 裁决中性度：读最近一次复盘落的聚合（零 LLM；没复盘过 / 读失败 → None → 报告不出这行）
+    from openinvest.jobs.verdict_review import load_neutrality
+    neutrality = load_neutrality()
+
     # D17：委员会 / Gemini / 翻译官都已跑完才读——只进邮件，不进任何 LLM 输入
     asset_events = _load_asset_events(target_assets)
 
@@ -605,17 +649,26 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         final_decision_gemini=final_decision_gemini,
         plain_summaries=plain_summaries,
         discipline_md=discipline_md,
-        # send_email=False 只会是宿主 agent cron（cmd_daily_report）调用——
-        # 报告投递去 Discord/Weixin/QQ 等聊天平台，走无 HTML 的 chat 变体。
-        render_target="email" if send_email else "chat",
+        performance_md=performance_md,
+        holdings_digest_md=holdings_digest_md,
+        render_target=render_target,
         asset_events=asset_events,
         confidence_lookup=confidence_lookup,
+        neutrality=neutrality,
     )
+
+    if missing_verdicts:
+        # 渲染层把 skipped 一律写成"数据缺失"——没交卷要单独、置顶说清楚
+        full_report = (f"> ⚠️ 今天这些标的没有委员会裁决（agent 模式下由宿主 Agent 交卷，未收到）："
+                       f"{', '.join(missing_verdicts)}。本日报不含它们的裁决。\n\n{full_report}")
 
     # 5) Append 给 Dreaming（被跳过的资产标 N/A）
     daily_block = f"**委员会摘要**\n\n- 宏观: {macro_view[:200]}\n\n**资产裁决**:"
     for a in target_assets:
         sym = a["symbol"]
+        if sym in missing_verdicts:
+            daily_block += f"\n- {a.get('display_name', sym)} ({sym}): MISSING（Agent 未交卷）"
+            continue
         if sym in skipped_assets:
             daily_block += f"\n- {a.get('display_name', sym)} ({sym}): SKIPPED（数据缺失）"
             continue
@@ -659,6 +712,8 @@ def run(send_email: bool = True, include_report: bool = False) -> Dict[str, Any]
         "date": today,
         "assets": [a["symbol"] for a in target_assets],
         "skipped_assets": sorted(skipped_assets),
+        # agent 模式：目标标的里今天没交卷的（调用方必须当失败处理）
+        "missing_verdicts": missing_verdicts,
         "data_warnings": data_warnings,
         "email": email_status,
         "verdicts": {

@@ -17,6 +17,7 @@ from openinvest.core.regime_probability import (
     get_regime_probability,
 )
 from openinvest.utils.advisory import is_advisory_mode
+from openinvest.utils.base_currency import single_invest_cap
 from openinvest.utils.exchange_fee import (
     analyze_multi_timeframe, get_history_data, get_macro_data,
 )
@@ -27,6 +28,40 @@ log = logging.getLogger(__name__)
 from openinvest.core.runner.event_brief import _get_event_store, _resolve_event_brief, format_event_brief, resolve_event_brief_multi
 from openinvest.core.runner.loaders import _build_default_portfolio_summary, append_event_stance_line, load_prior_insights, load_sentiment_brief, load_valuation_brief
 from openinvest.core.runner.intervention import _extract_regime_label, _save_path_snapshot, gold_defense_dca_plan, record_intervention
+
+PORTFOLIO_SUMMARY_STUB_MARKER = "portfolio_summary 完整版构建失败"  # loaders._build_default_portfolio_summary 兜底文案
+
+
+def build_input_health_facts(
+    df: Any, *, event_brief: str, sentiment_brief: str, valuation_brief: str,
+    prior_insights: str, reentry_reference: str, prob_hint: Any,
+    portfolio_summary: str,
+) -> Dict[str, Any]:
+    """资产级输入健康位（纯函数）：行情最后一根 / 本次刷新是否失败 / 哪些输入为空。
+
+    只记事实：`empty_inputs` 列出为空的输入名，不下"降级"判断（估值对黄金本就为空）。
+    """
+    facts: Dict[str, Any] = {}
+    try:
+        facts["price_last_bar"] = str(df.index[-1].date())
+    except Exception:  # noqa: BLE001  index 不是时间戳 / 空 df → 不记
+        facts["price_last_bar"] = None
+    try:
+        facts["price_fetch_failed"] = bool(getattr(df, "attrs", {}).get("yf_fetch_failed", False))
+    except Exception:  # noqa: BLE001
+        facts["price_fetch_failed"] = None
+    empty = [name for name, val in (
+        ("event_brief", event_brief), ("sentiment_brief", sentiment_brief),
+        ("valuation_brief", valuation_brief), ("prior_insights", prior_insights),
+        ("reentry_reference", reentry_reference),
+    ) if not val]
+    if prob_hint is None:
+        empty.append("prob_hint")
+    if not portfolio_summary or PORTFOLIO_SUMMARY_STUB_MARKER in portfolio_summary:
+        empty.append("portfolio_summary")
+    facts["empty_inputs"] = empty
+    return facts
+
 
 def run_committee_for_symbol(
     symbol: str,
@@ -40,6 +75,7 @@ def run_committee_for_symbol(
     sentiment_brief: Optional[str] = None,
     valuation_brief_override: Optional[str] = None,
     probability_table: Optional[Dict[tuple, RegimeProbability]] = None,
+    shared_input_health: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """端到端跑单资产 committee
 
@@ -60,6 +96,8 @@ def run_committee_for_symbol(
             一次性算好传进来；None → 内部调 load_sentiment_brief() fallback。
         valuation_brief_override: 估值（仅权益类）。per-asset，None → 内部调
             load_valuation_brief(symbol, price_quantile_2y)。
+        shared_input_health: session 层才知道的市场级健康位（macro_data_empty 等），
+            与本函数算的资产级健康位合并后经 run_committee(input_health=) 写进 transcript。
     """
     def emit(phase: str, **extra: Any) -> None:
         if progress_callback is None:
@@ -134,6 +172,7 @@ def run_committee_for_symbol(
         emit("event_brief_loaded", event_brief_preview=effective_event_brief[:240])
 
     # 4. Macro view —— 共享版优先（多资产 orchestrator 已经跑过一次）
+    input_health: Dict[str, Any] = dict(shared_input_health or {})
     if shared_macro_view is not None:
         macro_view = shared_macro_view
         emit("macro_done", macro_preview=macro_view[:240], shared=True)
@@ -144,6 +183,7 @@ def run_committee_for_symbol(
         except Exception as e:  # noqa: BLE001
             log.warning(f"get_macro_data 失败: {e}")
             macro_data = {}
+        input_health["macro_data_empty"] = not macro_data
         macro_view = run_macro_view(str(macro_data), event_brief=effective_event_brief)
         emit("macro_done", macro_preview=macro_view[:240])
 
@@ -239,6 +279,17 @@ def run_committee_for_symbol(
     if defense_dca is not None:
         emit("gold_defense_dca_gate", asset=symbol, **defense_dca)
 
+    # 5.95. 输入健康位（事实不判断）：哪些输入为空、行情最后一根是哪天、这次刷新成没成。
+    # 约 20 条 graceful "退化空串"路径过去在 transcript 里不留痕，verdict_review 分不出
+    # "残缺输入上做的裁决"——现在随 transcript 落 Input Health 块（persist 再补 worker /
+    # 改写标记）。valuation 对黄金本就为空，这里只记事实，算不算降级由复盘层决定。
+    input_health.update(build_input_health_facts(
+        df, event_brief=effective_event_brief, sentiment_brief=effective_sentiment_brief,
+        valuation_brief=effective_valuation_brief, prior_insights=prior_insights,
+        reentry_reference=reentry_reference, prob_hint=_prob_hint,
+        portfolio_summary=portfolio_summary,
+    ))
+
     # 6. 跑多轮辩论 + CIO
     # 顾问模式不落 transcript 到真实 memory——群聊问的资产多半不在用户 target_assets
     # 里，落盘会把陌生标的混进用户自己的委员会历史，污染他后续查 history/decisions。
@@ -255,10 +306,14 @@ def run_committee_for_symbol(
         valuation_brief=effective_valuation_brief,
         atr_defense_on=atr_defense_on,
         defense_dca=defense_dca,
+        # Sanity 6 输入：用户单次入场上限（顾问模式无真实策略 → 不设限，也不把主人的上限泄进群聊）
+        single_invest_cap=0 if _advisory else single_invest_cap(target, pm.strategy),
         max_debate_rounds=max_debate_rounds,
         progress_callback=progress_callback,
         persist_to_memory=not _advisory,
+        input_health=input_health,
     )
+    result["input_health"] = input_health
 
     # 路径分布参考随 result 返回——entry（邮件/GUI/CLI）渲染给用户，
     # 与 CIO prompt 里看到的是同一份文本（所见即所得，防口径分叉）。
@@ -345,7 +400,7 @@ def run_committee_session(
 
     Args:
         symbols: 要跑的 symbol 列表。None → 读 strategy.target_assets 全部
-        max_debate_rounds: Quant/Risk cross-challenge 轮数上限，默认 4（三路径对齐）
+        max_debate_rounds: Quant/Risk 辩论总轮数上限（含 Round 1），默认 4 = Round 1 + 最多 3 轮 cross-challenge（三路径对齐）
         progress_callback: phase 事件推送（Web SSE 用；Skill/Cron 传 None）
         event_brief_override: 优先级最高的 event_brief 注入。含空串等价"我不要事件"
         event_ids: Web event-trigger 路径用。session 内部翻译成 brief。与 override
@@ -436,6 +491,8 @@ def run_committee_session(
              preview=event_brief[:240])
 
     # ---- Step 4: shared macro_view ----
+    # 市场级输入健康位（随每个资产的 transcript 落盘；资产级部分在 run_committee_for_symbol 算）
+    shared_health: Dict[str, Any] = {"event_brief_source": event_brief_source}
     if macro_view_override is not None:
         macro_view = macro_view_override
         emit("macro_done", macro_preview=macro_view[:240], shared=True,
@@ -448,6 +505,7 @@ def run_committee_session(
         except Exception as e:  # noqa: BLE001
             log.warning(f"get_macro_data 失败 graceful 退化空 dict: {e}")
             macro_data = {}
+        shared_health["macro_data_empty"] = not macro_data
         macro_view = run_macro_view(str(macro_data), event_brief=event_brief)
         emit("macro_done", macro_preview=macro_view[:240], shared=True)
 
@@ -490,6 +548,7 @@ def run_committee_session(
             portfolio_summary_override=portfolio_summary_override,
             sentiment_brief=sentiment_brief,  # 市场级共享，避免每资产各拉 VIX/CNN
             probability_table=prob_table,
+            shared_input_health=shared_health,
             # prior_insights_override 不传 → service 内 load_prior_insights(sym)
             # 每个资产 insights 不同，session 不预加载
             # valuation_brief_override 不传 → service 内 load_valuation_brief(sym)
@@ -563,6 +622,7 @@ def run_committee_session(
     }
 
 __all__ = [
+    "build_input_health_facts",
     "run_committee_for_symbol",
     "run_committee_session",
 ]

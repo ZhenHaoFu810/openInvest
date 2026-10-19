@@ -1,6 +1,6 @@
 ---
 name: invest-backup
-version: 0.2.3 # x-release-please-version
+version: 0.3.0 # x-release-please-version
 description: Back up / restore openInvest's local state — memory/ (holdings, strategy, user profile, committee records, dream logs) + db/ (trade ledger, job run history, market-data cache) + .env (SMTP/API credentials) + user_profile.json. All of this data is .gitignore'd with no historical versions in git, so a single accidental overwrite (e.g. slipping and running some one-off migration/init script) means real data loss — no git revert available. **Proactive trigger scenarios** — "backup invest data / 备份一下 openInvest 的数据", "my holdings/strategy look wiped / 我的持仓/策略好像被清空了", "invest data is lost / invest 数据丢了", "restore invest backup / 恢复一下 invest 的备份", before any reinstall/migration of the openInvest deployment on this machine, or right before running an unfamiliar migration/init script (back up first, then act).
 platforms: [linux, macos]
 metadata:
@@ -32,13 +32,14 @@ openInvest's real data (holdings/strategy/user profile/committee records under `
 ```
 
 - **backup**: packs `memory/`, `db/*.sqlite`, `db/*.db`, `.env`, `user_profile.json*` into a single UTC-timestamped zip. The data directory is resolved via `openinvest.paths.INVEST_ROOT` (same precedence order as the rest of the backend: `INVEST_HOME` env → repo-marker detection → cwd) instead of re-guessing paths in shell.
-- **restore**: unpacks a zip back into the data directory. **By default it refuses to overwrite a `portfolio.md` that already contains real holdings/cash** (same criterion as the 2026-05-10 incident defense in `lifecycle_cmds.py:_write_v2_portfolio`: cash > 0 in any currency, or non-empty holdings, counts as real data) — to confirm the overwrite you must explicitly pass `--force`. With or without `--force`, the current state is automatically backed up before restoring, so the operation itself is reversible.
-- **list**: lists existing backups, newest first, with sizes.
+- **restore**: unpacks a zip back into the data directory. **By default it refuses to overwrite a `portfolio.md` that already contains real holdings/cash** (same criterion as the 2026-05-10 incident defense in `lifecycle_cmds.py:_write_v2_portfolio`: cash > 0 in any currency, or non-empty holdings, counts as real data) — to confirm the overwrite you must explicitly pass `--force`. With or without `--force`, the current state is automatically backed up before restoring, so the operation itself is reversible. **Stop the scheduler and any web / MCP process first**: running processes hold open SQLite connections and the old `-shm` for the live databases, and restore overwrites `trades.db` (and possibly its `-wal`) underneath them — restoring over a live database is not safe.
+- **`backup` is safe to run while the scheduler is running** (`restore` is not — see above). It first flushes (checkpoints) the WAL of the SQLite databases into their main files, and any `*.db-wal` that could not be flushed is packed too — trades that exist only in the write-ahead log are not lost. (Backends older than this behaviour skip the flush with a warning on stderr; the `*.db-wal` files are still packed.)
+- **list**: lists existing backups, newest first, with sizes — both manual `openinvest-backup-*.zip` and the backend's daily automatic `auto_*.zip` (scheduler job `backup`, 03:30 Asia/Shanghai, keeps the latest 14; no `.backtest*` on weekdays, Sunday's `auto_*_full.zip` includes it; `restore` accepts either).
 
 ## What is not included
 
-- The `memory/.backtest*` family of directories (historical backtest caches, tens of MB, regenerable with scripts like `scripts/backtest_committee.py` — not irreplaceable data) — this skill currently does **not exclude** them, because the size is still acceptable and `backup` semantically means "the entire data directory"; if `memory/` ever grows too large to package comfortably, exclude them separately then.
-- `db/*.sqlite-journal`, `*.db-shm`, `*.db-wal`: SQLite runtime temp files — they are rebuilt automatically after a restore, and carrying them along could actually capture a half-committed state.
+- The `memory/.backtest*` family of directories (about 240 MB zipped as of 2026-10, ~90% of a full backup). The historical backtest caches in there are regenerable with scripts like `scripts/backtest_committee.py`, but `memory/.backtest/` also holds the forward paper fleet (from 2026-07-24), which cannot be re-run. The manual `backup` therefore does **not exclude** them (it means "the entire data directory"). The backend's automatic `auto_*.zip` leaves them out on weekdays and includes them once a week (Sunday, Asia/Shanghai) as `auto_*_full.zip`.
+- `db/*.sqlite-journal`, `*.db-shm`: SQLite runtime temp files — rebuilt automatically after a restore. (`*.db-wal` **is** packed: it holds committed writes that have not reached the main file yet; `backup` checkpoints first so it is normally empty.)
 - `*.lock`: fcntl file locks, cleared automatically on process restart, no need to keep.
 
 ## Relationship to migrate_profile.py-class incidents

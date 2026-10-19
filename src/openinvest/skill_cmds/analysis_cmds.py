@@ -27,6 +27,7 @@ ROOT = INVEST_ROOT
 
 __all__ = [
     "cmd_status",
+    "cmd_performance",
     "cmd_strategy",
     "cmd_history",
     "cmd_what_if",
@@ -35,6 +36,8 @@ __all__ = [
     "cmd_discipline",
     "cmd_event_check",
     "cmd_ingest_event",
+    "cmd_pending_news",
+    "cmd_pending_committees",
     "cmd_news_sources",
     "cmd_decisions",
     "cmd_explain_decision",
@@ -51,6 +54,15 @@ def cmd_status(_: argparse.Namespace) -> None:
     """
     from openinvest.services.skill_views import build_status_view
     _print_json(build_status_view())
+
+
+# ---------- performance ----------
+
+def cmd_performance(_: argparse.Namespace) -> None:
+    """真实账户业绩（status["performance"] 同一块，单独拿更省 token）：
+    TWR 30d/YTD/成立以来、XIRR、最大回撤、年化波动、vs 基准、数据质量。"""
+    from openinvest.services.account_performance import build_account_performance
+    _print_json(build_account_performance())
 
 
 # ---------- strategy ----------
@@ -208,7 +220,7 @@ def cmd_correlate(args: argparse.Namespace) -> None:
 
     # 6. 可选 LLM 给一句话总结
     if args.with_llm:
-        from openinvest.utils.llm import get_llm_config_safe, needs_thinking_disabled
+        from openinvest.utils.llm import get_llm_config_safe, needs_thinking_disabled, sampling_kwargs
         api_key, base_url, model_name, _provider = get_llm_config_safe()
         if not api_key:
             out["llm_summary"] = "(--with-llm 需要 LLM_API_KEY 或 DEEPSEEK_API_KEY)"
@@ -231,7 +243,7 @@ def cmd_correlate(args: argparse.Namespace) -> None:
                         )},
                         {"role": "user", "content": ctx},
                     ],
-                    temperature=0.2,
+                    **sampling_kwargs(model_name, 0.2),
                     timeout=30,
                     # DeepSeek v4 需要 disable thinking；千问/智谱/OpenAI 不需要
                     extra_body={"thinking": {"type": "disabled"}} if needs_thinking_disabled(model_name) else None,
@@ -309,14 +321,32 @@ def cmd_record_execution(args: argparse.Namespace) -> None:
 def cmd_ingest_event(args) -> None:
     """agent 投喂新闻进事件账本（等价 MCP ingest_event，#153 方案①）"""
     from openinvest.services.event_ingest import ingest_events
+    def _csv(v):
+        return [x.strip() for x in (v or "").split(",") if x.strip()] or None
     result = ingest_events([{
         "title": args.title, "url": args.url,
         "snippet": args.snippet or "", "source": args.source or "",
         "published_at": args.ts,
+        "one_line_claim": getattr(args, "claim", None), "stance": getattr(args, "stance", None),
+        "severity": getattr(args, "severity", None), "event_type": getattr(args, "event_type", None),
+        "affected_symbols": _csv(getattr(args, "symbols", None)),
+        "entities": _csv(getattr(args, "entities", None)),
     }], ingested_by=getattr(args, "ingested_by", "host-agent") or "host-agent")
     _print_json(result)
     if result.get("status") == "error":
         sys.exit(1)
+
+
+def cmd_pending_news(args) -> None:
+    """agent 模式待办：等 Agent 归一化的新闻（等价 MCP pending_news）"""
+    from openinvest.services.agent_queue import pending_news
+    _print_json(pending_news(limit=args.limit, dismiss_urls=args.dismiss or []))
+
+
+def cmd_pending_committees(args) -> None:
+    """agent 模式待办：触发的委员会重跑请求（等价 MCP pending_committees）"""
+    from openinvest.services.agent_queue import pending_committees
+    _print_json(pending_committees())
 
 
 def cmd_news_sources(args) -> None:
