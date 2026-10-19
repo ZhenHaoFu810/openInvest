@@ -9,6 +9,7 @@
   ACCUMULATE / BUY            买 |alloc_cny| 等值，当日 close，整手向下取整，现金不足先 CNY 换汇再缩量
   TRIM                        卖 |alloc_cny| 等值（整手、≤持有量）
   SELL                        全部卖出
+  场外基金（FUND:xxx）       不成交（T+1 两段式），记 executed=False / unsupported_otc_fund
   手续费 = 成交额 × commission_bps/1e4，用 ADR-027 的 fee 活动（record_fee）另记一行。
 
 幂等（ADR-016，同 dca_daily）：每个 (date, symbol, side) 一把 state_claim；buy/sell/fee/fx 各带
@@ -28,7 +29,7 @@ from openinvest.calc.rebalance import infer_lot_size
 from openinvest.core.config import load_config
 from openinvest.core.decision_ledger import list_decisions, record_execution
 from openinvest.core.portfolio_manager import PortfolioManager, _guess_kind_from_symbol, gold_booking
-from openinvest.utils.quotes import get_quote
+from openinvest.utils.quotes import get_quote, is_eastmoney_fund
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +157,8 @@ def _fill(pm: PortfolioManager, d: Dict[str, Any], today: str, cfg) -> Dict[str,
     symbol, verdict = d["symbol"], d["verdict"]
     side = "buy" if verdict in _BUY else "sell"
     holding = _holding_for(pm, symbol)
+    if symbol.upper().startswith("FUND:") or is_eastmoney_fund(holding):
+        raise _Skip("unsupported_otc_fund", terminal=True)   # 场外基金 T+1 两段式确认，autopilot 不模拟
     price, ccy = _quote(holding, today)
     fx = _fx(ccy)
     rate = float(cfg.commission_bps) / 1e4

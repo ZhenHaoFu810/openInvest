@@ -39,6 +39,7 @@ uv run python experiments/paper_autopilot/clone_home.py --src <生产 INVEST_HOM
 | ACCUMULATE / BUY | 金额 = `|alloc_cny|`（CIO 已被 Sanity6 钳到用户上限，不二次钳）；价 = 当日 close；数量 = floor(金额 ÷ 价 ÷ 手) × 手 |
 | TRIM | 卖出 `|alloc_cny|` 等值（整手、≤ 持有量） |
 | SELL | 全部卖出（不受最小单限制） |
+| 场外基金（`FUND:` 开头，T+1 两段式） | 不成交，记 `executed=false, reason=paper_autopilot:unsupported_otc_fund` |
 
 - **必须有今天的 bar**：行情源没拉到 → `skip(stale_quote)`；最新 bar 不是今天（休市）→ `skip(market_closed)`；两者都不动账本、不占幂等闸，当日可重跑。按北京日期比 bar，
   所以美股 / 欧股（北京 16:35 还没开盘）不受支持，会 `market_closed`。黄金 proxy 不带 bar 日期，照旧成交。

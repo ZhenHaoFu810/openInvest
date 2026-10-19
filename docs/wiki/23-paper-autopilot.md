@@ -41,6 +41,7 @@ documents:
 | ACCUMULATE / BUY | `|alloc_cny|` 等值，当日 close，向下取整到整手 |
 | TRIM | 卖 `|alloc_cny|` 等值（整手、≤ 持有量） |
 | SELL | 全部卖出 |
+| 场外基金（`FUND:` 开头，T+1 两段式） | 不成交，记 `executed=false`，reason `unsupported_otc_fund` |
 
 - 必须有当日 bar：没拉到 → `stale_quote`，最新 bar 非今天 → `market_closed`（北京日期口径，美股 / 欧股不支持）；都不动账本、当日可重试。
 - 手数：`.SS/.SZ` 100、`.HK` 100、`.AX` 1、金属 / 加密小数 4 位；黄金 GC=F 按 CNY/克。

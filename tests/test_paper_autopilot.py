@@ -175,6 +175,18 @@ def test_sell_without_position_is_skipped_and_recorded(home, monkeypatch):
     assert ex["executed"] is False and ex["reason"] == "paper_autopilot:no_position"
 
 
+def test_otc_fund_unsupported_is_recorded_not_filled(home, monkeypatch):
+    _enable(monkeypatch)
+    _seed(home)
+    _verdict(home, "FUND:000001", "ACCUMULATE", 3000)
+    _market(monkeypatch, {})   # 不该取价
+    out = ap.run(TODAY)
+    assert out["filled"] == [] and out["skipped"] == [{"symbol": "FUND:000001", "reason": "unsupported_otc_fund"}]
+    ex = _decision(f"{TODAY}/FUND:000001")["execution"]
+    assert ex["executed"] is False and ex["reason"] == "paper_autopilot:unsupported_otc_fund"
+    assert home.read_history() == [] and _pm(home).cash_amount("CNY") == 30000.0
+
+
 def test_hold_and_no_alloc_do_nothing(home, monkeypatch):
     _enable(monkeypatch)
     _seed(home)
