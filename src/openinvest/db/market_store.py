@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import threading
+import time
 from openinvest.calc.symbols import is_closed_weekend
 from openinvest.paths import INVEST_ROOT
 
@@ -96,6 +97,12 @@ class MarketStore:
             CREATE TABLE IF NOT EXISTS etf_stats (
                 symbol TEXT, date TEXT, key TEXT, value REAL,
                 PRIMARY KEY (symbol, date, key)
+            )""")
+        # 5. 每个 symbol 上次向 yfinance 发起刷新的时间（unix 秒）。今天这根 bar 是盘中临时值，
+        #    exchange_fee 据此决定何时再刷；放库里是为了 CLI / MCP / cron 各进程共用一个时钟。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fetch_log (
+                symbol TEXT PRIMARY KEY, fetched_at REAL
             )""")
         self.conn.commit()
         # 兼容迁移：给老库的 daily_prices 补 high/low/volume/close_raw 列
@@ -228,6 +235,25 @@ class MarketStore:
             cursor = self.conn.cursor()
             cursor.execute("SELECT DISTINCT symbol FROM daily_prices ORDER BY symbol")
             return [r[0] for r in cursor.fetchall()]
+
+    def mark_fetched(self, symbol: str) -> None:
+        """记一次刷新（exchange_fee 拿到数据落库后调；今天这根的 TTL 刷新失败/拉空也调，让重试遵守 TTL）。"""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO fetch_log (symbol, fetched_at) VALUES (?, ?) "
+                "ON CONFLICT(symbol) DO UPDATE SET fetched_at = excluded.fetched_at",
+                (symbol, time.time()),
+            )
+            self.conn.commit()
+
+    def seconds_since_fetch(self, symbol: str) -> float:
+        """距上次 mark_fetched 的秒数；从没记过 → inf。"""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT fetched_at FROM fetch_log WHERE symbol = ?", (symbol,)
+            ).fetchone()
+            self.conn.rollback()  # #104：结束隐式读事务，别钉住 WAL checkpoint
+        return time.time() - row[0] if row else float("inf")
 
     def save_generic_price(self, symbol, date_str, close, source="yfinance",
                            high=None, low=None, volume=None, close_raw=None):
