@@ -26,6 +26,11 @@ def _memo(alloc: str) -> str:
     ("5000", 5000), ("10,000", 10000), ("¥800", 800), ("¥5,000", 5000), ("-3,000", -3000),
     ("-¥78,000", -78000), ("¥-3000", -3000), ("+5000", 5000), ("**5000**", 5000),
     ("−2000", -2000), ("5000 元", 5000), ("0", 0), ("N/A", 0),
+    # 全角 ￥ / 币种前缀（基准币种 AUD 时 LLM 常写 A$ / AUD）
+    ("￥5,000", 5000), ("A$5,000", 5000), ("AUD 5,000", 5000), ("AUD5000", 5000),
+    ("-A$3,000", -3000), ("**AUD 5,000**", 5000),
+    # 值为空、下一行是编号/无序列表：不能跨行读成 1 / -3000
+    ("\n1. 执行计划", 0), ("\n- 3000 元分批买入", 0),
 ])
 def test_alloc_text_formats(raw, expected):
     assert parse_cio_memo(_memo(raw))["alloc_cny"] == expected
@@ -33,11 +38,20 @@ def test_alloc_text_formats(raw, expected):
 
 @pytest.mark.parametrize("raw,expected", [
     (5000, 5000), (5000.9, 5000), ("5,000", 5000), ("¥-3,000", -3000), (None, 0), ("N/A", 0),
-    (float("nan"), 0), (float("inf"), 0),
+    (float("nan"), 0), (float("inf"), 0), ("1e4", 10000), ("￥5,000", 5000), ("AUD 5,000", 5000),
 ])
 def test_alloc_json_values(raw, expected):
     fields = {"verdict": "HOLD", "confidence": 0.5, "dominant_view": "macro", "suggested_alloc_cny": raw}
     assert parse_cio_memo("(json)", fields=fields)["alloc_cny"] == expected
+
+
+def test_alloc_unparseable_warns(caplog):
+    """字段存在但读不出数字 → 0 且打 warning（别悄悄落成 0）；两条路径都覆盖。"""
+    with caplog.at_level("WARNING", logger="openinvest.core.committee.cio_parse"):
+        assert parse_cio_memo(_memo("约五千"))["alloc_cny"] == 0
+        fields = {"verdict": "HOLD", "confidence": 0.5, "dominant_view": "macro", "suggested_alloc_cny": "N/A"}
+        assert parse_cio_memo("(json)", fields=fields)["alloc_cny"] == 0
+    assert sum("金额字段读不出数字" in r.message for r in caplog.records) == 2
 
 
 def test_confidence_trailing_period_parses():

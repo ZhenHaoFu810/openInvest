@@ -29,8 +29,14 @@ VERDICT_RE = re.compile(r"VERDICT\**:[\s*]*(BUY|ACCUMULATE|HOLD|TRIM|SELL)", re.
 CONFIDENCE_RE = re.compile(r"CONFIDENCE\**:[\s*]*(\d*\.?\d+)")
 DOMINANT_RE = re.compile(r"DOMINANT_VIEW\**:[\s*]*(quant|macro|risk)", re.I)
 # 金额字段名带基准币种（SUGGESTED_ALLOC_CNY / _AUD …）；接受任意三字母，老存档照常解析。
-# 值容忍 ¥5,000 / -¥3,000 / ¥-3000 / +5000，交给 _alloc_int 归一（旧式 (-?\d+) 把 10,000 读成 10、¥800 读成 0）
-ALLOC_RE = re.compile(r"SUGGESTED_ALLOC_[A-Z]{3}\**:[\s*]*([+\-−]?\s*[¥$€£]?\s*[+\-−]?\s*\d[\d,]*)")
+# 值容忍 ¥5,000 / ￥5,000 / A$5,000 / AUD 5,000 / -¥3,000 / ¥-3000 / +5000，交给 _alloc_int 归一
+# （旧式 (-?\d+) 把 10,000 读成 10、¥800 读成 0）。值前只吃 [ \t*]（不跨行）：值为空、下一行是
+# "1. 执行计划" / "- 3000" 列表时不能误读成 1 / -3000。
+ALLOC_RE = re.compile(
+    r"SUGGESTED_ALLOC_[A-Z]{3}\**:[ \t*]*"
+    r"([+\-−]?[ \t]*(?:[A-Za-z]{1,3}[ \t]*)?[¥￥$€£]?[ \t]*[+\-−]?[ \t]*\d[\d,]*)"
+)
+_ALLOC_LINE_RE = re.compile(r"SUGGESTED_ALLOC_[A-Z]{3}\**:[^\n]*")
 _ALLOC_KEY_RE = re.compile(r"suggested_alloc_[a-z]{3}")
 TRIM_REASON_RE = re.compile(r"TRIM_REASON\**:[\s*]*(concentration|stop_loss|bearish)", re.I)
 # TRIM 路径化：买回点 + 预期路径（EXECUTION_PLAN/RISK_PLAN 仍丢弃，只解析这三个）
@@ -47,12 +53,19 @@ ATR_SPIKE_RE = re.compile(r"\batr_spike_ratio=([\d.]+)")
 
 def _alloc_int(raw: Any) -> int:
     """建议金额 → 整数（基准币种）。数字直接取整；字符串去货币符号 / 千分位 / 加粗，
-    负号在货币符号前后都认（-¥3,000 / ¥-3000）；读不出数字 → 0。JSON 与正则两条路径共用。"""
+    负号在货币符号前后都认（-¥3,000 / ¥-3000）；读不出数字 → 0 + warning。JSON 与正则两条路径共用。
+    字符串先按纯数字试 float（JSON 路径的 "1e4" → 10000，不能截成 1），失败再走正则。"""
     if isinstance(raw, (int, float)):
         return int(raw)
     s = str(raw or "")
+    try:
+        return int(float(s.replace(",", "")))
+    except (ValueError, OverflowError):
+        pass
     m = re.search(r"\d[\d,]*", s)
     if not m:
+        if s.strip():
+            log.warning("parse_cio_memo: 金额字段读不出数字 → 0: %r", s[:80])
         return 0
     n = int(m.group().replace(",", ""))
     return -n if any(c in s[:m.start()] for c in "-−") else n
@@ -201,6 +214,8 @@ def parse_cio_memo(
         out["dominant_view"] = m.group(1).lower() if m else "tie"
         m = ALLOC_RE.search(text)
         out["alloc_cny"] = _alloc_int(m.group(1)) if m else 0
+        if not m and (line := _ALLOC_LINE_RE.search(text)):
+            log.warning("parse_cio_memo: 金额字段读不出数字 → 0: %r", line.group(0)[:80])
         m = TRIM_REASON_RE.search(text)
         out["trim_reason"] = m.group(1).lower() if m else None
 
