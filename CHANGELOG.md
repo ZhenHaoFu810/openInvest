@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.59.0](https://github.com/longsizhuo/openInvest/compare/v0.58.0...v0.59.0) (2026-10-19)
+
+
+### Features
+
+* **fleet:** Sonnet model arm for the paper fleet (--sonnet-arm) ([#498](https://github.com/longsizhuo/openInvest/issues/498)) ([cd12eed](https://github.com/longsizhuo/openInvest/commit/cd12eed7a4671b614024f644a2ecfa3ac2ae2371))
+* **report:** agent-mode daily report built from submitted verdicts ([#510](https://github.com/longsizhuo/openInvest/issues/510)) ([5dc8823](https://github.com/longsizhuo/openInvest/commit/5dc8823a4d7680bee5e3384d6d188ddd73e03544))
+
+
+### Bug Fixes
+
+* **init:** onboarding gold rows go through gold_booking; USD/oz is rejected without failing init ([#514](https://github.com/longsizhuo/openInvest/issues/514)) ([6ad98a6](https://github.com/longsizhuo/openInvest/commit/6ad98a62998bba519a047e12bdfbc95e6f051c38)), closes [#501](https://github.com/longsizhuo/openInvest/issues/501)
+* **what_if:** point the missing-holding hint at buy --existing-position, not the retired GUI ([#512](https://github.com/longsizhuo/openInvest/issues/512)) ([38e5325](https://github.com/longsizhuo/openInvest/commit/38e5325a51ebd1074ce86cf8737e0ed47b216859))
+
 ## [0.58.0](https://github.com/longsizhuo/openInvest/compare/v0.57.1...v0.58.0) (2026-10-18)
 
 
