@@ -5,6 +5,7 @@ locked 参数不经过这里。
 """
 from __future__ import annotations
 
+import math
 import os
 from copy import deepcopy
 from dataclasses import asdict, fields
@@ -20,6 +21,7 @@ from .tunable import (
     EventConfig,
     FleetConfig,
     FundConfig,
+    IbkrConfig,
     LanguageConfig,
     MacroBucketConfig,
     OracleAccuracyConfig,
@@ -82,7 +84,7 @@ def _read_env_overrides() -> dict[str, Any]:
     # 已知的多词 section 名（按长度降序排列，确保最长前缀优先匹配）
     _KNOWN_SECTIONS = sorted(
         ["oracle_accuracy", "macro_buckets", "staleness", "language", "portfolio",
-         "regime", "verdict", "dreaming", "reward", "sentiment", "valuation", "path", "dca", "autopilot", "event",
+         "regime", "verdict", "dreaming", "reward", "sentiment", "valuation", "path", "dca", "autopilot", "ibkr", "event",
          "scheduler", "fund"],
         key=len,
         reverse=True,
@@ -135,7 +137,7 @@ def _read_env_overrides() -> dict[str, Any]:
             converted: Any = float(val)
             if converted == int(converted):
                 converted = int(converted)
-        except ValueError:
+        except (ValueError, OverflowError):   # "nan" / "inf"：int() 抛错 → 当字符串，下游类型校验拦
             if val.lower() in ("true", "false"):
                 converted = val.lower() == "true"
             elif "," in val:
@@ -194,6 +196,7 @@ def _build_tunable_from_dict(data: dict[str, Any]) -> TunableConfig:
     dca = DCAConfig(**{k: v for k, v in dca_data.items() if k in {f.name for f in fields(DCAConfig)}})
 
     autopilot = AutopilotConfig(**{k: v for k, v in data.get("autopilot", {}).items() if k in {f.name for f in fields(AutopilotConfig)}})
+    ibkr = IbkrConfig(**{k: v for k, v in data.get("ibkr", {}).items() if k in {f.name for f in fields(IbkrConfig)}})
 
     event_data = dict(data.get("event", {}))
     # watch_schedule / sentinel_schedule 都是含逗号的 cron 串（如 "*/30 0-2,8-23 * * *"）
@@ -233,6 +236,7 @@ def _build_tunable_from_dict(data: dict[str, Any]) -> TunableConfig:
         reward=reward,
         dca=dca,
         autopilot=autopilot,
+        ibkr=ibkr,
         event=event,
         staleness=staleness,
         scheduler=scheduler,
@@ -525,8 +529,8 @@ def _coerce_and_validate(key: str, value: Any) -> Any:
             f = float(value)
         except (TypeError, ValueError):
             raise ValueError(f"{key} 需 float，得到 {value!r}")
-        if f < 0:
-            raise ValueError(f"{key} 不能为负，得到 {f}")
+        if not math.isfinite(f) or f < 0:   # NaN 过得了 f < 0 的比较，得单独拦
+            raise ValueError(f"{key} 需非负有限数，得到 {f}")
         return f
     if t == "int":
         try:
