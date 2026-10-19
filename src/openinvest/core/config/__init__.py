@@ -25,6 +25,7 @@ from .locked import (
     get_locked,
 )
 from .tunable import (
+    AutopilotConfig,
     DCAConfig,
     DreamingTunableConfig,
     EventConfig,
@@ -68,6 +69,7 @@ __all__ = [
     "SentimentConfig",
     "ValuationConfig",
     "PathConfig",
+    "AutopilotConfig",
     "DCAConfig",
     "EventConfig",
     "StalenessConfig",

@@ -238,6 +238,18 @@ class DCAConfig:
 
 
 @dataclass(frozen=True)
+class AutopilotConfig:
+    """全自动模拟账户（paper autopilot，jobs/paper_autopilot.py）
+
+    运行在独立 INVEST_HOME 里的 opt-in 执行层：把当日委员会裁决按确定性规则在本地账本上成交。
+    不下真单、不碰真实账户。dataclass 默认=禁用：fork 用户 / 生产 hub 未开启时 job 直接 no-op。
+    """
+    enabled: bool = False                       # 总开关（默认关）
+    commission_bps: float = 3.0                 # 买卖双边手续费（万分之几）
+    min_order_cny: float = 500.0                # 折算后小于它的单不下（记 skip too_small）
+
+
+@dataclass(frozen=True)
 class EventConfig:
     """事件感知与向量召回（Event RAG & Event Watcher）参数
     
@@ -338,6 +350,7 @@ class TunableConfig:
     oracle_accuracy: OracleAccuracyConfig = field(default_factory=OracleAccuracyConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)
     dca: DCAConfig = field(default_factory=DCAConfig)
+    autopilot: AutopilotConfig = field(default_factory=AutopilotConfig)
     event: EventConfig = field(default_factory=EventConfig)
     staleness: StalenessConfig = field(default_factory=StalenessConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)

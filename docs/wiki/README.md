@@ -82,6 +82,7 @@ documents:
 | 20 | [使用教程](20-agent-usage-tutorial.md) | 安装（plugin/MCP）→ onboarding → 日常自然语言用法 → 决策闭环 record_execution/decisions |
 | 21 | [情报哨兵](21-intel-sentinel.md) | 三层情报架构 + 标准哨兵 prompt 模板 + 各平台接法 + 防注入纪律 |
 | 22 | [配置参考](22-configuration.md) | LLM provider `.env` 契约 + ADR-017 runtime overrides 全表（从 README 迁入）|
+| 23 | [模拟账户 autopilot](23-paper-autopilot.md) | opt-in 执行层：独立 INVEST_HOME 里按确定性规则成交当日裁决，对照「人执行」|
 
 ## 架构决策记录 (ADR)
 

@@ -54,6 +54,7 @@
 | `news_sources [--add NAME URL] [--remove NAME_OR_URL]` | Universal, read/write | No args: list news sources (built-in + your extra RSS feeds). `--add` adds a feed after a live probe; `--remove` deletes one of your extra feeds | JSON source list |
 | `event_check [--live] [--recall SYMBOL]` | Universal | Run one news-sentinel scan. Dry-run by default (no email, no committee); `--live` sends alerts and triggers the committee; `--recall SYMBOL` only tests event recall for that symbol | JSON summary |
 | `daily_report` | cron | Full daily report over all tracked assets, with email. Burns LLM tokens — **do not run it proactively in conversation** (see SKILL.md constraints) | report |
+| `autopilot_daily` | cron (operator, separate `INVEST_HOME` only) | Paper-account daily flow: `daily_report` (no email) → `paper_autopilot` (books today's directional verdicts on the local ledger at the day's close; **no-op unless `autopilot.enabled`**, never places real orders) → `verdict_review`. Burns LLM tokens and writes the ledger — **never run it in conversation or against a real account's `INVEST_HOME`**; see `experiments/paper_autopilot/` | JSON per stage |
 
 **The subcommand names are a closed set — any command not in the table above does not exist.**
 When you catch yourself wanting to call `get_committee_context` / `analyze_asset` / `pull_brief`
