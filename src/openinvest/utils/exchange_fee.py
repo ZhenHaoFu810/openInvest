@@ -289,10 +289,14 @@ def get_history_data(
                     )
                 if nan_days and as_of_date is None:
                     _rebuild_days_from_intraday(ticker, symbol, nan_days)
-                _STORE.mark_fetched(symbol)  # 拿到数据才记：行情源挂着时下次照样重试
+                _STORE.mark_fetched(symbol)
                 df_db = _STORE.get_history_df(symbol, days=_ALL_ROWS)
         except Exception as e:
             print(f"❌ yfinance sync failed for {symbol}: {e}")
+        # 今天这根的 TTL 刷新失败/拉空也记时：库里今天已有 bar，下次重试遵守 TTL（否则行情源挂着时
+        # 同一 symbol 每次调用都发一次 5d）。needs_update 那条路径不记：拿到数据才记，下次照样重试。
+        if today_bar_stale and not yf_got_data:
+            _STORE.mark_fetched(symbol)
 
         # yfinance 失败/返回空（被墙/被限流）→ BetaShares 官网兜底当前 NAV。
         # 只在实盘路径（as_of_date=None）触发：scraper 只有"现在"这一个点，

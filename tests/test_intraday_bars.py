@@ -46,8 +46,9 @@ def _seed(store, last_day, last_bar):
 class _Ticker:
     """yf.Ticker 替身：按 (period, interval) 返回给定的 DataFrame，记录调用。"""
 
-    def __init__(self, daily, hourly=None, hourly_error=None):
-        self.daily, self.hourly, self.hourly_error, self.calls = daily, hourly, hourly_error, []
+    def __init__(self, daily, hourly=None, hourly_error=None, daily_error=None):
+        self.daily, self.hourly, self.calls = daily, hourly, []
+        self.hourly_error, self.daily_error = hourly_error, daily_error
 
     def history(self, period="1mo", interval="1d", **kw):
         self.calls.append((period, interval))
@@ -55,6 +56,8 @@ class _Ticker:
             if self.hourly_error:
                 raise self.hourly_error
             return self.hourly
+        if self.daily_error:
+            raise self.daily_error
         return self.daily
 
 
@@ -87,6 +90,27 @@ def test_today_bar_refreshes_after_ttl(store, monkeypatch):
     assert tk.calls == [("5d", "1d")]
 
 
+@pytest.mark.parametrize("tk", [
+    _Ticker(pd.DataFrame()),                                   # 被墙 / 限流：返回空
+    _Ticker(None, daily_error=RuntimeError("rate limited")),   # 直接抛
+], ids=["empty", "error"])
+def test_failed_today_refresh_still_respects_ttl(store, monkeypatch, tk):
+    """TTL 刷新失败/拉空也记时：库里今天已有 bar，同一 symbol 不会每次调用都再发一次 5d。"""
+    _freeze(monkeypatch, 2026, 10, 15, 16)
+    _seed(store, "2026-10-15", PARTIAL)
+    monkeypatch.setattr(ef.yf, "Ticker", lambda s: tk)
+
+    for _ in range(5):
+        df = ef.get_history_data(SYM)
+        assert df["Close"].iloc[-1] == 4.252 and df.attrs["yf_fetch_failed"] is False
+    assert tk.calls == [("5d", "1d")]
+
+    store.conn.execute("UPDATE fetch_log SET fetched_at = ?", (time.time() - ef._TODAY_BAR_TTL_S - 60,))
+    store.conn.commit()
+    ef.get_history_data(SYM)                                   # TTL 过了才再试一次
+    assert tk.calls == [("5d", "1d")] * 2
+
+
 def _hourly(day, closes, volumes):
     idx = pd.date_range(f"{day} 10:30", periods=len(closes), freq="h", tz=TZ)
     return pd.DataFrame({"Open": closes, "High": [c + 0.01 for c in closes], "Low": [c - 0.02 for c in closes],
@@ -111,6 +135,24 @@ def test_nan_daily_close_rebuilt_from_hourly_bars(store, monkeypatch, daily_volu
     assert last["High"] == pytest.approx(4.28) and last["Low"] == pytest.approx(4.20)
     assert last["Volume"] == pytest.approx(expected_volume)
     assert store.get_close_pair_df(SYM).loc["2026-10-16", "CloseRaw"] == 4.234  # ADR-027：重建也写 close_raw
+
+
+def test_today_nan_close_rebuilt_from_hourly_bars(store, monkeypatch):
+    """盘中常见：今天这根日线 Close=NaN → TTL 刷新多发一次 60m，用它改写今天的 bar；TTL 内不再拉。"""
+    _freeze(monkeypatch, 2026, 10, 15, 14)
+    days = _seed(store, "2026-10-15", PARTIAL)
+    tk = _Ticker(_daily(days[-5:], [4.0, 4.0, 4.0, 4.0, float("nan")], [7.8e8] * 4 + [3.8e9]),
+                 hourly=_hourly("2026-10-15", [4.25, 4.27, 4.22, 4.234], [1.0e9, 1.0e9, 0.9e9, 0.89e9]))
+    monkeypatch.setattr(ef.yf, "Ticker", lambda s: tk)
+
+    df = ef.get_history_data(SYM)
+    assert tk.calls == [("5d", "1d"), ("5d", "60m")]
+    today = df.loc["2026-10-15"]
+    assert today["Close"] == 4.234 and today["Volume"] == pytest.approx(3.8e9)
+    assert today["High"] == pytest.approx(4.28) and today["Low"] == pytest.approx(4.20)
+
+    ef.get_history_data(SYM)
+    assert tk.calls == [("5d", "1d"), ("5d", "60m")]              # 刚刷过 → 不再拉
 
 
 def test_hourly_failure_keeps_old_bar(store, monkeypatch):

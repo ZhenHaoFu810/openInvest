@@ -55,6 +55,19 @@ def _isolate_memory_root(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_market_fetch_log(monkeypatch):
+    """exchange_fee._STORE 是 import 时连上 INVEST_ROOT/db 的全局实例。只 patch 了它个别方法的测试
+    （test_backtest_no_lookahead / test_betashares_fallback 等）会经 seconds_since_fetch / mark_fetched
+    读写开发者本地库的 fetch_log——默认钉成进程内 dict。换成 tmp MarketStore 的测试不受影响。"""
+    import time
+    import openinvest.utils.exchange_fee as ef
+    log: dict[str, float] = {}
+    monkeypatch.setattr(ef._STORE, "mark_fetched", lambda symbol: log.__setitem__(symbol, time.time()))
+    monkeypatch.setattr(ef._STORE, "seconds_since_fetch",
+                        lambda symbol: time.time() - log[symbol] if symbol in log else float("inf"))
+
+
+@pytest.fixture(autouse=True)
 def _no_digest_calendar_network(monkeypatch):
     """日报"今日持仓归因"的财报 / 除息日历是该段联网的一步（yfinance Ticker.calendar；基准刷新另走 account_performance）。
     测试默认当取不到（→ "无数据源"），任何经 daily_report.run 的测试都不会真发请求；

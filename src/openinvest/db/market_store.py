@@ -237,7 +237,7 @@ class MarketStore:
             return [r[0] for r in cursor.fetchall()]
 
     def mark_fetched(self, symbol: str) -> None:
-        """记一次成功的刷新（exchange_fee 拿到数据并落库之后调）。"""
+        """记一次刷新（exchange_fee 拿到数据落库后调；今天这根的 TTL 刷新失败/拉空也调，让重试遵守 TTL）。"""
         with self._lock:
             self.conn.execute(
                 "INSERT INTO fetch_log (symbol, fetched_at) VALUES (?, ?) "
@@ -247,7 +247,7 @@ class MarketStore:
             self.conn.commit()
 
     def seconds_since_fetch(self, symbol: str) -> float:
-        """距上次成功刷新的秒数；从没记过 → inf。"""
+        """距上次 mark_fetched 的秒数；从没记过 → inf。"""
         with self._lock:
             row = self.conn.execute(
                 "SELECT fetched_at FROM fetch_log WHERE symbol = ?", (symbol,)
