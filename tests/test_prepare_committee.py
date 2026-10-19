@@ -246,8 +246,10 @@ def test_prepare_facts_feed_save_defense_and_regime(_mock_world, monkeypatch):
     import openinvest.core.runner.coordinator as cr
     monkeypatch.setattr(cr, "load_sentiment_brief", lambda *a, **k: "INDEP_DEFENSE_FLAG: on")
     monkeypatch.setattr(persist, "_capture_macro_context", lambda **kw: {})
-    cr.prepare_committee_brief("TEST.AX")
+    brief = cr.prepare_committee_brief("TEST.AX")
+    assert "path_profile" not in brief  # ……但不进出题内容（省 ~3K 字符）
     facts = cr._load_brief_facts("TEST.AX")
+    assert "path_profile" in facts      # 快照留着（交卷 / 路径快照用）……
     assert facts and facts["regime_brief"] and "INDEP_DEFENSE_FLAG: on" in facts["sentiment_brief"]
     seen = {}
     real = cr.parse_cio_memo
@@ -276,8 +278,10 @@ def _call_mcp(name, args):
 def test_mcp_prepare_committee_tool(_mock_world):
     ok = _call_mcp("prepare_committee", {"symbol": "TEST.AX"})
     assert not ok.isError
-    out = ok.structuredContent
-    out = out.get("result", out)
+    import json
+    assert ok.structuredContent is None                     # 只回一份，不附结构化副本
+    out = json.loads(ok.content[0].text)
+    assert "path_profile" not in out
     assert out["regime_brief"] and out["prompts"]["cio"] and "submit_committee" in out["instructions"]
     bad = _call_mcp("prepare_committee", {"symbol": "NOT.IN.STRATEGY"})
     assert bad.isError and "target_assets" in bad.content[0].text

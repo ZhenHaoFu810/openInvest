@@ -229,7 +229,10 @@ def test_public_by_model_no_mask_when_no_mature_rows_or_enough_rows(tmp_path):
 
 def test_public_by_model_prefers_stored_model_era_and_windows_each_get_it(tmp_path):
     now = datetime.now(timezone.utc)
-    day = (now - timedelta(days=65)).strftime("%Y-%m-%d")
+    d = now - timedelta(days=65)
+    while d.weekday() >= 5:   # 周末决议对休市资产按周五重复剔除——落到周六/日样本会整个消失（周一跑必红）
+        d += timedelta(days=1)
+    day = d.strftime("%Y-%m-%d")
     rows = [_row(era="hermes:claude-haiku-5-5", day=day, hit=True) for _ in range(31)]
     p = tmp_path / "v.jsonl"
     p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
