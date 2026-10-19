@@ -1198,7 +1198,10 @@ def untrack_asset(
 
 # ---------- 委员会（Direct 路径） ----------
 
-@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+# structured_output=False：只回一份 JSON 文本。默认会再附一份 structuredContent（中文转义后体积翻倍），
+# 宿主 Agent 的上下文里同一份出题内容出现两遍——实测 2.8 万字符的出题变成 5.5 万（2026-10-19）
+@_tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+       structured_output=False)
 def prepare_committee(
     symbol: Annotated[str, Field(description="A symbol already in strategy target_assets, e.g. 'GC=F', 'NDQ.AX'.")],
 ) -> Dict[str, Any]:

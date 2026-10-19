@@ -276,8 +276,10 @@ def _call_mcp(name, args):
 def test_mcp_prepare_committee_tool(_mock_world):
     ok = _call_mcp("prepare_committee", {"symbol": "TEST.AX"})
     assert not ok.isError
-    out = ok.structuredContent
-    out = out.get("result", out)
+    import json
+    assert ok.structuredContent is None                     # 只回一份，不附结构化副本
+    out = json.loads(ok.content[0].text)
+    assert "path_profile" not in out
     assert out["regime_brief"] and out["prompts"]["cio"] and "submit_committee" in out["instructions"]
     bad = _call_mcp("prepare_committee", {"symbol": "NOT.IN.STRATEGY"})
     assert bad.isError and "target_assets" in bad.content[0].text

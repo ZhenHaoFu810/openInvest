@@ -238,8 +238,8 @@ def prepare_committee_brief(symbol: str) -> Dict[str, Any]:
         "valuation_brief": valuation_brief,
         # CIO 的"卖出后路径/买回点参考"（30/60/90 多窗+路径形状），EXPECTED_PATH 必须引用
         "reentry_reference": reentry_reference,
-        # 结构化 path_profile：与 session 路径一致，供 daily report 一句话摘要等确定性渲染
-        "path_profile": path_profile,
+        # path_profile（结构化路径数据，~3K 字符）不进出题：后端已存进事实快照、交卷时用那份；
+        # 给 Agent 看的人话版是上面的 reentry_reference（同源）
         "gold_snapshot": gold_ctx,
         "prior_insights": insights,
         "prompts": {
