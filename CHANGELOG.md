@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.62.1](https://github.com/longsizhuo/openInvest/compare/v0.62.0...v0.62.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **autopilot:** IBKR cash-account FX — no pre-conversion, broker-confirmed negative cash ([#530](https://github.com/longsizhuo/openInvest/issues/530)) ([f714453](https://github.com/longsizhuo/openInvest/commit/f714453dd82d05d2d800f3ebcb841ece1ef8aae0))
+
 ## [0.62.0](https://github.com/longsizhuo/openInvest/compare/v0.61.0...v0.62.0) (2026-10-19)
 
 
