@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.61.0](https://github.com/longsizhuo/openInvest/compare/v0.60.0...v0.61.0) (2026-10-19)
+
+
+### Features
+
+* **autopilot:** IBKR live autopilot — LLM picks and trades US stocks/ETFs via Web API OAuth under hard caps ([#522](https://github.com/longsizhuo/openInvest/issues/522)) ([348998e](https://github.com/longsizhuo/openInvest/commit/348998e3a85d2c3675355333b5b42268c8d9513e))
+
 ## [0.60.0](https://github.com/longsizhuo/openInvest/compare/v0.59.1...v0.60.0) (2026-10-19)
 
 
