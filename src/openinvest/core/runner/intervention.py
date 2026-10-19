@@ -219,15 +219,20 @@ def _gold_defense_dca_gate(
 def gold_defense_dca_plan(
     symbol: str, target: Optional[Dict[str, Any]], trading_days: Any,
 ) -> Optional[Dict[str, Any]]:
-    """黄金防御分批 DCA 闸的 parse_cio_memo 输入：仅黄金(type==metal)且配置开启时算；
+    """黄金防御分批 DCA 闸的 parse_cio_memo 输入：仅黄金(GC=F)且配置开启时算；
     非黄金/未启用/计算失败 → None（= 旧全拦行为，安全侧）。
+
+    按 symbol 认黄金，与 daily_report / loaders / skill_views 同口径。此前判
+    target["type"] == "metal"，但 strategy.md 的 target_assets 没有任何写入方写 type，
+    生产里这道闸从未生效（防御一触发，黄金 ACCUMULATE 就被整笔拦下）。target 参数
+    保留是为了 Direct / Coordinator 两个调用点的签名不变。
 
     _force_reload：长驻 scheduler 经 /api/config 动态改 verdict 类开关后必须重读，
     否则吃陈旧缓存静默失效（对齐 jobs/dca_daily.py 的写法）。
     """
     from openinvest.core.config import load_config
     vcfg = load_config(_force_reload=True).verdict
-    if (target or {}).get("type") != "metal" or not vcfg.gold_defense_dca_enabled:
+    if symbol.upper() != "GC=F" or not vcfg.gold_defense_dca_enabled:
         return None
     try:
         return _gold_defense_dca_gate(

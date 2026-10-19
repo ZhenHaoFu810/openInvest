@@ -269,7 +269,7 @@ def run_committee_for_symbol(
     if effective_valuation_brief:
         emit("valuation_brief_loaded", preview=effective_valuation_brief[:240])
 
-    # 5.9. 黄金防御分批 DCA 闸（2026-06-13 裁决）：仅黄金(type==metal)且配置开启时算。
+    # 5.9. 黄金防御分批 DCA 闸（2026-06-13 裁决）：仅黄金(symbol==GC=F)且配置开启时算。
     # 防御触发时把"全拦黄金买入"改成"放行一批 or 按 spacing/quota 暂拦"——尊重黄金
     # 中位右偏(典型涨不该禁)，用时间分散吃厚左尾(挤兑坑)。两条腿(VIX/ATR)已在
     # run_committee 里 OR 成单 defense_flag_on，故只算一份合成计划（非各腿独立分批，

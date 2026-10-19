@@ -24,7 +24,6 @@ schema_version: 1
 target_assets:
   - symbol: {SYM}
     display_name: Gold
-    type: metal
     channel: direct
     max_single_invest_cny: 10000
 ---
