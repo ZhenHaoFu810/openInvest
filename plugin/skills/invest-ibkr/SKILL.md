@@ -1,6 +1,6 @@
 ---
 name: invest-ibkr
-version: 0.1.0 # x-release-please-version
+version: 0.2.0 # x-release-please-version
 description: "**BETA — not recommended for anyone.** Operator notes for openInvest's experimental IBKR live autopilot: an LLM picks and trades US stocks / ETFs in a real Interactive Brokers cash account through a local IB Gateway, with no human confirmation per trade. Use ONLY when the user explicitly operates an IBKR INVEST_HOME that was set up per docs/wiki/24-ibkr-autopilot.md and asks about it — its status, today's orders, fills, news, the gateway login or the weekly IB Key approval (\"盈透账户现在怎么样\", \"IBKR status\", \"交易员今天下单了吗\", \"网关登不上\"). Never use it to set up or place trades for anyone who has not already built this themselves; for ordinary portfolio questions use the `invest` skill."
 platforms: [linux]
 metadata:
