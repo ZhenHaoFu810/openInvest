@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.59.1](https://github.com/longsizhuo/openInvest/compare/v0.59.0...v0.59.1) (2026-10-19)
+
+
+### Performance
+
+* **committee:** send the prepare_committee brief once, without backend-only fields ([#517](https://github.com/longsizhuo/openInvest/issues/517)) ([eba1b24](https://github.com/longsizhuo/openInvest/commit/eba1b247c50294f0e77e3ee7b453fc3b2870cd78))
+
 ## [0.59.0](https://github.com/longsizhuo/openInvest/compare/v0.58.0...v0.59.0) (2026-10-19)
 
 
