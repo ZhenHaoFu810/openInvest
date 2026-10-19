@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from pydantic import ValidationError
+
 from openinvest.core.memory_store import MemoryStore, _DocTx
 from openinvest.core.schemas import validate_portfolio
 
@@ -325,8 +327,16 @@ class PortfolioManager:
             p["schema_version"] = 2
             try:
                 validate_portfolio(dict(p.metadata))
-            except Exception as e:
+            except ValidationError as e:
                 log.error(f"with_portfolio_tx schema validate failed: {e}")
+                # 入口已拦 NaN/inf 参数，走到这里多半是 portfolio.md 本身已存着 .nan/.inf：
+                # 报清楚字段路径 + 手动修法，别只抛一句 pydantic 原文
+                bad = [".".join(map(str, err["loc"])) for err in e.errors() if err["type"] == "finite_number"]
+                if bad:
+                    raise ValueError(
+                        f"账本已含非有限数（{', '.join(bad)}），本次写入已拒绝："
+                        "请手动把 portfolio.md 里该字段改回正确数值后重试"
+                    ) from e
                 raise
             p.set_body(_render_portfolio_body_v2(p))
 
@@ -431,6 +441,8 @@ class PortfolioManager:
         idempotency_key：同 key 第二次返回 {"status": "duplicate"} 不动账本（ADR-016）。"""
         ccy = currency.upper()
         amount = float(amount)
+        if not math.isfinite(amount):
+            raise ValueError("金额必须是有限数")
         if amount <= 0:
             raise ValueError("amount 必须 > 0")
         if not (3 <= len(ccy) <= 5) or not ccy.isalpha():
@@ -461,6 +473,8 @@ class PortfolioManager:
         idempotency_key 语义同 deposit_cash。"""
         ccy = currency.upper()
         amount = float(amount)
+        if not math.isfinite(amount):
+            raise ValueError("金额必须是有限数")
         if amount <= 0:
             raise ValueError("amount 必须 > 0")
         try:
@@ -542,6 +556,8 @@ class PortfolioManager:
         idempotency_key：同 key 第二次返回 {"status": "duplicate"} 不动账本（ADR-016，
         远端 HTTP 超时重发 / agent 重跑同一笔）。record_existing_position 也经此路径。
         """
+        if not (math.isfinite(units) and math.isfinite(price)):
+            raise ValueError("units / price 必须是有限数")
         if units <= 0 or price <= 0:
             raise ValueError("units / price 必须 > 0")
         if source_type not in ("cash_deduct", "external_funding"):
@@ -631,6 +647,8 @@ class PortfolioManager:
         units 减完后保留为 0（删行走 delete_holding）。symbol 不在持仓 / 持仓不足
         抛 ValueError，由调用方转 CLI error JSON / HTTP 400。idempotency_key 语义同 buy。
         """
+        if not (math.isfinite(units) and math.isfinite(price)):
+            raise ValueError("units / price 必须是有限数")
         if units <= 0 or price <= 0:
             raise ValueError("units / price 必须 > 0")
         try:

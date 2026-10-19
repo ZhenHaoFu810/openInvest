@@ -388,7 +388,7 @@ class StrategyWriteResponse(BaseModel):
 
 class CashWriteRequest(BaseModel):
     """POST /api/cash/{currency}/deposit | withdraw body"""
-    amount: float = Field(..., gt=0)
+    amount: float = Field(..., gt=0, allow_inf_nan=False)  # gt=0 已拒 NaN；inf 也在入口拒成 422
 
 
 # ============================================================

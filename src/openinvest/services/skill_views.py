@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sys
+from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -297,18 +299,22 @@ def build_history_view(n: int) -> Dict[str, Any]:
         reverse=True,
     )[:n]
 
+    # transcript 落 memory/.committee/<YYYY-MM-DD>/<SYM>.md（persist / coordinator / committee_cmds）。
+    # 此前读的是早已无人写入的 memory/.debate：老实例只剩几份旧文件，新装恒为空。
+    # .committee 下还有 hash 名的 task 状态目录，只认日期目录。
     debates = []
-    debate_dir = store.root / ".debate"
+    debate_dir = store.root / ".committee"
     if debate_dir.exists():
         for date_dir in sorted(debate_dir.iterdir(), reverse=True):
-            if not date_dir.is_dir():
+            if not date_dir.is_dir() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_dir.name):
                 continue
-            for md in date_dir.glob("*.md"):
-                content = md.read_text(encoding="utf-8")
+            for md in sorted(date_dir.glob("*.md")):
+                with md.open(encoding="utf-8") as fh:  # 只取前 8 行，不整份读进内存
+                    summary = "\n".join(line.rstrip("\r\n") for line in islice(fh, 8))
                 debates.append({
                     "date": date_dir.name,
                     "asset": md.stem,
-                    "summary": "\n".join(content.splitlines()[:8]),
+                    "summary": summary,
                 })
             if len(debates) >= n:
                 break

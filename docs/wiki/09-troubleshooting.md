@@ -287,6 +287,7 @@ uv run pytest tests/test_xxx.py::test_yyy -v --tb=long
 | `yfinance 拉数据失败` | 网络 / 限速 | 重跑几次；或加 mock |
 | `ImportError 不能 import _render_portfolio_body` | v2 改名 → `_render_portfolio_body_v2` | CI 修过；本地代码可能旧 |
 | `ValidationError schema_version` | portfolio.md 不符 v2 schema | 跑 `python -m scripts.migrate_portfolio_to_holdings` |
+| `账本已含非有限数（cash.CNY）` / `finite_number` | portfolio.md 里已存着 `.nan` / `.inf`（旧版 `deposit -a nan` 写坏），修好前所有写操作都会被拒 | 手动编辑 `memory/portfolio.md`，把该字段改回正确数值即可（读取不校验，无需迁移）|
 
 166 测试是底线，加新功能必须保持全绿。
 
