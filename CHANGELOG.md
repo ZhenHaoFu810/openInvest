@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.63.0](https://github.com/longsizhuo/openInvest/compare/v0.62.1...v0.63.0) (2026-10-19)
+
+
+### Features
+
+* **ibkr:** route autopilot notifications through ibkr.notify_cmd ([#531](https://github.com/longsizhuo/openInvest/issues/531)) ([c155b12](https://github.com/longsizhuo/openInvest/commit/c155b1237d7ac822e6a88753ef9973fae721d9bc))
+
 ## [0.62.1](https://github.com/longsizhuo/openInvest/compare/v0.62.0...v0.62.1) (2026-10-19)
 
 
