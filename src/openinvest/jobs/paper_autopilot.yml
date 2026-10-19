@@ -1,0 +1,11 @@
+name: paper_autopilot
+description: 全自动模拟账户：把当日委员会裁决在本 INVEST_HOME 的本地账本上按收盘价自动成交（不下真单；ADR 见 wiki 23）
+# 平日北京 16:35：A 股 15:00 / 港股 16:00 / 澳股（北京 ~13:00）都已收盘，行情有当日 close。
+# daily_report 在生产 scheduler 里是 enabled:false（宿主 agent cron 触发），本 job 不依赖它的时间；
+# 没有 scheduler 的模拟 home 用 `openinvest autopilot_daily` 顺序跑 日报 → 本 job → 复盘（见 experiments/paper_autopilot/）。
+# 美股 / 欧股北京 16:35 还没开盘 → 最新 bar 不是今天 → skip(market_closed)，见 jobs/paper_autopilot.py 文档。
+# 幂等（ADR-016）：每个 (date, symbol, side) 一把 state_claim + 账本 idempotency_key，重跑不二次记账。
+schedule: "35 16 * * mon-fri"
+timezone: Asia/Shanghai
+entry: openinvest.jobs.paper_autopilot:run
+enabled: true   # 调度照常跑；真正开关是 config.autopilot.enabled（默认 False=no-op，fork / 生产 hub 零影响）

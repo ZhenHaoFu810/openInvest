@@ -244,6 +244,12 @@ def build_parser() -> argparse.ArgumentParser:
              "需要 DEEPSEEK_API_KEY。",
     ).set_defaults(func=cmd_daily_report)
 
+    sub.add_parser(
+        "autopilot_daily",
+        help="模拟账户一站式日流程：daily_report(不发邮件) → paper_autopilot(按当日裁决模拟成交，"
+             "需 autopilot.enabled) → verdict_review。给独立 INVEST_HOME 的 cron 用；输出 JSON。",
+    ).set_defaults(func=cmd_autopilot_daily)
+
     # ============ 写操作子命令（Agent 用） ============
     p = sub.add_parser("deposit", help="存入现金（任意币种）")
     p.add_argument("--currency", "-c", required=True, help="币种 (CNY/AUD/USD/HKD/...)")

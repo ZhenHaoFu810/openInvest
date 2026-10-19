@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from .tunable import (
+    AutopilotConfig,
     DCAConfig,
     DreamingTunableConfig,
     EventConfig,
@@ -81,7 +82,7 @@ def _read_env_overrides() -> dict[str, Any]:
     # 已知的多词 section 名（按长度降序排列，确保最长前缀优先匹配）
     _KNOWN_SECTIONS = sorted(
         ["oracle_accuracy", "macro_buckets", "staleness", "language", "portfolio",
-         "regime", "verdict", "dreaming", "reward", "sentiment", "valuation", "path", "dca", "event",
+         "regime", "verdict", "dreaming", "reward", "sentiment", "valuation", "path", "dca", "autopilot", "event",
          "scheduler", "fund"],
         key=len,
         reverse=True,
@@ -192,6 +193,8 @@ def _build_tunable_from_dict(data: dict[str, Any]) -> TunableConfig:
         dca_data["auto_dca_symbols"] = tuple(v)
     dca = DCAConfig(**{k: v for k, v in dca_data.items() if k in {f.name for f in fields(DCAConfig)}})
 
+    autopilot = AutopilotConfig(**{k: v for k, v in data.get("autopilot", {}).items() if k in {f.name for f in fields(AutopilotConfig)}})
+
     event_data = dict(data.get("event", {}))
     # watch_schedule / sentinel_schedule 都是含逗号的 cron 串（如 "*/30 0-2,8-23 * * *"）
     # ——env 层通用强转会把逗号值拆成 list，这里拼回字符串（split(",") 的精确逆操作）。
@@ -229,6 +232,7 @@ def _build_tunable_from_dict(data: dict[str, Any]) -> TunableConfig:
         oracle_accuracy=oracle,
         reward=reward,
         dca=dca,
+        autopilot=autopilot,
         event=event,
         staleness=staleness,
         scheduler=scheduler,
@@ -394,6 +398,21 @@ API_SETTABLE: Dict[str, Dict[str, Any]] = {
         "type": "float",
         "label": "定投金额(CNY)",
         "help": "每个标的每次定投基准金额；智慧定投实际浮动，本系统按此估算记账、月度对账校准",
+    },
+    "autopilot.enabled": {
+        "type": "bool",
+        "label": "全自动模拟账户",
+        "help": "开启=jobs/paper_autopilot 把当日委员会裁决在本 INVEST_HOME 的本地账本上按收盘价自动记账成交（不下真单、不碰真实账户）；只应在独立的模拟 INVEST_HOME 开；默认关",
+    },
+    "autopilot.commission_bps": {
+        "type": "float",
+        "label": "模拟手续费(bps)",
+        "help": "autopilot 买卖双边手续费，万分之几（默认 3）",
+    },
+    "autopilot.min_order_cny": {
+        "type": "float",
+        "label": "模拟最小单(CNY)",
+        "help": "autopilot 折算后小于该金额的单不下，记 skip too_small（默认 500）",
     },
     "event.enabled": {
         "type": "bool",

@@ -14,6 +14,9 @@ documents:
     - verdict.gold_defense_dca_enabled
     - dca.auto_dca_enabled
     - dca.auto_dca_amount_cny
+    - autopilot.enabled
+    - autopilot.commission_bps
+    - autopilot.min_order_cny
     - fund.confirm_lag_days
   symbols: []
 ---
@@ -57,6 +60,9 @@ LLM_MODEL=glm-4-flash
 | `verdict.gold_defense_dca_enabled` | `bool` (`true`) | 黄金防御机制。高波动骤增阶段把单次大额加仓拆分为多期 DCA。 |
 | `dca.auto_dca_enabled` | `bool` (`false`) | 全自动定投决策总开关。每个交易日记一笔；仅适用北京 15:30 前收盘的市场（A 股 / 亚太），休市日不记，见 [ADR-018](adr/018-dca-dip-reserve.md) |
 | `dca.auto_dca_amount_cny` | `float` (`0.0`) | 每期自动定投的基准人民币配置额度。见 [ADR-018](adr/018-dca-dip-reserve.md) |
+| `autopilot.enabled` | `bool` (`false`) | 全自动模拟账户总开关（`jobs/paper_autopilot`）。开启后该 INVEST_HOME 的每条 ACCUMULATE / BUY / TRIM / SELL 裁决按当日收盘价自动记账成交；不下真单。**只应在独立的模拟 INVEST_HOME 开**，见 [23-paper-autopilot.md](23-paper-autopilot.md) |
+| `autopilot.commission_bps` | `float` (`3.0`) | 模拟成交的买卖双边手续费，万分之几；作为 `fee` 活动另记一行 |
+| `autopilot.min_order_cny` | `float` (`500.0`) | 折算后小于它的模拟单不下（记 `skip too_small`）；SELL 清仓不受限 |
 | `fund.confirm_lag_days` | `dict` (`{default: 1, qdii: 2, fof: 2}`) | 场外基金两段式（`place_fund_order`）下单后第几个交易日确认份额：预计确认日 = 定价日 T + lag，按基金类型取（QDII / FOF 从东方财富基金概况推断，取不到按 `default` 并在订单里标 `lag_source=default`）。改 `core/config/defaults.yaml` 的 `fund:` 段，只写想改的键（与内置默认深合并，如 `fund: {confirm_lag_days: {qdii: 3}}`）；dict 型，暂不进 API 白名单（ADR-017）、env 无效。见 [ADR-027](adr/027-ledger-activity-types.md) D5 |
 
 ### 运行时覆盖示例（以关闭集中度 Lens 为例）

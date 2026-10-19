@@ -24,6 +24,7 @@ from openinvest.paths import INVEST_ROOT
 ROOT = INVEST_ROOT
 
 __all__ = [
+    "cmd_autopilot_daily",
     "cmd_daily_report",
     "cmd_prepare_committee",
     "cmd_run_committee",
@@ -48,6 +49,27 @@ def cmd_daily_report(_: argparse.Namespace) -> None:
         real_stdout.flush()
     else:
         _print_json(result)
+
+
+def cmd_autopilot_daily(_: argparse.Namespace) -> None:
+    """模拟账户一站式日流程（给没有 scheduler 的第二个 INVEST_HOME 用 cron 跑，experiments/paper_autopilot/）：
+    daily_report（不发邮件）→ paper_autopilot（按当日裁决模拟成交）→ verdict_review（复盘）。
+    三段各自隔离失败（一段抛异常不挡后面），输出 JSON；有任何一段抛异常则退出码 1。
+    autopilot.enabled 关着时第二段是 no-op。"""
+    from openinvest.jobs import daily_report, paper_autopilot, verdict_review
+
+    out, failed = {}, False
+    for name, fn in (("daily_report", lambda: daily_report.run(send_email=False)),
+                     ("paper_autopilot", paper_autopilot.run),
+                     ("verdict_review", verdict_review.run)):
+        try:
+            out[name] = fn()
+        except Exception as e:  # noqa: BLE001
+            out[name] = {"status": "error", "error": f"{type(e).__name__}: {e}"}
+            failed = True
+    _print_json(out)
+    if failed:
+        sys.exit(1)
 
 
 # ---------- prepare_debate ----------
