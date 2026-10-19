@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.60.0](https://github.com/longsizhuo/openInvest/compare/v0.59.1...v0.60.0) (2026-10-19)
+
+
+### Features
+
+* **autopilot:** paper autopilot — fill the day's verdicts in an opt-in INVEST_HOME ledger ([#520](https://github.com/longsizhuo/openInvest/issues/520)) ([29b4497](https://github.com/longsizhuo/openInvest/commit/29b44978f871ca6a6f989cd09979acd7f3c80705))
+
+
+### Bug Fixes
+
+* **committee:** currency-formatted CIO amounts and the gold defense DCA gate ([#434](https://github.com/longsizhuo/openInvest/issues/434)) ([96b53e8](https://github.com/longsizhuo/openInvest/commit/96b53e882bc886393a43a75582617cc731162466))
+* **daily_report:** keep the report when one asset's committee fails ([#435](https://github.com/longsizhuo/openInvest/issues/435)) ([5c4d9f3](https://github.com/longsizhuo/openInvest/commit/5c4d9f3a89d6e2d4d8f51137043f9277327eda01))
+* **ledger,history:** reject non-finite amounts; read history from memory/.committee ([#436](https://github.com/longsizhuo/openInvest/issues/436)) ([dafbbae](https://github.com/longsizhuo/openInvest/commit/dafbbae5fcb5b4fa00528060ef8e003417997e3f))
+* **market-data:** refresh today's intraday bar and rebuild NaN-close days ([#437](https://github.com/longsizhuo/openInvest/issues/437)) ([83ca446](https://github.com/longsizhuo/openInvest/commit/83ca446c52ef1a37fbd44134abe9e68041047f5b))
+
 ## [0.59.1](https://github.com/longsizhuo/openInvest/compare/v0.59.0...v0.59.1) (2026-10-19)
 
 
