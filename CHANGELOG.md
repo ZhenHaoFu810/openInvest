@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.64.0](https://github.com/longsizhuo/openInvest/compare/v0.63.0...v0.64.0) (2026-10-19)
+
+
+### Features
+
+* **ibkr-skill:** add BETA invest-ibkr operator skill — not recommended for anyone ([#527](https://github.com/longsizhuo/openInvest/issues/527)) ([2419fcb](https://github.com/longsizhuo/openInvest/commit/2419fcb40bc113cec6064c362cf1f8af925fb747))
+
 ## [0.63.0](https://github.com/longsizhuo/openInvest/compare/v0.62.1...v0.63.0) (2026-10-19)
 
 
