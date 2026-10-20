@@ -85,29 +85,30 @@
   .g-logo svg { width: 16px; height: 16px; }
   .g-how { display: flex; align-items: center; gap: 8px; padding: 0; background: none; color: var(--ink); font-weight: 500; font-size: 14px; line-height: 1; }
   .g-how b { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: #fff; }
-  .g-hero { position: relative; display: flex; flex-direction: column; max-width: 1240px; min-height: calc(100svh - 63px); margin: 0 auto; padding: 6vh 24px 28px; overflow: hidden; }
-  .g-big { position: relative; z-index: 1; margin: 0 0 0 4%; font-size: clamp(46px, 7.6vw, 112px); font-weight: 700; line-height: 1.04; letter-spacing: -.05em; }
+  .g-tape { overflow: hidden; white-space: nowrap; border-bottom: 1px solid var(--line); background: var(--card); font-size: 13px; }
+  .g-tape > div { display: inline-flex; gap: 36px; padding: 8px 0; animation: g-tape 48s linear infinite; }
+  .g-tape span { color: var(--sub); } .g-tape b { margin: 0 6px; color: var(--ink); font-weight: 600; }
+  @keyframes g-tape { to { transform: translateX(-50%); } }
+  .g-tape em { font-style: normal; }
+  .g-hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); grid-template-rows: 1fr 1fr auto; grid-template-areas: "copy stage" "play stage" "foot foot"; column-gap: 56px; max-width: 1240px; min-height: calc(100svh - 100px); margin: 0 auto; padding: 4vh 24px 24px; }
+  .g-copy { grid-area: copy; align-self: end; }
+  .g-big { margin: 0; font-size: clamp(48px, 6.6vw, 100px); font-weight: 700; line-height: 1.04; letter-spacing: -.05em; }
   .g-big span { display: block; }
-  .g-big .l2 { display: flex; align-items: center; gap: .14em; padding-left: 16%; }
-  .g-arrow { display: grid; place-items: center; flex: none; width: .82em; height: .82em; border-radius: 50%; background: var(--ai); box-shadow: 0 14px 30px -10px var(--ai); }
-  .g-arrow svg { width: 52%; height: 52%; }
-  .g-en { position: relative; z-index: 1; margin: .1em 0 0 6%; font: 900 clamp(20px, 3.9vw, 56px)/1 "Arial Black", "Helvetica Neue", Arial, sans-serif; letter-spacing: -.05em; }
-  .g-en span { display: inline-block; padding: .04em .34em .08em; border: 2px solid var(--ink); border-radius: 999px; }
-  .g-en b { display: block; margin: .16em 0 0 -2%; font-size: 1.42em; font-weight: 900; }
+  .g-lede { max-width: 25em; margin: 18px 0 0; font-size: 16px; color: var(--sub); }
+  .g-play { grid-area: play; align-self: start; max-width: 480px; margin-top: 30px; }
+  .g-play .g-ask { margin-top: 0; }
+  .g-stage { grid-area: stage; align-self: center; position: relative; padding: 16px 18px 8px; border-radius: 28px; background: var(--card); box-shadow: 0 40px 80px -44px rgba(40, 30, 100, .4); }
+  .g-stage-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding-right: 72px; font-size: 12px; color: var(--sub); }
+  .g-stage-top b { font-size: 18px; color: var(--ink); }
+  .g-stage-top span { flex-basis: 100%; order: 3; }   /* 日期另起一行，名字和两个按钮留在第一行 */
+  .g-stage-top button { padding: 2px 0; background: none; color: var(--ink); font-size: 13px; font-weight: 500; text-decoration: underline; }
+  .g-stage svg .pulse { animation: g-pulse 1.8s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes g-pulse { from { opacity: .55; transform: scale(1); } to { opacity: 0; transform: scale(3.2); } }
   .g-tile { position: absolute; pointer-events: none; aspect-ratio: 1; border-radius: 26%; box-shadow: 0 22px 40px -16px rgba(40, 30, 100, .45), inset 0 -6px 0 rgba(0, 0, 0, .1); animation: g-fl 6s ease-in-out infinite; }
-  .g-tile.t1 { top: 12%; right: 8%; width: clamp(78px, 10vw, 136px); overflow: hidden; background: var(--you); rotate: 9deg; }
+  .g-tile.t1 { top: -34px; right: -16px; width: clamp(76px, 7.5vw, 108px); overflow: hidden; background: var(--you); rotate: 8deg; }
   .g-tile.t1 img { width: 100%; height: 100%; object-fit: cover; }
-  .g-tile.t2 { top: 46%; right: 5%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8%; width: clamp(64px, 7vw, 100px); padding: clamp(11px, 1.2vw, 17px); background: var(--ink); rotate: 8deg; animation-delay: -2.5s; }
-  .g-tile.t2 i { border-radius: 26%; background: #3B3B46; }
-  .g-tile.t2 i.y { background: var(--you); } .g-tile.t2 i.a { background: var(--ai); }
-  .g-bars { position: absolute; z-index: 2; pointer-events: none; top: calc(6vh + clamp(46px, 7.6vw, 112px) * 2.2); left: 3%; display: grid; gap: 6px; rotate: -10deg; animation: g-fl 7s ease-in-out infinite -1s; }
-  .g-bars i { display: block; width: clamp(60px, 7vw, 96px); height: clamp(14px, 1.6vw, 22px); border-radius: 999px; box-shadow: 0 6px 14px -6px rgba(0, 0, 0, .35); }
-  .g-bars i:nth-child(1) { background: var(--you); } .g-bars i:nth-child(2) { margin-left: -12px; background: var(--ai); } .g-bars i:nth-child(3) { margin-left: 10px; background: #12A387; }
-  @keyframes g-fl { 50% { translate: 0 -9px; } }
-  .g-note { position: relative; z-index: 1; align-self: flex-end; max-width: 300px; margin: 28px 6% 0 0; padding-left: 14px; border-left: 2px solid var(--ink); }
-  .g-note b { display: block; font-size: 17px; line-height: 1.45; }
-  .g-note p { margin: 8px 0 0; font-size: 13px; color: var(--sub); }
-  .g-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 24px; margin-top: auto; padding-top: 28px; }
+  @keyframes g-fl { 50% { translate: 0 -8px; } }
+  .g-foot { grid-area: foot; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 24px; margin-top: auto; padding-top: 28px; }
   .g-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--sub); }
   .g-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #12A387; }
   .g-ctas { display: flex; flex-wrap: wrap; gap: 12px; }
@@ -181,18 +182,21 @@
   dialog ul { margin: 0; padding-left: 1.2em; } dialog li { margin: 6px 0; }
   dialog form { justify-content: flex-end; }
   dialog form button { padding: 10px 18px; border-radius: 999px; }
+  @media (max-width: 900px) {
+    .g-hero { grid-template-columns: 1fr; grid-template-rows: auto; grid-template-areas: "copy" "stage" "play" "foot"; }
+    .g-copy, .g-play { align-self: auto; }
+    .g-stage { margin-top: 26px; } .g-play { margin-top: 18px; } .g-foot { padding-top: 24px; }
+  }
   @media (max-width: 640px) {
     .g-top { padding: 12px 16px; }
-    .g-hero { min-height: calc(100svh - 55px); padding: 5vh 16px 20px; }
-    .g-big { margin-left: 0; font-size: 14.5vw; } .g-big .l2 { padding-left: 0; } .g-en { margin-left: 0; font-size: 6.2vw; } .g-en b { font-size: 1.5em; }
-    .g-tile.t1 { top: auto; bottom: 31%; right: 12%; width: 30vw; } .g-tile.t2 { top: auto; bottom: 34%; right: auto; left: 16%; width: 18vw; padding: 10px; }
-    .g-bars { display: none; }
-    .g-note { align-self: flex-start; margin: 22px 0 0; }
+    .g-hero { min-height: 0; padding: 4vh 16px 20px; }
+    .g-big { font-size: 15vw; } .g-lede { font-size: 15px; }
+    .g-tile.t1 { top: -26px; right: -6px; width: 72px; }
     .g-ctas, .g-cta { width: 100%; }
     .g-lv { grid-template-columns: 1fr; }
     .g-side { padding: 10px 12px; } .g-vs { font-size: 16px; }
   }
-  @media (prefers-reduced-motion: reduce) { .sk, .g-tile, .g-bars, .g-rev.pop, .g-chart .dot { animation: none; } .wt .bar i { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .sk, .g-tile, .g-tape > div, .g-stage svg .pulse, .g-rev.pop, .g-chart .dot { animation: none; } .wt .bar i { transition: none; } }
 </style>
 </head>
 <body>
@@ -202,17 +206,25 @@
     <button type="button" class="g-how" data-how><b aria-hidden="true">?</b>怎么玩</button>
   </header>
 
+  <div class="g-tape" aria-hidden="true"><div id="tape"></div></div>
   <section class="g-hero" id="v-home">
-    <h1 class="g-big"><span>你能跑赢</span><span class="l2">这台<i class="g-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></i>AI 吗？</span></h1>
-    <div class="g-en" aria-hidden="true"><span>EVERY WEEK COUNTS</span><b>OUT. HALF. ALL IN.</b></div>
-    <div class="g-tile t1" aria-hidden="true"><img id="hero-img" alt=""></div>
-    <div class="g-tile t2" aria-hidden="true"><i class="y"></i><i></i><i class="a"></i><i></i><i class="y"></i><i class="a"></i><i class="a"></i><i></i><i class="y"></i></div>
-    <div class="g-bars" aria-hidden="true"><i></i><i></i><i></i></div>
-    <div class="g-note"><b>不是猜涨跌，<br>是每周比 AI 多想一步。</b><p>2026 年 1–9 月真实行情，每周一回合。你押仓位，AI 亮委员会当周的回测决定。</p></div>
+    <div class="g-copy">
+      <h1 class="g-big"><span>你能跑赢</span><span>AI 吗？</span></h1>
+      <p class="g-lede">2026 年 1–9 月的真实行情，每周押一次仓位，AI 也押。打完 40 周，看谁赚得多。</p>
+    </div>
+    <div class="g-stage">
+      <div class="g-tile t1" aria-hidden="true"><img id="hero-img" alt=""></div>
+      <div class="g-stage-top"><b id="hc-name">　</b><span id="hc-date"></span><button type="button" id="hc-dice">换一个</button><button type="button" data-go="pick">全部标的</button></div>
+      <svg id="hc-chart" role="img" aria-label="开局前三个月的走势，右边是还没发生的下一周"></svg>
+    </div>
+    <div class="g-play">
+      <p class="g-ask">第 1 周，你押：</p>
+      <div class="g-pick" id="hc-pick"></div>
+      <p class="err" id="hc-err" role="alert" hidden></p>
+    </div>
     <div class="g-foot">
       <span class="g-status">历史复盘，不构成投资建议</span>
       <div class="g-ctas">
-        <button type="button" class="g-cta pri" id="start"><span>开始对局<small>选个标的就开打</small></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg></button>
         <button type="button" class="g-cta sec" data-go="dbt"><span>多空对照<small>输入代码看正反理由</small></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
       </div>
     </div>
@@ -496,6 +508,7 @@ function go(v) {
   ["home", "pick", "play", "dbt"].forEach((k) => { $("v-" + k).hidden = k !== v; });
   window.scrollTo(0, 0);
   if (v === "dbt" && lastFacts) drawChart(lastFacts.chart);   // 隐藏时画的图宽度不对，切过来重画
+  if (v === "home") drawHero();
   if (v === "play" && gm) { if (!$("gm-live").hidden) drawGame(); else drawEq(); }
 }
 
@@ -625,12 +638,41 @@ function startGame(a) {
   go("play"); drawTurn();
 }
 
-POS.forEach(([name, p], k) => {
-  const b = el("button", null, name), g = el("span", "gauge"), f = el("i");
-  b.type = "button"; b.dataset.p = p; f.style.width = p * 100 + "%"; g.append(f);
-  b.append(g, el("kbd", null, String(k + 1)));
-  b.addEventListener("click", () => play(p)); $("gm-pick").append(b);
-});
+function pickButtons(box, onPick, keys) {
+  POS.forEach(([name, p], k) => {
+    const b = el("button", null, name), g = el("span", "gauge"), f = el("i");
+    b.type = "button"; b.dataset.p = p; f.style.width = p * 100 + "%"; g.append(f); b.append(g);
+    if (keys) b.append(el("kbd", null, String(k + 1)));
+    b.addEventListener("click", () => onPick(p)); box.append(b);
+  });
+}
+pickButtons($("gm-pick"), play, true);
+
+// 首屏就是第一手：随机一个标的，画开局前三个月的走势（不含开局后任何价格），右边一块雾区是还没发生的下一周
+let GA = [], heroA = null;
+function drawHero() {
+  const a = heroA; if (!a || $("v-home").hidden) return;
+  const i0 = a.turns[0].i, c = a.c.slice(0, i0 + 1), n = c.length, svg = $("hc-chart"), H = 230, W = size(svg, H);
+  const FW = Math.max(72, Math.round(W * .22)), PW = W - FW - 10, X = (j) => j * PW / (n - 1);
+  const lo = Math.min(...c), hi = Math.max(...c), Y = (v) => 16 + (hi - v) / (hi - lo || 1) * (H - 46);
+  const d = c.map((v, j) => `${j ? "L" : "M"}${X(j).toFixed(1)},${Y(v).toFixed(1)}`).join(""), x1 = X(n - 1), y1 = Y(c[n - 1]);
+  let s = `<defs><pattern id="fog" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="9" stroke="#E7E5F6" stroke-width="4"/></pattern></defs>`;
+  s += `<path d="${d}L${x1},${H - 22}L0,${H - 22}Z" fill="#F5F4FA"/><path d="${d}" fill="none" stroke="${T.nav}" stroke-width="2" stroke-linejoin="round"/>`;
+  s += `<rect x="${W - FW}" y="0" width="${FW}" height="${H - 22}" rx="16" fill="url(#fog)"/>`;
+  s += `<text x="${W - FW / 2}" y="${(H - 22) / 2 + 20}" text-anchor="middle" font-size="60" font-weight="700" fill="${C.ai}">?</text>`;
+  s += `<text x="${W - FW / 2}" y="${H - 6}" text-anchor="middle" font-size="12" fill="${T.axis}">下一周</text>`;
+  s += `<text x="0" y="${H - 6}" font-size="12" fill="${T.axis}">${a.d[0].slice(0, 7)}</text><text x="${x1}" y="${H - 6}" text-anchor="end" font-size="12" fill="${T.axis}">现在</text>`;
+  s += `<circle class="pulse" cx="${x1}" cy="${y1}" r="5" fill="${C.you}"/><circle cx="${x1}" cy="${y1}" r="5" fill="${C.you}" stroke="#fff" stroke-width="2"/>`;
+  svg.innerHTML = s;
+}
+function setHero(a) {
+  heroA = a;
+  $("hc-name").textContent = `${(LOOK[a.key] || [""])[0]} ${a.name}`;
+  $("hc-date").textContent = `开局 ${a.d[a.turns[0].i]}　收盘 ${px(a.c[a.turns[0].i])}`;
+  drawHero();
+}
+pickButtons($("hc-pick"), (p) => { if (!heroA) return; startGame(heroA); play(p); }, false);
+$("hc-dice").addEventListener("click", () => { if (GA.length) setHero(GA[(GA.indexOf(heroA) + 1) % GA.length]); });
 document.addEventListener("keydown", (e) => {   // 桌面上 1/2/3 直接出手
   if ($("v-play").hidden || $("gm-live").hidden || $("rules").open || e.metaKey || e.ctrlKey || e.altKey || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
   const k = "123".indexOf(e.key); if (k >= 0 && e.key) play(POS[k][1]);
@@ -640,7 +682,6 @@ $("gm-ff").addEventListener("click", () => {
   while (gm.k < gm.a.turns.length - 1) step(gm.you.p);
   play(gm.you.p);
 });
-$("start").addEventListener("click", () => go("pick"));
 document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
 document.querySelectorAll("[data-how]").forEach((b) => b.addEventListener("click", () => $("rules").showModal()));
 (async () => {
@@ -648,16 +689,21 @@ document.querySelectorAll("[data-how]").forEach((b) => b.addEventListener("click
     const r = await fetch("/api/game"); if (!r.ok) throw 0;
     gameUrl = r.url;
     $("hero-img").src = sticker("hero.jpg");
-    (await r.json()).assets.forEach((a) => {
+    GA = (await r.json()).assets;
+    const tape = GA.map((a) => { const i = a.turns[0].i, v = a.c[i] / a.c[i - 1] - 1; return `<span>${a.name}<b>${px(a.c[i])}</b><em class="${tone(v)}">${pct(v)}</em></span>`; }).join("");
+    $("tape").innerHTML = tape.repeat(8);   // 只有程序算的数字和固定标的名，拼 innerHTML 安全；开局那天的价格，不漏后市
+    setHero(GA[Math.floor(Math.random() * GA.length)]);
+    GA.forEach((a) => {
       const [icon, tag, bg] = LOOK[a.key] || ["📈", a.code, "#E6E6EC"];
       const b = el("button"), ic = el("span", "g-ic", icon);
       b.type = "button"; ic.style.background = bg;
       b.append(ic, el("b", null, a.name), el("small", null, `${tag}，${a.turns.length} 周`));
       b.addEventListener("click", () => startGame(a)); $("gm-assets").append(b);
     });
-  } catch { $("gm-err").textContent = "游戏数据暂时拿不到，稍后再试"; $("gm-err").hidden = false; }
+  } catch { ["gm-err", "hc-err"].forEach((k) => { $(k).textContent = "游戏数据暂时拿不到，稍后再试"; $(k).hidden = false; }); }
 })();
 window.addEventListener("resize", () => {
+  drawHero();
   if (lastFacts && !$("v-dbt").hidden) drawChart(lastFacts.chart);
   if (gm && !$("v-play").hidden) { if (!$("gm-live").hidden) drawGame(); else drawEq(); }
 });
