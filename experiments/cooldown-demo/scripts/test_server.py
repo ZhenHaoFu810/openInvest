@@ -212,3 +212,13 @@ def test_sticker_only_serves_whitelisted_files(client):
     assert client.get("/api/sticker/win.jpg").headers["content-type"] == "image/jpeg"
     assert client.get("/api/sticker/server.py").status_code == 404
     assert client.get("/api/sticker/..%2Fscripts%2Fserver.py").status_code == 404
+
+
+def test_sticker_skips_hidden_files_dirs_and_missing_folder(client, monkeypatch, tmp_path):
+    (tmp_path / ".DS_Store").write_bytes(b"x")
+    (tmp_path / "sub").mkdir()
+    monkeypatch.setattr(server, "STICKERS", tmp_path)
+    assert client.get("/api/sticker/.DS_Store").status_code == 404
+    assert client.get("/api/sticker/sub").status_code == 404
+    monkeypatch.setattr(server, "STICKERS", tmp_path / "missing")
+    assert client.get("/api/sticker/win.jpg").status_code == 404

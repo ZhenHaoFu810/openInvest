@@ -128,14 +128,16 @@ $("ask").addEventListener("submit", async (e) => {
     cur = j.job_id; showFacts(j.facts); poll(cur);
   } catch { showError("连不上服务，检查网络后再试"); finish(); }
 });
-// 一进来就有内容：默认展示今天的示例报告（服务端每天跑一次，不占访客额度）。拿不到就保持只有输入框
-(async () => {
+// 今天的示例报告点了才看（服务端每天跑一次，不占访客额度）：首屏只留输入框
+$("sample").addEventListener("click", async () => {
+  if (cur) return;   // 已经在跑自己输的代码，不拿示例盖掉
+  $("sample").hidden = true;
   try {
-    const r = await fetch(API + "/api/sample"); if (!r.ok || cur) return;
+    const r = await fetch(API + "/api/sample"); if (!r.ok) throw 0;
     const j = await r.json(); if (cur) return;
     cur = j.job_id; showFacts(j.facts, true); poll(cur);
-  } catch {}
-})();
+  } catch { $("sample").hidden = false; showError("示例暂时拿不到，稍后再试"); }   // 按钮留着能再点
+});
 // 安装方式、命令和说明照抄官网 openinvest-site（src/data/site.ts 的 INSTALL_TABS + src/i18n.tsx 的中文 install 说明，
 // 对齐 openinvest-site#5），那边改了这里同步。复制整个标签的全部命令，和官网一致
 const INSTALL = [
@@ -170,13 +172,23 @@ drawInstall(0);
 // ---------- 试玩：你 vs AI。行情和 AI 决定是 build_game.py 生成的静态数据，输赢全在浏览器里算 ----------
 const POS = [["空仓", 0], ["半仓", 0.5], ["满仓", 1]];
 const ACT = { ACCUMULATE: ["加仓", 0.5], BUY: ["加仓", 0.5], TRIM: ["减仓", -0.5], SELL: ["清仓", -1] };
-const COST = 0.001, START = 100000;
-let gm = null, gameUrl = null;   // 当前一局；gameUrl：数据的绝对地址，表情包按它拼（QMuse 版接口在别的域名）
+const LOOK = { gold: ["🥇", "避险老将", "#FFE7A6"], ndx: ["💻", "科技快车", "#DED8FF"], csi300: ["🏮", "A 股大盘", "#FFD9D9"], tencent: ["🐧", "港股巨头", "#D3EAFF"] };
+const C = { you: "#EC5F93", ai: "#6B57F0", hold: "#A9A9B6" };
+const COST = 0.001, START = 100000, CALM = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let gm = null, gameUrl = null, busy = false;   // gm：当前一局；gameUrl：数据的绝对地址，表情包按它拼（QMuse 版接口在别的域名）
 const yuan = (v) => "¥" + Math.round(v).toLocaleString("zh-CN");
 const pct = (v) => { const x = Math.round(v * 1000) / 10; return (x > 0 ? "+" : "") + x.toFixed(1) + "%"; };   // 先取整再定符号，免得出 "-0.0%"
 const tone = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
 const posName = (p) => POS.find(([, v]) => v === p)[0];
 const px = (v) => v >= 100 ? v.toFixed(0) : v.toFixed(2);
+const sticker = (name) => String(new URL(`sticker/${name}`, gameUrl));
+
+function go(v) {
+  ["home", "pick", "play", "dbt"].forEach((k) => { $("v-" + k).hidden = k !== v; });
+  window.scrollTo(0, 0);
+  if (v === "dbt" && lastFacts) drawChart(lastFacts.chart);   // 隐藏时画的图宽度不对，切过来重画
+  if (v === "play" && gm) { if (!$("gm-live").hidden) drawGame(); else drawEq(); }
+}
 
 function aiStep(p, v) {
   const a = ACT[v];
@@ -185,110 +197,160 @@ function aiStep(p, v) {
   return [np === p ? `${a[0]}，但仓位已到头，没动` : a[0], np];
 }
 
-// 纵轴只按「到这一周为止」的价格定刻度：按全年定会把之后的最高价、最低价泄露出来。横轴按全年，线随周数往右长
-function drawGame() {
+function tween(node, from, to, fmt) {
+  if (CALM || from === to) { node.textContent = fmt(to); return; }
+  const t0 = performance.now();
+  const f = (t) => { const k = Math.min(1, (t - t0) / 450); node.textContent = fmt(from + (to - from) * (1 - (1 - k) ** 3)); if (k < 1) requestAnimationFrame(f); };
+  requestAnimationFrame(f);
+}
+
+// 纵轴只按「到这一周为止」的价格定刻度：按全年定会把之后的最高价、最低价泄露出来。横轴按全年，线随周数往右长；
+// prev 给了就把这一周新长出来的那段线描出来
+function drawGame(prev) {
   const a = gm.a, i = a.turns[gm.k].i, c = a.c.slice(0, i + 1), N = a.c.length;
-  const svg = $("gm-chart"), W = size(svg, 150), PW = W - 48, X = (j) => j * PW / (N - 1);
-  const lo = Math.min(...c), hi = Math.max(...c), Y = (v) => 8 + (hi - v) / (hi - lo || 1) * 120;
-  let s = "";
-  for (let t = 0; t <= 2; t++) { const v = lo + (hi - lo) * t / 2; s += `<line x1="0" x2="${PW}" y1="${Y(v)}" y2="${Y(v)}" stroke="${T.grid}"/><text x="${PW + 6}" y="${Y(v) + 4}" fill="${T.axis}" font-size="11">${px(v)}</text>`; }
-  const g0 = X(a.turns[0].i);
-  s += `<line x1="${g0}" x2="${g0}" y1="0" y2="132" stroke="${T.axis}" stroke-dasharray="2 3"/>`;
-  s += `<path d="${c.map((v, j) => `${j ? "L" : "M"}${X(j).toFixed(1)},${Y(v).toFixed(1)}`).join("")}" fill="none" stroke="${T.nav}" stroke-width="1.5"/>`;
-  s += `<circle cx="${X(i).toFixed(1)}" cy="${Y(c[i]).toFixed(1)}" r="3.5" fill="${T.up}"/>`;
-  s += `<text x="0" y="146" fill="${T.axis}" font-size="11">${a.d[0]}</text><text x="${g0}" y="146" text-anchor="middle" fill="${T.axis}" font-size="11">开局</text>`;
+  const svg = $("gm-chart"), W = size(svg, 160), PW = W - 44, X = (j) => j * PW / (N - 1);
+  const lo = Math.min(...c), hi = Math.max(...c), Y = (v) => 8 + (hi - v) / (hi - lo || 1) * 140;
+  const line = (from, to) => c.slice(from, to + 1).map((v, j) => `${j ? "L" : "M"}${X(from + j).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+  const cut = prev == null || CALM ? i : prev, g0 = X(a.turns[0].i);
+  let s = `<rect x="0" y="0" width="${g0.toFixed(1)}" height="156" rx="8" fill="#F3F3F6"/><text x="6" y="152" fill="${T.axis}" font-size="11">开局前</text>`;
+  for (let t = 0; t <= 2; t++) { const v = lo + (hi - lo) * t / 2; s += `<line x1="${g0.toFixed(1)}" x2="${PW}" y1="${Y(v)}" y2="${Y(v)}" stroke="${T.grid}"/><text x="${PW + 6}" y="${Y(v) + 4}" fill="${T.axis}" font-size="11">${px(v)}</text>`; }
+  s += `<path d="${line(0, cut)}" fill="none" stroke="${T.nav}" stroke-width="1.8" stroke-linejoin="round"/>`;
+  if (cut < i) s += `<path class="seg" d="${line(cut, i)}" fill="none" stroke="${C.you}" stroke-width="2.4" stroke-linejoin="round"/>`;
+  s += `<circle class="dot" cx="${X(i).toFixed(1)}" cy="${Y(c[i]).toFixed(1)}" r="5" fill="${C.you}" stroke="#fff" stroke-width="2"/>`;
   svg.innerHTML = s;
+  const seg = svg.querySelector(".seg");
+  if (seg) { const L = seg.getTotalLength(); seg.style.strokeDasharray = L; seg.style.strokeDashoffset = L; seg.getBoundingClientRect(); seg.style.transition = "stroke-dashoffset .45s ease-out"; seg.style.strokeDashoffset = "0"; }
 }
 
-function drawScore() {
-  [["you", gm.you], ["ai", gm.ai]].forEach(([k, s]) => {
-    const r = s.eq / START - 1, b = $("gm-" + k); b.textContent = yuan(s.eq); b.className = tone(r);
-    $(`gm-${k}-p`).textContent = `${pct(r)}　${posName(s.p)}`;
-  });
+function drawProg() {
+  const p = $("gm-prog"); p.textContent = "";
+  gm.a.turns.forEach((_, j) => { const d = gm.hist[j]; p.append(el("i", d == null ? (j === gm.k ? "now" : null) : d > 5e-4 ? "y" : d < -5e-4 ? "a" : "t")); });
 }
 
-function drawTurn() {
+function drawTurn(prev, old) {
   const a = gm.a, t = a.turns[gm.k];
-  $("gm-week").textContent = `${a.name}　第 ${gm.k + 1} / ${a.turns.length} 周`;
+  $("gm-week").textContent = `第 ${gm.k + 1} / ${a.turns.length} 周`;
   $("gm-date").textContent = `${a.d[t.i]}　收盘 ${px(a.c[t.i])}`;
-  drawScore(); drawGame();
+  [["you", gm.you], ["ai", gm.ai]].forEach(([k, s]) => {
+    tween($("gm-" + k), old ? old[k] : s.eq, s.eq, yuan);
+    const r = s.eq / START - 1, p = $(`gm-${k}-p`); p.textContent = "";
+    p.append(el("span", tone(r), pct(r)), `　${posName(s.p)}`);
+  });
+  const d = (gm.you.eq - gm.ai.eq) / START * 100;
+  $("gm-lead").textContent = Math.abs(d) < 0.05 ? "目前打平" : d > 0 ? `你领先 ${d.toFixed(1)} 个点` : `AI 领先 ${(-d).toFixed(1)} 个点`;
+  drawProg(); drawGame(prev);
   $("gm-pick").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.p === gm.you.p)));
 }
 
-// 一周：双方按各自仓位吃下一周涨跌（调仓先扣成本）。返回揭晓用的信息
+// 一周：双方按各自仓位吃下一周涨跌（调仓先扣成本）
 function step(p) {
   const a = gm.a, t = a.turns[gm.k];
   const i1 = gm.k + 1 < a.turns.length ? a.turns[gm.k + 1].i : a.c.length - 1;
   const r = a.c[i1] / a.c[t.i] - 1, [act, aiP] = aiStep(gm.ai.p, t.v);
-  [[gm.you, p], [gm.ai, aiP]].forEach(([s, np]) => { s.eq *= (1 - Math.abs(np - s.p) * COST) * (1 + np * r); s.p = np; });
-  gm.k += 1;
-  return { t, act, r };
+  const [ry, ra] = [[gm.you, p], [gm.ai, aiP]].map(([s, np]) => {
+    const e0 = s.eq; s.eq *= (1 - Math.abs(np - s.p) * COST) * (1 + np * r); s.p = np; return s.eq / e0 - 1;
+  });
+  gm.hist.push(ry - ra); gm.eq.push([gm.you.eq, gm.ai.eq]); gm.k += 1;
+  return { t, act, r, ry, ra };
+}
+
+function reveal({ t, act, r, ry, ra }) {
+  const box = $("gm-last"), d = ry - ra;
+  box.textContent = ""; box.hidden = false; box.classList.remove("pop"); void box.offsetWidth; box.classList.add("pop");
+  if (Math.abs(d) > 5e-4) { const img = el("img"); img.src = sticker(d > 0 ? "cheer.jpg" : "pout.jpg"); img.alt = d > 0 ? "这周你赢了" : "这周 AI 赢了"; box.append(img); }
+  const txt = el("div");
+  txt.append(el("b", null, `AI 亮牌：${act}` + (t.v ? "" : "（这周没有记录，按持有算）")));
+  if (t.why) txt.append(el("p", null, t.why));   // 模型文本，只走 textContent
+  const wk = el("p", "g-wk");
+  wk.append(`这周${gm.a.name} `, el("b", tone(r), pct(r)), "　你 ", el("span", tone(ry), pct(ry)), "　AI ", el("span", tone(ra), pct(ra)));
+  txt.append(wk); box.append(txt);
 }
 
 function play(p) {
-  const { t, act, r } = step(p), last = $("gm-last");
-  last.textContent = ""; last.hidden = false;
-  last.append(el("b", null, `AI 这周：${act}` + (t.v ? "" : "（这周没有记录，按持有算）")));
-  if (t.why) last.append(el("span", null, t.why));   // 模型文本，只走 textContent
-  const res = el("span", null, `这一周 ${gm.a.name} `); res.append(el("b", tone(r), pct(r))); last.append(res);
-  if (gm.k >= gm.a.turns.length) endGame(); else drawTurn();
+  if (busy || !gm || gm.k >= gm.a.turns.length) return;
+  const prev = gm.a.turns[gm.k].i, old = { you: gm.you.eq, ai: gm.ai.eq };
+  reveal(step(p));
+  if (gm.k >= gm.a.turns.length) { endGame(); return; }
+  drawTurn(prev, old);
+  if (!CALM) { busy = true; setTimeout(() => { busy = false; }, 450); }   // 线描完再收下一手，连点不会跳周
+}
+
+function drawEq() {   // 结局图：三条净值线
+  const svg = $("gm-eq"); if (!svg || !gm) return;
+  const a = gm.a, W = size(svg, 150), PW = W - 52, n = gm.eq.length, base = a.c[a.turns[0].i];
+  const hold = gm.eq.map((_, j) => START * a.c[j < a.turns.length ? a.turns[j].i : a.c.length - 1] / base);
+  const all = [...gm.eq.flat(), ...hold], lo = Math.min(...all), hi = Math.max(...all);
+  const X = (j) => j * PW / (n - 1), Y = (v) => 8 + (hi - v) / (hi - lo || 1) * 132;
+  const line = (vs, col, w, dash) => `<path d="${vs.map((v, j) => `${j ? "L" : "M"}${X(j).toFixed(1)},${Y(v).toFixed(1)}`).join("")}" fill="none" stroke="${col}" stroke-width="${w}"${dash ? ' stroke-dasharray="4 4"' : ""} stroke-linejoin="round"/>`;
+  let s = `<line x1="0" x2="${PW}" y1="${Y(START)}" y2="${Y(START)}" stroke="${T.grid}"/><text x="${PW + 6}" y="${Y(START) + 4}" fill="${T.axis}" font-size="11">10 万</text>`;
+  s += line(hold, C.hold, 1.5, true) + line(gm.eq.map((e) => e[1]), C.ai, 2.2) + line(gm.eq.map((e) => e[0]), C.you, 2.6);
+  svg.innerHTML = s;
 }
 
 function endGame() {
-  const a = gm.a, you = gm.you.eq / START - 1, ai = gm.ai.eq / START - 1;
-  const hold = a.c[a.c.length - 1] / a.c[a.turns[0].i] - 1, diff = (you - ai) * 100;
-  $("gm-play").hidden = true;
+  const a = gm.a, you = gm.you.eq / START - 1, ai = gm.ai.eq / START - 1, i0 = a.turns[0].i;
+  const hold = a.c[a.c.length - 1] / a.c[i0] - 1, diff = (you - ai) * 100, tie = Math.abs(diff) < 0.05;
+  $("gm-live").hidden = true; $("gm-week").textContent = "结局"; drawProg();
   const box = $("gm-end"); box.textContent = ""; box.hidden = false;
-  const tie = Math.abs(diff) < 0.05;
-  const em = el("img", "em"), k = tie ? "tie" : diff > 0 ? "win" : "lose";
-  em.src = new URL(`sticker/${k}.${k === "lose" ? "gif" : "jpg"}`, gameUrl); em.alt = { tie: "🤝", win: "🎉", lose: "😭" }[k];
-  box.append(em,
-    el("b", null, tie ? "和 AI 打平" : diff > 0 ? `你赢了 AI ${diff.toFixed(1)} 个百分点` : `AI 赢了你 ${(-diff).toFixed(1)} 个百分点`));
-  const res = el("div", "gm-res");
-  [["你", you], ["AI", ai], ["一直满仓不动", hold]].forEach(([k, v]) => { res.append(el("span", null, k)); res.append(el("span", tone(v), pct(v))); });
-  box.append(res, el("p", "hint", `${a.d[a.turns[0].i]} 到 ${a.d[a.d.length - 1]}，共 ${a.turns.length} 周`));
-  const row = el("div", "gm-row");
-  const again = el("button", null, "再玩一次"); again.type = "button"; again.addEventListener("click", () => startGame(a));
-  row.append(again); box.append(row);
+  const k = tie ? "tie" : diff > 0 ? "win" : "lose", img = el("img");
+  img.src = sticker(k === "lose" ? "lose.gif" : k + ".jpg"); img.alt = { tie: "打平", win: "你赢了", lose: "AI 赢了" }[k];
+  box.append(img, el("h2", null, tie ? "和 AI 打平" : diff > 0 ? `你赢了 AI ${diff.toFixed(1)} 个点` : `AI 赢了你 ${(-diff).toFixed(1)} 个点`),
+    el("p", "g-sub", `${a.name}，${a.d[i0]} 到 ${a.d[a.d.length - 1]}，${a.turns.length} 周`));
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.id = "gm-eq"; svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "全程资金曲线：你、AI、一直满仓");
+  const res = el("div", "g-res");
+  [["你", you, C.you], ["AI", ai, C.ai], ["一直满仓", hold, "#7C7C88"]].forEach(([n, v, col]) => {
+    const c = el("div"), lab = el("small", null, n); lab.style.color = col; c.append(lab, el("b", tone(v), pct(v))); res.append(c);
+  });
+  const row = el("div", "g-ctas");
+  const again = el("button", "g-cta pri", "再来一局"); again.type = "button"; again.addEventListener("click", () => startGame(a));
+  const other = el("button", "g-cta sec", "换个标的"); other.type = "button"; other.addEventListener("click", () => go("pick"));
+  row.append(again, other); box.append(svg, res, row);
+  drawEq();
 }
 
 function startGame(a) {
-  gm = { a, k: 0, you: { eq: START, p: 0.5 }, ai: { eq: START, p: 0.5 } };
-  $("gm-assets").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === a.key)));
-  $("gm-end").hidden = true; $("gm-last").hidden = true; $("gm-play").hidden = false;
-  drawTurn();
+  gm = { a, k: 0, you: { eq: START, p: 0.5 }, ai: { eq: START, p: 0.5 }, hist: [], eq: [[START, START]] };
+  $("gm-name").textContent = `${(LOOK[a.key] || [""])[0]} ${a.name}`;
+  $("gm-end").hidden = true; $("gm-last").hidden = true; $("gm-live").hidden = false; busy = false;
+  go("play"); drawTurn();
 }
 
-POS.forEach(([name, p]) => {
-  const b = el("button", null, name); b.type = "button"; b.dataset.p = p;
+POS.forEach(([name, p], k) => {
+  const b = el("button", null, name), g = el("span", "gauge"), f = el("i");
+  b.type = "button"; b.dataset.p = p; f.style.width = p * 100 + "%"; g.append(f);
+  b.append(g, el("kbd", null, String(k + 1)));
   b.addEventListener("click", () => play(p)); $("gm-pick").append(b);
 });
+document.addEventListener("keydown", (e) => {   // 桌面上 1/2/3 直接出手
+  if ($("v-play").hidden || $("gm-live").hidden || $("rules").open || e.metaKey || e.ctrlKey || e.altKey || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  const k = "123".indexOf(e.key); if (k >= 0 && e.key) play(POS[k][1]);
+});
 $("gm-ff").addEventListener("click", () => {
+  if (busy) return;
   while (gm.k < gm.a.turns.length - 1) step(gm.you.p);
   play(gm.you.p);
 });
+$("start").addEventListener("click", () => go("pick"));
+document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
+document.querySelectorAll("[data-how]").forEach((b) => b.addEventListener("click", () => $("rules").showModal()));
 (async () => {
   try {
     const r = await fetch(API + "/api/game"); if (!r.ok) throw 0;
     gameUrl = r.url;
+    $("hero-img").src = sticker("hero.jpg");
     (await r.json()).assets.forEach((a) => {
-      const b = el("button", null, a.name); b.type = "button"; b.dataset.key = a.key;
+      const [icon, tag, bg] = LOOK[a.key] || ["📈", a.code, "#E6E6EC"];
+      const b = el("button"), ic = el("span", "g-ic", icon);
+      b.type = "button"; ic.style.background = bg;
+      b.append(ic, el("b", null, a.name), el("small", null, `${tag}，${a.turns.length} 周`));
       b.addEventListener("click", () => startGame(a)); $("gm-assets").append(b);
     });
   } catch { $("gm-err").textContent = "游戏数据暂时拿不到，稍后再试"; $("gm-err").hidden = false; }
 })();
-
-function showTab(game) {
-  $("tab-game").setAttribute("aria-selected", String(game)); $("tab-dbt").setAttribute("aria-selected", String(!game));
-  $("game").hidden = !game; $("dbt").hidden = game;
-  if (!game && lastFacts) drawChart(lastFacts.chart);   // 隐藏时画的图宽度不对，切过来重画
-  if (game && gm && gm.k < gm.a.turns.length) drawGame();
-}
-$("tab-game").addEventListener("click", () => showTab(true));
-$("tab-dbt").addEventListener("click", () => showTab(false));
 window.addEventListener("resize", () => {
-  if (lastFacts && !$("dbt").hidden) drawChart(lastFacts.chart);
-  if (gm && !$("gm-play").hidden) drawGame();
+  if (lastFacts && !$("v-dbt").hidden) drawChart(lastFacts.chart);
+  if (gm && !$("v-play").hidden) { if (!$("gm-live").hidden) drawGame(); else drawEq(); }
 });
 
 }

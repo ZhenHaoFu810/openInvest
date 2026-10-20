@@ -7,15 +7,17 @@
 <style>
   :root { --ink:#2C2C2A; --sub:#5F5E5A; --mute:#888780; --rule:#E5E3DC; --grid:#ECEAE4; --hot:#A32D2D; --hotbg:#FCEBEB; }
   * { box-sizing: border-box; }
+  button, input { font-family: inherit; }
   [hidden] { display: none !important; }
   body { margin: 0; background: #fff; color: var(--ink); font: 14px/1.6 "PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif; font-variant-numeric: tabular-nums; }
-  main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
+  main { padding: 0 0 40px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 22px 16px 0; }
   a { color: inherit; }
   .brand { font-size: 12px; color: var(--sub); display: flex; justify-content: space-between; }
   .brand a { text-decoration: none; }
   form { display: flex; gap: 8px; margin: 18px 0 0; }
-  input { flex: 1; min-width: 0; font: 18px/1.2 inherit; letter-spacing: .1em; padding: 9px 10px; border: 1px solid #D3D1C7; border-radius: 6px; }
-  button { font: 600 15px/1 inherit; padding: 0 16px; border: 0; border-radius: 6px; background: var(--ink); color: #fff; cursor: pointer; }
+  input { flex: 1; min-width: 0; font-size: 18px; line-height: 1.2; letter-spacing: .1em; padding: 9px 10px; border: 1px solid #D3D1C7; border-radius: 6px; }
+  button { font-weight: 600; font-size: 15px; line-height: 1; padding: 0 16px; border: 0; border-radius: 6px; background: var(--ink); color: #fff; cursor: pointer; }
   button:disabled { opacity: .45; cursor: default; }
   input:focus-visible, button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   .hint, .err { font-size: 12px; margin: 6px 0 0; color: var(--mute); }
@@ -56,7 +58,7 @@
   @keyframes b { 50% { opacity: .35; } }
   /* 宽屏左右两栏：左结论与正反对照，右交易图。图跨到最后一行 1fr，不把左栏行距撑开 */
   @media (min-width: 1100px) {
-    main { max-width: 1180px; }
+    #v-dbt { max-width: 1180px; }
     form, .hint, .err { max-width: 560px; }
     #rep:not([hidden]) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); grid-template-rows: repeat(7, auto) 1fr; column-gap: 48px; }
     #rep > * { grid-column: 1; }
@@ -66,77 +68,193 @@
   .ins > p { margin: 8px 0 12px; color: var(--sub); }
   .it { border: 1px solid #D3D1C7; border-top: 2px solid var(--ink); border-radius: 6px; overflow: hidden; }
   .it-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px; border-bottom: 1px solid var(--rule); }
-  .it-bar button { font: 500 13px/1 inherit; padding: 7px 11px; border-radius: 4px; background: none; color: var(--sub); }
+  .it-bar button { font-weight: 500; font-size: 13px; line-height: 1; padding: 7px 11px; border-radius: 4px; background: none; color: var(--sub); }
   .it-bar button[aria-selected="true"] { background: var(--ink); color: #fff; }
   .it-bar .cp { margin-left: auto; font-size: 12px; padding: 5px 10px; border: 1px solid #D3D1C7; color: var(--ink); }
   .it-cmd { overflow-x: auto; padding: 12px 14px; background: #F6F5F1; font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .it-cmd div { white-space: pre-wrap; overflow-wrap: anywhere; }   /* 手机窄屏折行，不截断；复制按钮仍复制原命令 */
   .it-cmd div::before { content: "$ "; color: var(--mute); }
   .it-note { margin: 0; padding: 9px 14px; font-size: 12px; color: var(--sub); }
-  /* 试玩：你 vs AI */
-  .tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 1px solid var(--rule); }
-  .tabs button { font: 600 14px/1 inherit; padding: 10px 14px; border-radius: 6px 6px 0 0; background: none; color: var(--sub); }
-  .tabs button[aria-selected="true"] { background: var(--ink); color: #fff; }
-  .gm-lead { color: var(--sub); margin: 14px 0 12px; }
-  .gm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .gm-row > span { font-size: 13px; color: var(--sub); }
-  .gm-row button, .gm-end button { font-weight: 500; padding: 10px 14px; background: #fff; color: var(--ink); border: 1px solid #D3D1C7; }
-  .gm-row button[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); font-weight: 600; }
-  .gm-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 20px 0 6px; font-size: 12px; color: var(--sub); }
-  .gm-top b { font-size: 15px; color: var(--ink); }
-  .gm-score { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
-  .gm-score > div { border: 1px solid var(--rule); border-radius: 6px; padding: 8px 12px; }
-  .gm-score small { display: block; font-size: 12px; color: var(--sub); }
-  .gm-score b { font-size: 18px; font-weight: 600; }
-  .gm-score span { display: block; font-size: 12px; color: var(--sub); }
-  .up { color: #E24B4A; } .dn { color: #1D9E75; }
-  .gm-last { border-left: 2px solid var(--ink); padding: 4px 12px; margin: 12px 0; }
-  .gm-last > * { display: block; }
-  .gm-last span { font-size: 12px; color: var(--sub); margin-top: 2px; }
-  .gm-ff { margin-top: 12px; padding: 4px 0; background: none; color: var(--sub); font: 400 13px/1.4 inherit; text-decoration: underline; }
-  .gm-end { text-align: center; margin: 24px 0 8px; }
-  .gm-end .em { display: block; height: 120px; margin: 0 auto 6px; font-size: 48px; }
-  .gm-end > b { display: block; font-size: 20px; margin: 4px 0 14px; }
-  .gm-res { display: grid; grid-template-columns: auto auto; justify-content: center; gap: 4px 24px; font-size: 15px; text-align: left; }
-  .gm-res span:nth-child(odd) { color: var(--sub); }
-  .gm-end .gm-row { justify-content: center; margin-top: 16px; }
-  .gm-end .hint { margin: 6px auto 0; }
-  @media (prefers-reduced-motion: reduce) { .sk { animation: none; } .wt .bar i { transition: none; } }
+  /* ---------- 首页 + 试玩：大字首屏，说明压成角落小字，两个入口 ---------- */
+  :root { --bg:#F3F3F6; --you:#EC5F93; --ai:#6B57F0; --card:#fff; --line:#E2E2E8; }
+  body { background: var(--bg); }
+  .up { color: #E5484D; } .dn { color: #12A387; }
+  .g-top { display: flex; align-items: center; justify-content: space-between; max-width: 1240px; margin: 0 auto; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  .g-logo { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; text-decoration: none; }
+  .g-logo i { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); }
+  .g-logo svg { width: 16px; height: 16px; }
+  .g-how { display: flex; align-items: center; gap: 8px; padding: 0; background: none; color: var(--ink); font-weight: 500; font-size: 14px; line-height: 1; }
+  .g-how b { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: #fff; }
+  .g-hero { position: relative; display: flex; flex-direction: column; max-width: 1240px; min-height: calc(100svh - 63px); margin: 0 auto; padding: 6vh 24px 28px; overflow: hidden; }
+  .g-big { position: relative; z-index: 1; margin: 0 0 0 4%; font-size: clamp(46px, 7.6vw, 112px); font-weight: 700; line-height: 1.04; letter-spacing: -.05em; }
+  .g-big span { display: block; }
+  .g-big .l2 { display: flex; align-items: center; gap: .14em; padding-left: 16%; }
+  .g-arrow { display: grid; place-items: center; flex: none; width: .82em; height: .82em; border-radius: 50%; background: var(--ai); box-shadow: 0 14px 30px -10px var(--ai); }
+  .g-arrow svg { width: 52%; height: 52%; }
+  .g-en { position: relative; z-index: 1; margin: .1em 0 0 6%; font: 900 clamp(20px, 3.9vw, 56px)/1 "Arial Black", "Helvetica Neue", Arial, sans-serif; letter-spacing: -.05em; }
+  .g-en span { display: inline-block; padding: .04em .34em .08em; border: 2px solid var(--ink); border-radius: 999px; }
+  .g-en b { display: block; margin: .16em 0 0 -2%; font-size: 1.42em; font-weight: 900; }
+  .g-tile { position: absolute; pointer-events: none; aspect-ratio: 1; border-radius: 26%; box-shadow: 0 22px 40px -16px rgba(40, 30, 100, .45), inset 0 -6px 0 rgba(0, 0, 0, .1); animation: g-fl 6s ease-in-out infinite; }
+  .g-tile.t1 { top: 12%; right: 8%; width: clamp(78px, 10vw, 136px); overflow: hidden; background: var(--you); rotate: 9deg; }
+  .g-tile.t1 img { width: 100%; height: 100%; object-fit: cover; }
+  .g-tile.t2 { top: 46%; right: 5%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8%; width: clamp(64px, 7vw, 100px); padding: clamp(11px, 1.2vw, 17px); background: var(--ink); rotate: 8deg; animation-delay: -2.5s; }
+  .g-tile.t2 i { border-radius: 26%; background: #3B3B46; }
+  .g-tile.t2 i.y { background: var(--you); } .g-tile.t2 i.a { background: var(--ai); }
+  .g-bars { position: absolute; z-index: 2; pointer-events: none; top: calc(6vh + clamp(46px, 7.6vw, 112px) * 2.2); left: 3%; display: grid; gap: 6px; rotate: -10deg; animation: g-fl 7s ease-in-out infinite -1s; }
+  .g-bars i { display: block; width: clamp(60px, 7vw, 96px); height: clamp(14px, 1.6vw, 22px); border-radius: 999px; box-shadow: 0 6px 14px -6px rgba(0, 0, 0, .35); }
+  .g-bars i:nth-child(1) { background: var(--you); } .g-bars i:nth-child(2) { margin-left: -12px; background: var(--ai); } .g-bars i:nth-child(3) { margin-left: 10px; background: #12A387; }
+  @keyframes g-fl { 50% { translate: 0 -9px; } }
+  .g-note { position: relative; z-index: 1; align-self: flex-end; max-width: 300px; margin: 28px 6% 0 0; padding-left: 14px; border-left: 2px solid var(--ink); }
+  .g-note b { display: block; font-size: 17px; line-height: 1.45; }
+  .g-note p { margin: 8px 0 0; font-size: 13px; color: var(--sub); }
+  .g-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 24px; margin-top: auto; padding-top: 28px; }
+  .g-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--sub); }
+  .g-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #12A387; }
+  .g-ctas { display: flex; flex-wrap: wrap; gap: 12px; }
+  .g-cta { display: flex; align-items: center; justify-content: space-between; gap: 28px; min-width: 228px; padding: 14px 22px; border-radius: 999px; text-align: left; font-weight: 600; font-size: 16px; line-height: 1.25; }
+  .g-cta small { display: block; margin-top: 3px; font-size: 12px; font-weight: 400; opacity: .7; }
+  .g-cta svg { width: 18px; height: 18px; flex: none; }
+  .g-cta.pri { background: var(--ink); color: #fff; }
+  .g-cta.sec { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ink); }
+  .g-cta:focus-visible, .g-pick button:focus-visible, .g-lv button:focus-visible { outline: 3px solid var(--ai); outline-offset: 3px; }
+  .g-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; font-size: 14px; }
+  .g-back { padding: 6px 0; background: none; color: var(--sub); font-weight: 500; font-size: 14px; line-height: 1; }
+  .g-h2 { margin: 18px 0 6px; font-size: clamp(32px, 7vw, 48px); font-weight: 700; letter-spacing: -.04em; line-height: 1.1; }
+  .g-sub { margin: 0 0 4px; color: var(--sub); }
+  .g-lv { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; }
+  .g-lv button { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 14px; align-items: center; padding: 18px; border-radius: 22px; background: var(--card); color: var(--ink); text-align: left; box-shadow: 0 5px 0 #DADAE2; transition: transform .08s, box-shadow .08s; }
+  .g-lv button:active { transform: translateY(4px); box-shadow: 0 1px 0 #DADAE2; }
+  .g-lv .g-ic { grid-row: 1 / 3; display: grid; place-items: center; width: 56px; height: 56px; border-radius: 18px; font-size: 30px; }
+  .g-lv b { font-size: 20px; letter-spacing: -.02em; }
+  .g-lv small { font-size: 13px; font-weight: 400; color: var(--sub); }
+  .g-prog { display: flex; gap: 3px; margin: 10px 0 16px; }
+  .g-prog i { flex: 1; height: 8px; border-radius: 3px; background: #DCDCE4; }
+  .g-prog i.y { background: var(--you); } .g-prog i.a { background: var(--ai); } .g-prog i.t { background: #A9A9B6; }
+  .g-prog i.now { background: var(--ink); }
+  .g-board { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; }
+  .g-side { padding: 12px 16px; border-radius: 20px; border-top: 5px solid var(--you); background: var(--card); }
+  .g-side.ai { border-top-color: var(--ai); text-align: right; }
+  .g-side small { font-size: 13px; font-weight: 600; color: var(--you); }
+  .g-side.ai small { color: var(--ai); }
+  .g-side b { display: block; font-size: clamp(21px, 5vw, 30px); font-weight: 700; letter-spacing: -.03em; }
+  .g-side span { font-size: 13px; color: var(--sub); }
+  .g-vs { font: 900 22px/1 "Arial Black", "Helvetica Neue", Arial, sans-serif; color: #B5B5C0; }
+  .g-lead { margin: 8px 0 0; text-align: center; font-size: 13px; color: var(--sub); }
+  .g-chart { margin-top: 12px; padding: 12px 12px 4px; border-radius: 20px; background: var(--card); }
+  .g-date { margin: 0 0 4px; font-size: 12px; color: var(--sub); }
+  .g-chart .dot { animation: g-pop .25s .4s both; transform-box: fill-box; transform-origin: center; }
+  .g-rev { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px; padding: 12px 14px; border-radius: 20px; background: var(--card); }
+  .g-rev.pop { animation: g-pop .3s ease-out; }
+  .g-rev img { flex: none; width: 60px; height: 60px; border-radius: 16px; object-fit: cover; }
+  .g-rev b { font-size: 15px; }
+  .g-rev p { margin: 3px 0 0; font-size: 12px; color: var(--sub); }
+  .g-rev p.g-wk { color: var(--ink); font-size: 13px; }
+  @keyframes g-pop { from { opacity: 0; transform: scale(.94); } }
+  .g-ask { margin: 22px 0 10px; font-size: 16px; font-weight: 600; }
+  .g-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .g-pick button { padding: 16px 8px 12px; border: 2px solid transparent; border-radius: 20px; background: var(--card); color: var(--ink); font-weight: 700; font-size: 19px; line-height: 1; box-shadow: 0 5px 0 #DADAE2; transition: transform .08s, box-shadow .08s; }
+  .g-pick button:active { transform: translateY(4px); box-shadow: 0 1px 0 #DADAE2; }
+  .g-pick button[aria-pressed="true"] { border-color: var(--you); }
+  .g-pick .gauge { display: block; height: 6px; margin: 12px 18% 0; border-radius: 3px; background: #E6E6EC; overflow: hidden; }
+  .g-pick .gauge i { display: block; height: 100%; background: var(--you); }
+  .g-pick kbd { display: block; margin-top: 8px; font-weight: 500; font-size: 11px; line-height: 1; color: var(--mute); }
+  @media (hover: none) { .g-pick kbd { display: none; } }
+  .g-skip { padding: 14px 0 0; background: none; color: var(--sub); font-weight: 400; font-size: 13px; line-height: 1; text-decoration: underline; }
+  .g-end { text-align: center; }
+  .g-end > img { height: 150px; margin-top: 8px; border-radius: 24px; }
+  .g-end h2 { margin: 14px 0 4px; font-size: clamp(30px, 7vw, 50px); font-weight: 700; letter-spacing: -.04em; line-height: 1.1; }
+  .g-end #gm-eq { margin: 16px 0 0; padding: 10px; border-radius: 20px; background: var(--card); }
+  .g-res { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0 18px; }
+  .g-res div { padding: 10px 6px; border-radius: 18px; background: var(--card); }
+  .g-res small { display: block; font-size: 12px; font-weight: 600; }
+  .g-res b { font-size: 22px; letter-spacing: -.02em; }
+  .g-end .g-ctas { justify-content: center; }
+  .g-end .g-cta { justify-content: center; }
+  input::placeholder { font-size: 14px; letter-spacing: 0; }
+  #rep[hidden] + .foot { display: none; }   /* 说明的是报告里的图，没报告就不占首屏 */
+  .g-small { margin: 26px 0 0; font-size: 12px; color: var(--mute); }
+  .g-inl { margin-left: 8px; padding: 0; background: none; color: var(--ink); font-size: 12px; font-weight: 500; text-decoration: underline; }
+  .g-small button { padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; }
+  dialog { width: calc(100% - 32px); max-width: 440px; padding: 22px 22px 18px; border: 0; border-radius: 24px; color: var(--ink); }
+  dialog::backdrop { background: rgba(20, 20, 32, .45); }
+  dialog h2 { margin: 0 0 8px; font-size: 22px; letter-spacing: -.02em; }
+  dialog ul { margin: 0; padding-left: 1.2em; } dialog li { margin: 6px 0; }
+  dialog form { justify-content: flex-end; }
+  dialog form button { padding: 10px 18px; border-radius: 999px; }
+  @media (max-width: 640px) {
+    .g-top { padding: 12px 16px; }
+    .g-hero { min-height: calc(100svh - 55px); padding: 5vh 16px 20px; }
+    .g-big { margin-left: 0; font-size: 14.5vw; } .g-big .l2 { padding-left: 0; } .g-en { margin-left: 0; font-size: 6.2vw; } .g-en b { font-size: 1.5em; }
+    .g-tile.t1 { top: auto; bottom: 31%; right: 12%; width: 30vw; } .g-tile.t2 { top: auto; bottom: 34%; right: auto; left: 16%; width: 18vw; padding: 10px; }
+    .g-bars { display: none; }
+    .g-note { align-self: flex-start; margin: 22px 0 0; }
+    .g-ctas, .g-cta { width: 100%; }
+    .g-lv { grid-template-columns: 1fr; }
+    .g-side { padding: 10px 12px; } .g-vs { font-size: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .sk, .g-tile, .g-bars, .g-rev.pop, .g-chart .dot { animation: none; } .wt .bar i { transition: none; } }
 </style>
 </head>
 <body>
 <main>
-  <div class="brand"><span>你 vs AI</span><a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openInvest</a></div>
-  <div class="tabs" role="tablist" aria-label="玩法">
-    <button type="button" role="tab" id="tab-game" aria-selected="true" aria-controls="game">试玩：你 vs AI</button>
-    <button type="button" role="tab" id="tab-dbt" aria-selected="false" aria-controls="dbt">多空对照</button>
-  </div>
+  <header class="g-top">
+    <a class="g-logo" href="https://openinvest.involutionhell.com" target="_blank" rel="noopener"><i aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="2" y="8" width="3" height="6" rx="1.5" fill="#fff"/><rect x="6.5" y="4" width="3" height="10" rx="1.5" fill="#EC5F93"/><rect x="11" y="2" width="3" height="12" rx="1.5" fill="#8C7CF6"/></svg></i>openInvest</a>
+    <button type="button" class="g-how" data-how><b aria-hidden="true">?</b>怎么玩</button>
+  </header>
 
-  <section id="game" role="tabpanel" aria-labelledby="tab-game">
-    <p class="gm-lead">2026 年 1–9 月的真实行情，每周决定一次仓位。对手是 openInvest 委员会：每周同一天，只看当天之前的数据做决定。看谁赚得多。</p>
-    <div class="gm-row" id="gm-assets"><span>选一个标的：</span></div>
-    <p class="err" id="gm-err" role="alert" hidden></p>
-    <div id="gm-play" hidden>
-      <div class="gm-top"><b id="gm-week"></b><span id="gm-date"></span></div>
-      <svg id="gm-chart" role="img" aria-label="到本周为止的价格走势"></svg>
-      <div class="gm-score">
-        <div><small>你</small><b id="gm-you"></b><span id="gm-you-p"></span></div>
-        <div><small>AI</small><b id="gm-ai"></b><span id="gm-ai-p"></span></div>
+  <section class="g-hero" id="v-home">
+    <h1 class="g-big"><span>你能跑赢</span><span class="l2">这台<i class="g-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></i>AI 吗？</span></h1>
+    <div class="g-en" aria-hidden="true"><span>EVERY WEEK COUNTS</span><b>OUT. HALF. ALL IN.</b></div>
+    <div class="g-tile t1" aria-hidden="true"><img id="hero-img" alt=""></div>
+    <div class="g-tile t2" aria-hidden="true"><i class="y"></i><i></i><i class="a"></i><i></i><i class="y"></i><i class="a"></i><i class="a"></i><i></i><i class="y"></i></div>
+    <div class="g-bars" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="g-note"><b>不是猜涨跌，<br>是每周比 AI 多想一步。</b><p>2026 年 1–9 月真实行情，每周一回合。你押仓位，AI 亮委员会当周的回测决定。</p></div>
+    <div class="g-foot">
+      <span class="g-status">历史复盘，不构成投资建议</span>
+      <div class="g-ctas">
+        <button type="button" class="g-cta pri" id="start"><span>开始对局<small>选个标的就开打</small></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg></button>
+        <button type="button" class="g-cta sec" data-go="dbt"><span>多空对照<small>输入代码看正反理由</small></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
       </div>
-      <div class="gm-last" id="gm-last" aria-live="polite" hidden></div>
-      <div class="gm-row" id="gm-pick"><span>这一周你的仓位：</span></div>
-      <button type="button" class="gm-ff" id="gm-ff">保持现在的仓位，直接看结果</button>
     </div>
-    <div class="gm-end" id="gm-end" hidden></div>
-    <p class="foot">历史复盘游戏：用的都是已经发生的行情，不构成投资建议。双方都从 10 万虚拟资金、半仓开始；你每周选空仓、半仓或满仓。AI 按当周委员会的决定调仓：加仓 +50%、减仓 −50%、清仓归零，其余不动。每次调仓按调动部分收 0.1% 成本。AI 的每个决定都只用了当天之前的数据，所用模型的训练数据截止于 2025 年 5 月，没见过 2026 年的行情。结算表情来自堆糖「永雏塔菲表情包」。</p>
   </section>
 
-  <div id="dbt" role="tabpanel" aria-labelledby="tab-dbt" hidden>
+  <section class="wrap" id="v-pick" hidden>
+    <div class="g-bar"><button type="button" class="g-back" data-go="home">← 返回</button></div>
+    <h2 class="g-h2">选个标的</h2>
+    <p class="g-sub">每个都是 2026 年 1–9 月的真实走势。</p>
+    <p class="err" id="gm-err" role="alert" hidden></p>
+    <div class="g-lv" id="gm-assets"></div>
+  </section>
+
+  <section class="wrap" id="v-play" hidden>
+    <div class="g-bar"><button type="button" class="g-back" data-go="pick">← 换标的</button><b id="gm-name"></b><span id="gm-week"></span></div>
+    <div class="g-prog" id="gm-prog" aria-hidden="true"></div>
+    <div id="gm-live">
+      <div class="g-board">
+        <div class="g-side"><small>你</small><b id="gm-you"></b><span id="gm-you-p"></span></div>
+        <span class="g-vs" aria-hidden="true">VS</span>
+        <div class="g-side ai"><small>AI</small><b id="gm-ai"></b><span id="gm-ai-p"></span></div>
+      </div>
+      <p class="g-lead" id="gm-lead"></p>
+      <div class="g-chart"><p class="g-date" id="gm-date"></p><svg id="gm-chart" role="img" aria-label="到本周为止的价格走势"></svg></div>
+      <div class="g-rev" id="gm-last" aria-live="polite" hidden></div>
+      <p class="g-ask">下一周，你押：</p>
+      <div class="g-pick" id="gm-pick"></div>
+      <button type="button" class="g-skip" id="gm-ff">保持仓位，直接看结局</button>
+    </div>
+    <div class="g-end" id="gm-end" hidden></div>
+    <p class="g-small">历史复盘，不构成投资建议。<button type="button" data-how>规则</button></p>
+  </section>
+
+  <section class="wrap" id="v-dbt" hidden>
+    <div class="g-bar"><button type="button" class="g-back" data-go="home">← 返回</button></div>
+    <h2 class="g-h2">多空对照</h2>
+    <p class="g-sub">输入代码，看正反两边的理由。不给买卖结论。</p>
   <form id="ask">
     <input id="code" autocomplete="off" autocapitalize="characters" maxlength="10" pattern="[0-9A-Za-z.]{1,10}" placeholder="基金或股票代码，例如 110011、600519" aria-label="基金或股票代码" required>
     <button id="go" type="submit">复核</button>
   </form>
-  <p class="hint" id="hint">网页为试用版：每人每天 3 次，约 30 秒。</p>
+  <p class="hint" id="hint">网页为试用版：每人每天 3 次，约 30 秒。<button type="button" class="g-inl" id="sample">先看今天的示例</button></p>
   <p class="err" id="err" role="alert" hidden></p>
 
   <section id="rep" hidden>
@@ -165,8 +283,9 @@
     </div>
   </section>
   <p class="foot">不含买卖建议。灰条为历史 10%–90% 区间，竖线为中位，红线为当前价。数据：东方财富、公开行情。方法见《LLM 多智能体投资系统的架构选择与校准优先评估》。openInvest 开源项目：<a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openinvest.involutionhell.com</a></p>
-  </div>
+  </section>
 
+  <div class="wrap">
   <section class="ins" aria-labelledby="ins-h">
     <div class="sh" id="ins-h">安装到您的 Agent</div>
     <p>这个网页是试用版。安装到您的个人 Agent 上会更理解您，还可以输入您的持仓等；持仓和决策记录只保存在您自己的电脑上。开源（MIT），完整说明见 <a href="https://github.com/longsizhuo/openInvest#quick-start" target="_blank" rel="noopener">GitHub</a>。</p>
@@ -176,6 +295,19 @@
       <p class="it-note" id="it-note"></p>
     </div>
   </section>
+  </div>
+
+  <dialog id="rules" aria-labelledby="rules-h">
+    <h2 id="rules-h">怎么玩</h2>
+    <ul>
+      <li>选一个标的，按 2026 年 1–9 月的真实行情一周一周往下走。</li>
+      <li>每周押空仓、半仓或满仓。你和 AI 都从 10 万虚拟资金、半仓开始。</li>
+      <li>AI 按委员会当周的回测决定调仓：加仓 +50%、减仓 −50%、清仓归零，其余不动。你选完它才亮牌。</li>
+      <li>每次调仓按调动部分收 0.1% 成本。</li>
+    </ul>
+    <p class="hint">历史复盘，不构成投资建议。AI 的每个决定都只用了当天之前的数据，所用模型的训练数据截止于 2025 年 5 月，没见过 2026 年的行情。表情包来自堆糖「永雏塔菲表情包」。</p>
+    <form method="dialog"><button>知道了</button></form>
+  </dialog>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -305,14 +437,16 @@ $("ask").addEventListener("submit", async (e) => {
     cur = j.job_id; showFacts(j.facts); poll(cur);
   } catch { showError("连不上服务，检查网络后再试"); finish(); }
 });
-// 一进来就有内容：默认展示今天的示例报告（服务端每天跑一次，不占访客额度）。拿不到就保持只有输入框
-(async () => {
+// 今天的示例报告点了才看（服务端每天跑一次，不占访客额度）：首屏只留输入框
+$("sample").addEventListener("click", async () => {
+  if (cur) return;   // 已经在跑自己输的代码，不拿示例盖掉
+  $("sample").hidden = true;
   try {
-    const r = await fetch("/api/sample"); if (!r.ok || cur) return;
+    const r = await fetch("/api/sample"); if (!r.ok) throw 0;
     const j = await r.json(); if (cur) return;
     cur = j.job_id; showFacts(j.facts, true); poll(cur);
-  } catch {}
-})();
+  } catch { $("sample").hidden = false; showError("示例暂时拿不到，稍后再试"); }   // 按钮留着能再点
+});
 // 安装方式、命令和说明照抄官网 openinvest-site（src/data/site.ts 的 INSTALL_TABS + src/i18n.tsx 的中文 install 说明，
 // 对齐 openinvest-site#5），那边改了这里同步。复制整个标签的全部命令，和官网一致
 const INSTALL = [
@@ -347,13 +481,23 @@ drawInstall(0);
 // ---------- 试玩：你 vs AI。行情和 AI 决定是 build_game.py 生成的静态数据，输赢全在浏览器里算 ----------
 const POS = [["空仓", 0], ["半仓", 0.5], ["满仓", 1]];
 const ACT = { ACCUMULATE: ["加仓", 0.5], BUY: ["加仓", 0.5], TRIM: ["减仓", -0.5], SELL: ["清仓", -1] };
-const COST = 0.001, START = 100000;
-let gm = null, gameUrl = null;   // 当前一局；gameUrl：数据的绝对地址，表情包按它拼（QMuse 版接口在别的域名）
+const LOOK = { gold: ["🥇", "避险老将", "#FFE7A6"], ndx: ["💻", "科技快车", "#DED8FF"], csi300: ["🏮", "A 股大盘", "#FFD9D9"], tencent: ["🐧", "港股巨头", "#D3EAFF"] };
+const C = { you: "#EC5F93", ai: "#6B57F0", hold: "#A9A9B6" };
+const COST = 0.001, START = 100000, CALM = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let gm = null, gameUrl = null, busy = false;   // gm：当前一局；gameUrl：数据的绝对地址，表情包按它拼（QMuse 版接口在别的域名）
 const yuan = (v) => "¥" + Math.round(v).toLocaleString("zh-CN");
 const pct = (v) => { const x = Math.round(v * 1000) / 10; return (x > 0 ? "+" : "") + x.toFixed(1) + "%"; };   // 先取整再定符号，免得出 "-0.0%"
 const tone = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
 const posName = (p) => POS.find(([, v]) => v === p)[0];
 const px = (v) => v >= 100 ? v.toFixed(0) : v.toFixed(2);
+const sticker = (name) => String(new URL(`sticker/${name}`, gameUrl));
+
+function go(v) {
+  ["home", "pick", "play", "dbt"].forEach((k) => { $("v-" + k).hidden = k !== v; });
+  window.scrollTo(0, 0);
+  if (v === "dbt" && lastFacts) drawChart(lastFacts.chart);   // 隐藏时画的图宽度不对，切过来重画
+  if (v === "play" && gm) { if (!$("gm-live").hidden) drawGame(); else drawEq(); }
+}
 
 function aiStep(p, v) {
   const a = ACT[v];
@@ -362,110 +506,160 @@ function aiStep(p, v) {
   return [np === p ? `${a[0]}，但仓位已到头，没动` : a[0], np];
 }
 
-// 纵轴只按「到这一周为止」的价格定刻度：按全年定会把之后的最高价、最低价泄露出来。横轴按全年，线随周数往右长
-function drawGame() {
+function tween(node, from, to, fmt) {
+  if (CALM || from === to) { node.textContent = fmt(to); return; }
+  const t0 = performance.now();
+  const f = (t) => { const k = Math.min(1, (t - t0) / 450); node.textContent = fmt(from + (to - from) * (1 - (1 - k) ** 3)); if (k < 1) requestAnimationFrame(f); };
+  requestAnimationFrame(f);
+}
+
+// 纵轴只按「到这一周为止」的价格定刻度：按全年定会把之后的最高价、最低价泄露出来。横轴按全年，线随周数往右长；
+// prev 给了就把这一周新长出来的那段线描出来
+function drawGame(prev) {
   const a = gm.a, i = a.turns[gm.k].i, c = a.c.slice(0, i + 1), N = a.c.length;
-  const svg = $("gm-chart"), W = size(svg, 150), PW = W - 48, X = (j) => j * PW / (N - 1);
-  const lo = Math.min(...c), hi = Math.max(...c), Y = (v) => 8 + (hi - v) / (hi - lo || 1) * 120;
-  let s = "";
-  for (let t = 0; t <= 2; t++) { const v = lo + (hi - lo) * t / 2; s += `<line x1="0" x2="${PW}" y1="${Y(v)}" y2="${Y(v)}" stroke="${T.grid}"/><text x="${PW + 6}" y="${Y(v) + 4}" fill="${T.axis}" font-size="11">${px(v)}</text>`; }
-  const g0 = X(a.turns[0].i);
-  s += `<line x1="${g0}" x2="${g0}" y1="0" y2="132" stroke="${T.axis}" stroke-dasharray="2 3"/>`;
-  s += `<path d="${c.map((v, j) => `${j ? "L" : "M"}${X(j).toFixed(1)},${Y(v).toFixed(1)}`).join("")}" fill="none" stroke="${T.nav}" stroke-width="1.5"/>`;
-  s += `<circle cx="${X(i).toFixed(1)}" cy="${Y(c[i]).toFixed(1)}" r="3.5" fill="${T.up}"/>`;
-  s += `<text x="0" y="146" fill="${T.axis}" font-size="11">${a.d[0]}</text><text x="${g0}" y="146" text-anchor="middle" fill="${T.axis}" font-size="11">开局</text>`;
+  const svg = $("gm-chart"), W = size(svg, 160), PW = W - 44, X = (j) => j * PW / (N - 1);
+  const lo = Math.min(...c), hi = Math.max(...c), Y = (v) => 8 + (hi - v) / (hi - lo || 1) * 140;
+  const line = (from, to) => c.slice(from, to + 1).map((v, j) => `${j ? "L" : "M"}${X(from + j).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+  const cut = prev == null || CALM ? i : prev, g0 = X(a.turns[0].i);
+  let s = `<rect x="0" y="0" width="${g0.toFixed(1)}" height="156" rx="8" fill="#F3F3F6"/><text x="6" y="152" fill="${T.axis}" font-size="11">开局前</text>`;
+  for (let t = 0; t <= 2; t++) { const v = lo + (hi - lo) * t / 2; s += `<line x1="${g0.toFixed(1)}" x2="${PW}" y1="${Y(v)}" y2="${Y(v)}" stroke="${T.grid}"/><text x="${PW + 6}" y="${Y(v) + 4}" fill="${T.axis}" font-size="11">${px(v)}</text>`; }
+  s += `<path d="${line(0, cut)}" fill="none" stroke="${T.nav}" stroke-width="1.8" stroke-linejoin="round"/>`;
+  if (cut < i) s += `<path class="seg" d="${line(cut, i)}" fill="none" stroke="${C.you}" stroke-width="2.4" stroke-linejoin="round"/>`;
+  s += `<circle class="dot" cx="${X(i).toFixed(1)}" cy="${Y(c[i]).toFixed(1)}" r="5" fill="${C.you}" stroke="#fff" stroke-width="2"/>`;
   svg.innerHTML = s;
+  const seg = svg.querySelector(".seg");
+  if (seg) { const L = seg.getTotalLength(); seg.style.strokeDasharray = L; seg.style.strokeDashoffset = L; seg.getBoundingClientRect(); seg.style.transition = "stroke-dashoffset .45s ease-out"; seg.style.strokeDashoffset = "0"; }
 }
 
-function drawScore() {
-  [["you", gm.you], ["ai", gm.ai]].forEach(([k, s]) => {
-    const r = s.eq / START - 1, b = $("gm-" + k); b.textContent = yuan(s.eq); b.className = tone(r);
-    $(`gm-${k}-p`).textContent = `${pct(r)}　${posName(s.p)}`;
-  });
+function drawProg() {
+  const p = $("gm-prog"); p.textContent = "";
+  gm.a.turns.forEach((_, j) => { const d = gm.hist[j]; p.append(el("i", d == null ? (j === gm.k ? "now" : null) : d > 5e-4 ? "y" : d < -5e-4 ? "a" : "t")); });
 }
 
-function drawTurn() {
+function drawTurn(prev, old) {
   const a = gm.a, t = a.turns[gm.k];
-  $("gm-week").textContent = `${a.name}　第 ${gm.k + 1} / ${a.turns.length} 周`;
+  $("gm-week").textContent = `第 ${gm.k + 1} / ${a.turns.length} 周`;
   $("gm-date").textContent = `${a.d[t.i]}　收盘 ${px(a.c[t.i])}`;
-  drawScore(); drawGame();
+  [["you", gm.you], ["ai", gm.ai]].forEach(([k, s]) => {
+    tween($("gm-" + k), old ? old[k] : s.eq, s.eq, yuan);
+    const r = s.eq / START - 1, p = $(`gm-${k}-p`); p.textContent = "";
+    p.append(el("span", tone(r), pct(r)), `　${posName(s.p)}`);
+  });
+  const d = (gm.you.eq - gm.ai.eq) / START * 100;
+  $("gm-lead").textContent = Math.abs(d) < 0.05 ? "目前打平" : d > 0 ? `你领先 ${d.toFixed(1)} 个点` : `AI 领先 ${(-d).toFixed(1)} 个点`;
+  drawProg(); drawGame(prev);
   $("gm-pick").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.p === gm.you.p)));
 }
 
-// 一周：双方按各自仓位吃下一周涨跌（调仓先扣成本）。返回揭晓用的信息
+// 一周：双方按各自仓位吃下一周涨跌（调仓先扣成本）
 function step(p) {
   const a = gm.a, t = a.turns[gm.k];
   const i1 = gm.k + 1 < a.turns.length ? a.turns[gm.k + 1].i : a.c.length - 1;
   const r = a.c[i1] / a.c[t.i] - 1, [act, aiP] = aiStep(gm.ai.p, t.v);
-  [[gm.you, p], [gm.ai, aiP]].forEach(([s, np]) => { s.eq *= (1 - Math.abs(np - s.p) * COST) * (1 + np * r); s.p = np; });
-  gm.k += 1;
-  return { t, act, r };
+  const [ry, ra] = [[gm.you, p], [gm.ai, aiP]].map(([s, np]) => {
+    const e0 = s.eq; s.eq *= (1 - Math.abs(np - s.p) * COST) * (1 + np * r); s.p = np; return s.eq / e0 - 1;
+  });
+  gm.hist.push(ry - ra); gm.eq.push([gm.you.eq, gm.ai.eq]); gm.k += 1;
+  return { t, act, r, ry, ra };
+}
+
+function reveal({ t, act, r, ry, ra }) {
+  const box = $("gm-last"), d = ry - ra;
+  box.textContent = ""; box.hidden = false; box.classList.remove("pop"); void box.offsetWidth; box.classList.add("pop");
+  if (Math.abs(d) > 5e-4) { const img = el("img"); img.src = sticker(d > 0 ? "cheer.jpg" : "pout.jpg"); img.alt = d > 0 ? "这周你赢了" : "这周 AI 赢了"; box.append(img); }
+  const txt = el("div");
+  txt.append(el("b", null, `AI 亮牌：${act}` + (t.v ? "" : "（这周没有记录，按持有算）")));
+  if (t.why) txt.append(el("p", null, t.why));   // 模型文本，只走 textContent
+  const wk = el("p", "g-wk");
+  wk.append(`这周${gm.a.name} `, el("b", tone(r), pct(r)), "　你 ", el("span", tone(ry), pct(ry)), "　AI ", el("span", tone(ra), pct(ra)));
+  txt.append(wk); box.append(txt);
 }
 
 function play(p) {
-  const { t, act, r } = step(p), last = $("gm-last");
-  last.textContent = ""; last.hidden = false;
-  last.append(el("b", null, `AI 这周：${act}` + (t.v ? "" : "（这周没有记录，按持有算）")));
-  if (t.why) last.append(el("span", null, t.why));   // 模型文本，只走 textContent
-  const res = el("span", null, `这一周 ${gm.a.name} `); res.append(el("b", tone(r), pct(r))); last.append(res);
-  if (gm.k >= gm.a.turns.length) endGame(); else drawTurn();
+  if (busy || !gm || gm.k >= gm.a.turns.length) return;
+  const prev = gm.a.turns[gm.k].i, old = { you: gm.you.eq, ai: gm.ai.eq };
+  reveal(step(p));
+  if (gm.k >= gm.a.turns.length) { endGame(); return; }
+  drawTurn(prev, old);
+  if (!CALM) { busy = true; setTimeout(() => { busy = false; }, 450); }   // 线描完再收下一手，连点不会跳周
+}
+
+function drawEq() {   // 结局图：三条净值线
+  const svg = $("gm-eq"); if (!svg || !gm) return;
+  const a = gm.a, W = size(svg, 150), PW = W - 52, n = gm.eq.length, base = a.c[a.turns[0].i];
+  const hold = gm.eq.map((_, j) => START * a.c[j < a.turns.length ? a.turns[j].i : a.c.length - 1] / base);
+  const all = [...gm.eq.flat(), ...hold], lo = Math.min(...all), hi = Math.max(...all);
+  const X = (j) => j * PW / (n - 1), Y = (v) => 8 + (hi - v) / (hi - lo || 1) * 132;
+  const line = (vs, col, w, dash) => `<path d="${vs.map((v, j) => `${j ? "L" : "M"}${X(j).toFixed(1)},${Y(v).toFixed(1)}`).join("")}" fill="none" stroke="${col}" stroke-width="${w}"${dash ? ' stroke-dasharray="4 4"' : ""} stroke-linejoin="round"/>`;
+  let s = `<line x1="0" x2="${PW}" y1="${Y(START)}" y2="${Y(START)}" stroke="${T.grid}"/><text x="${PW + 6}" y="${Y(START) + 4}" fill="${T.axis}" font-size="11">10 万</text>`;
+  s += line(hold, C.hold, 1.5, true) + line(gm.eq.map((e) => e[1]), C.ai, 2.2) + line(gm.eq.map((e) => e[0]), C.you, 2.6);
+  svg.innerHTML = s;
 }
 
 function endGame() {
-  const a = gm.a, you = gm.you.eq / START - 1, ai = gm.ai.eq / START - 1;
-  const hold = a.c[a.c.length - 1] / a.c[a.turns[0].i] - 1, diff = (you - ai) * 100;
-  $("gm-play").hidden = true;
+  const a = gm.a, you = gm.you.eq / START - 1, ai = gm.ai.eq / START - 1, i0 = a.turns[0].i;
+  const hold = a.c[a.c.length - 1] / a.c[i0] - 1, diff = (you - ai) * 100, tie = Math.abs(diff) < 0.05;
+  $("gm-live").hidden = true; $("gm-week").textContent = "结局"; drawProg();
   const box = $("gm-end"); box.textContent = ""; box.hidden = false;
-  const tie = Math.abs(diff) < 0.05;
-  const em = el("img", "em"), k = tie ? "tie" : diff > 0 ? "win" : "lose";
-  em.src = new URL(`sticker/${k}.${k === "lose" ? "gif" : "jpg"}`, gameUrl); em.alt = { tie: "🤝", win: "🎉", lose: "😭" }[k];
-  box.append(em,
-    el("b", null, tie ? "和 AI 打平" : diff > 0 ? `你赢了 AI ${diff.toFixed(1)} 个百分点` : `AI 赢了你 ${(-diff).toFixed(1)} 个百分点`));
-  const res = el("div", "gm-res");
-  [["你", you], ["AI", ai], ["一直满仓不动", hold]].forEach(([k, v]) => { res.append(el("span", null, k)); res.append(el("span", tone(v), pct(v))); });
-  box.append(res, el("p", "hint", `${a.d[a.turns[0].i]} 到 ${a.d[a.d.length - 1]}，共 ${a.turns.length} 周`));
-  const row = el("div", "gm-row");
-  const again = el("button", null, "再玩一次"); again.type = "button"; again.addEventListener("click", () => startGame(a));
-  row.append(again); box.append(row);
+  const k = tie ? "tie" : diff > 0 ? "win" : "lose", img = el("img");
+  img.src = sticker(k === "lose" ? "lose.gif" : k + ".jpg"); img.alt = { tie: "打平", win: "你赢了", lose: "AI 赢了" }[k];
+  box.append(img, el("h2", null, tie ? "和 AI 打平" : diff > 0 ? `你赢了 AI ${diff.toFixed(1)} 个点` : `AI 赢了你 ${(-diff).toFixed(1)} 个点`),
+    el("p", "g-sub", `${a.name}，${a.d[i0]} 到 ${a.d[a.d.length - 1]}，${a.turns.length} 周`));
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.id = "gm-eq"; svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "全程资金曲线：你、AI、一直满仓");
+  const res = el("div", "g-res");
+  [["你", you, C.you], ["AI", ai, C.ai], ["一直满仓", hold, "#7C7C88"]].forEach(([n, v, col]) => {
+    const c = el("div"), lab = el("small", null, n); lab.style.color = col; c.append(lab, el("b", tone(v), pct(v))); res.append(c);
+  });
+  const row = el("div", "g-ctas");
+  const again = el("button", "g-cta pri", "再来一局"); again.type = "button"; again.addEventListener("click", () => startGame(a));
+  const other = el("button", "g-cta sec", "换个标的"); other.type = "button"; other.addEventListener("click", () => go("pick"));
+  row.append(again, other); box.append(svg, res, row);
+  drawEq();
 }
 
 function startGame(a) {
-  gm = { a, k: 0, you: { eq: START, p: 0.5 }, ai: { eq: START, p: 0.5 } };
-  $("gm-assets").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === a.key)));
-  $("gm-end").hidden = true; $("gm-last").hidden = true; $("gm-play").hidden = false;
-  drawTurn();
+  gm = { a, k: 0, you: { eq: START, p: 0.5 }, ai: { eq: START, p: 0.5 }, hist: [], eq: [[START, START]] };
+  $("gm-name").textContent = `${(LOOK[a.key] || [""])[0]} ${a.name}`;
+  $("gm-end").hidden = true; $("gm-last").hidden = true; $("gm-live").hidden = false; busy = false;
+  go("play"); drawTurn();
 }
 
-POS.forEach(([name, p]) => {
-  const b = el("button", null, name); b.type = "button"; b.dataset.p = p;
+POS.forEach(([name, p], k) => {
+  const b = el("button", null, name), g = el("span", "gauge"), f = el("i");
+  b.type = "button"; b.dataset.p = p; f.style.width = p * 100 + "%"; g.append(f);
+  b.append(g, el("kbd", null, String(k + 1)));
   b.addEventListener("click", () => play(p)); $("gm-pick").append(b);
 });
+document.addEventListener("keydown", (e) => {   // 桌面上 1/2/3 直接出手
+  if ($("v-play").hidden || $("gm-live").hidden || $("rules").open || e.metaKey || e.ctrlKey || e.altKey || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  const k = "123".indexOf(e.key); if (k >= 0 && e.key) play(POS[k][1]);
+});
 $("gm-ff").addEventListener("click", () => {
+  if (busy) return;
   while (gm.k < gm.a.turns.length - 1) step(gm.you.p);
   play(gm.you.p);
 });
+$("start").addEventListener("click", () => go("pick"));
+document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
+document.querySelectorAll("[data-how]").forEach((b) => b.addEventListener("click", () => $("rules").showModal()));
 (async () => {
   try {
     const r = await fetch("/api/game"); if (!r.ok) throw 0;
     gameUrl = r.url;
+    $("hero-img").src = sticker("hero.jpg");
     (await r.json()).assets.forEach((a) => {
-      const b = el("button", null, a.name); b.type = "button"; b.dataset.key = a.key;
+      const [icon, tag, bg] = LOOK[a.key] || ["📈", a.code, "#E6E6EC"];
+      const b = el("button"), ic = el("span", "g-ic", icon);
+      b.type = "button"; ic.style.background = bg;
+      b.append(ic, el("b", null, a.name), el("small", null, `${tag}，${a.turns.length} 周`));
       b.addEventListener("click", () => startGame(a)); $("gm-assets").append(b);
     });
   } catch { $("gm-err").textContent = "游戏数据暂时拿不到，稍后再试"; $("gm-err").hidden = false; }
 })();
-
-function showTab(game) {
-  $("tab-game").setAttribute("aria-selected", String(game)); $("tab-dbt").setAttribute("aria-selected", String(!game));
-  $("game").hidden = !game; $("dbt").hidden = game;
-  if (!game && lastFacts) drawChart(lastFacts.chart);   // 隐藏时画的图宽度不对，切过来重画
-  if (game && gm && gm.k < gm.a.turns.length) drawGame();
-}
-$("tab-game").addEventListener("click", () => showTab(true));
-$("tab-dbt").addEventListener("click", () => showTab(false));
 window.addEventListener("resize", () => {
-  if (lastFacts && !$("dbt").hidden) drawChart(lastFacts.chart);
-  if (gm && !$("gm-play").hidden) drawGame();
+  if (lastFacts && !$("v-dbt").hidden) drawChart(lastFacts.chart);
+  if (gm && !$("v-play").hidden) { if (!$("gm-live").hidden) drawGame(); else drawEq(); }
 });
 </script>
 </body>
