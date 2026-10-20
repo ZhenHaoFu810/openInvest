@@ -187,6 +187,7 @@ function go(v) {
   ["home", "pick", "play", "dbt"].forEach((k) => { $("v-" + k).hidden = k !== v; });
   window.scrollTo(0, 0);
   if (v === "dbt" && lastFacts) drawChart(lastFacts.chart);   // 隐藏时画的图宽度不对，切过来重画
+  if (v === "home") drawHero();
   if (v === "play" && gm) { if (!$("gm-live").hidden) drawGame(); else drawEq(); }
 }
 
@@ -316,12 +317,41 @@ function startGame(a) {
   go("play"); drawTurn();
 }
 
-POS.forEach(([name, p], k) => {
-  const b = el("button", null, name), g = el("span", "gauge"), f = el("i");
-  b.type = "button"; b.dataset.p = p; f.style.width = p * 100 + "%"; g.append(f);
-  b.append(g, el("kbd", null, String(k + 1)));
-  b.addEventListener("click", () => play(p)); $("gm-pick").append(b);
-});
+function pickButtons(box, onPick, keys) {
+  POS.forEach(([name, p], k) => {
+    const b = el("button", null, name), g = el("span", "gauge"), f = el("i");
+    b.type = "button"; b.dataset.p = p; f.style.width = p * 100 + "%"; g.append(f); b.append(g);
+    if (keys) b.append(el("kbd", null, String(k + 1)));
+    b.addEventListener("click", () => onPick(p)); box.append(b);
+  });
+}
+pickButtons($("gm-pick"), play, true);
+
+// 首屏就是第一手：随机一个标的，画开局前三个月的走势（不含开局后任何价格），右边一块雾区是还没发生的下一周
+let GA = [], heroA = null;
+function drawHero() {
+  const a = heroA; if (!a || $("v-home").hidden) return;
+  const i0 = a.turns[0].i, c = a.c.slice(0, i0 + 1), n = c.length, svg = $("hc-chart"), H = 230, W = size(svg, H);
+  const FW = Math.max(72, Math.round(W * .22)), PW = W - FW - 10, X = (j) => j * PW / (n - 1);
+  const lo = Math.min(...c), hi = Math.max(...c), Y = (v) => 16 + (hi - v) / (hi - lo || 1) * (H - 46);
+  const d = c.map((v, j) => `${j ? "L" : "M"}${X(j).toFixed(1)},${Y(v).toFixed(1)}`).join(""), x1 = X(n - 1), y1 = Y(c[n - 1]);
+  let s = `<defs><pattern id="fog" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="9" stroke="#E7E5F6" stroke-width="4"/></pattern></defs>`;
+  s += `<path d="${d}L${x1},${H - 22}L0,${H - 22}Z" fill="#F5F4FA"/><path d="${d}" fill="none" stroke="${T.nav}" stroke-width="2" stroke-linejoin="round"/>`;
+  s += `<rect x="${W - FW}" y="0" width="${FW}" height="${H - 22}" rx="16" fill="url(#fog)"/>`;
+  s += `<text x="${W - FW / 2}" y="${(H - 22) / 2 + 20}" text-anchor="middle" font-size="60" font-weight="700" fill="${C.ai}">?</text>`;
+  s += `<text x="${W - FW / 2}" y="${H - 6}" text-anchor="middle" font-size="12" fill="${T.axis}">下一周</text>`;
+  s += `<text x="0" y="${H - 6}" font-size="12" fill="${T.axis}">${a.d[0].slice(0, 7)}</text><text x="${x1}" y="${H - 6}" text-anchor="end" font-size="12" fill="${T.axis}">现在</text>`;
+  s += `<circle class="pulse" cx="${x1}" cy="${y1}" r="5" fill="${C.you}"/><circle cx="${x1}" cy="${y1}" r="5" fill="${C.you}" stroke="#fff" stroke-width="2"/>`;
+  svg.innerHTML = s;
+}
+function setHero(a) {
+  heroA = a;
+  $("hc-name").textContent = `${(LOOK[a.key] || [""])[0]} ${a.name}`;
+  $("hc-date").textContent = `开局 ${a.d[a.turns[0].i]}　收盘 ${px(a.c[a.turns[0].i])}`;
+  drawHero();
+}
+pickButtons($("hc-pick"), (p) => { if (!heroA) return; startGame(heroA); play(p); }, false);
+$("hc-dice").addEventListener("click", () => { if (GA.length) setHero(GA[(GA.indexOf(heroA) + 1) % GA.length]); });
 document.addEventListener("keydown", (e) => {   // 桌面上 1/2/3 直接出手
   if ($("v-play").hidden || $("gm-live").hidden || $("rules").open || e.metaKey || e.ctrlKey || e.altKey || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
   const k = "123".indexOf(e.key); if (k >= 0 && e.key) play(POS[k][1]);
@@ -331,7 +361,6 @@ $("gm-ff").addEventListener("click", () => {
   while (gm.k < gm.a.turns.length - 1) step(gm.you.p);
   play(gm.you.p);
 });
-$("start").addEventListener("click", () => go("pick"));
 document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
 document.querySelectorAll("[data-how]").forEach((b) => b.addEventListener("click", () => $("rules").showModal()));
 (async () => {
@@ -339,16 +368,21 @@ document.querySelectorAll("[data-how]").forEach((b) => b.addEventListener("click
     const r = await fetch(API + "/api/game"); if (!r.ok) throw 0;
     gameUrl = r.url;
     $("hero-img").src = sticker("hero.jpg");
-    (await r.json()).assets.forEach((a) => {
+    GA = (await r.json()).assets;
+    const tape = GA.map((a) => { const i = a.turns[0].i, v = a.c[i] / a.c[i - 1] - 1; return `<span>${a.name}<b>${px(a.c[i])}</b><em class="${tone(v)}">${pct(v)}</em></span>`; }).join("");
+    $("tape").innerHTML = tape.repeat(8);   // 只有程序算的数字和固定标的名，拼 innerHTML 安全；开局那天的价格，不漏后市
+    setHero(GA[Math.floor(Math.random() * GA.length)]);
+    GA.forEach((a) => {
       const [icon, tag, bg] = LOOK[a.key] || ["📈", a.code, "#E6E6EC"];
       const b = el("button"), ic = el("span", "g-ic", icon);
       b.type = "button"; ic.style.background = bg;
       b.append(ic, el("b", null, a.name), el("small", null, `${tag}，${a.turns.length} 周`));
       b.addEventListener("click", () => startGame(a)); $("gm-assets").append(b);
     });
-  } catch { $("gm-err").textContent = "游戏数据暂时拿不到，稍后再试"; $("gm-err").hidden = false; }
+  } catch { ["gm-err", "hc-err"].forEach((k) => { $(k).textContent = "游戏数据暂时拿不到，稍后再试"; $(k).hidden = false; }); }
 })();
 window.addEventListener("resize", () => {
+  drawHero();
   if (lastFacts && !$("v-dbt").hidden) drawChart(lastFacts.chart);
   if (gm && !$("v-play").hidden) { if (!$("gm-live").hidden) drawGame(); else drawEq(); }
 });
