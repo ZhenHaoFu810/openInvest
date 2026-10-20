@@ -130,12 +130,13 @@ $("ask").addEventListener("submit", async (e) => {
 });
 // 今天的示例报告点了才看（服务端每天跑一次，不占访客额度）：首屏只留输入框
 $("sample").addEventListener("click", async () => {
+  if (cur) return;   // 已经在跑自己输的代码，不拿示例盖掉
   $("sample").hidden = true;
   try {
-    const r = await fetch(API + "/api/sample"); if (!r.ok || cur) return;
+    const r = await fetch(API + "/api/sample"); if (!r.ok) throw 0;
     const j = await r.json(); if (cur) return;
     cur = j.job_id; showFacts(j.facts, true); poll(cur);
-  } catch {}
+  } catch { $("sample").hidden = false; showError("示例暂时拿不到，稍后再试"); }   // 按钮留着能再点
 });
 // 安装方式、命令和说明照抄官网 openinvest-site（src/data/site.ts 的 INSTALL_TABS + src/i18n.tsx 的中文 install 说明，
 // 对齐 openinvest-site#5），那边改了这里同步。复制整个标签的全部命令，和官网一致
@@ -322,7 +323,7 @@ POS.forEach(([name, p], k) => {
   b.addEventListener("click", () => play(p)); $("gm-pick").append(b);
 });
 document.addEventListener("keydown", (e) => {   // 桌面上 1/2/3 直接出手
-  if ($("v-play").hidden || $("gm-live").hidden || e.metaKey || e.ctrlKey || e.altKey || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  if ($("v-play").hidden || $("gm-live").hidden || $("rules").open || e.metaKey || e.ctrlKey || e.altKey || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
   const k = "123".indexOf(e.key); if (k >= 0 && e.key) play(POS[k][1]);
 });
 $("gm-ff").addEventListener("click", () => {

@@ -423,7 +423,7 @@ STICKERS = GAME_DATA.parent / "stickers"
 @app.get("/api/sticker/{name}", response_model=None)
 def sticker(name: str) -> FileResponse:
     """试玩页的表情包（data/stickers/）。只认目录里真实存在的文件名，路径参数不拼进文件系统。"""
-    if name not in {f.name for f in STICKERS.iterdir()}:
+    if not STICKERS.is_dir() or name not in {f.name for f in STICKERS.iterdir() if f.is_file() and not f.name.startswith(".")}:
         raise HTTPException(404)
     return FileResponse(STICKERS / name, headers={"Cache-Control": "public, max-age=86400"})
 
