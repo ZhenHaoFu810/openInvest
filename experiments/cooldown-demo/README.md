@@ -68,6 +68,7 @@ INVEST_HOME=~/openinvest-demo INVEST_ADVISORY_MODE=1 \
 
 - 停在 9 月底：最近几周的决定离"现在"太近，像当下建议（细则 4.9）；也不展示置信度。
 - 纵轴只按"到这一周为止"的价格定刻度，免得把之后的高低点漏给玩家。
+- 结算页表情包在 `data/stickers/`（堆糖「永雏塔菲表情包」，pillow 重新编码去元数据），`/api/sticker/{name}` 白名单下发。
 - 委员会全年几乎只给 ACCUMULATE / HOLD，所以 AI 基本是第一次加仓后满仓不动——这是真实
   回测结果，不调。
 

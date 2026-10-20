@@ -417,6 +417,17 @@ def game() -> FileResponse:
     return FileResponse(GAME_DATA, media_type="application/json")
 
 
+STICKERS = {"win.jpg", "lose.gif", "tie.jpg"}   # 白名单，路径参数不拼进文件系统
+
+
+@app.get("/api/sticker/{name}", response_model=None)
+def sticker(name: str) -> FileResponse:
+    """试玩结算页的表情包（data/stickers/）。"""
+    if name not in STICKERS:
+        raise HTTPException(404)
+    return FileResponse(GAME_DATA.parent / "stickers" / name, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/api/sample")
 def sample() -> Dict[str, Any]:
     """首页默认展示的报告，和 /api/debate 同形状，轮询走同一个接口。"""

@@ -95,11 +95,12 @@
   .gm-last span { font-size: 12px; color: var(--sub); margin-top: 2px; }
   .gm-ff { margin-top: 12px; padding: 4px 0; background: none; color: var(--sub); font: 400 13px/1.4 inherit; text-decoration: underline; }
   .gm-end { text-align: center; margin: 24px 0 8px; }
-  .gm-end .em { font-size: 48px; line-height: 1.2; }
+  .gm-end .em { display: block; height: 120px; margin: 0 auto 6px; font-size: 48px; }
   .gm-end > b { display: block; font-size: 20px; margin: 4px 0 14px; }
   .gm-res { display: grid; grid-template-columns: auto auto; justify-content: center; gap: 4px 24px; font-size: 15px; text-align: left; }
   .gm-res span:nth-child(odd) { color: var(--sub); }
   .gm-end .gm-row { justify-content: center; margin-top: 16px; }
+  .gm-end .hint { margin: 6px auto 0; }
   @media (prefers-reduced-motion: reduce) { .sk { animation: none; } .wt .bar i { transition: none; } }
 </style>
 </head>
@@ -127,7 +128,7 @@
       <button type="button" class="gm-ff" id="gm-ff">保持现在的仓位，直接看结果</button>
     </div>
     <div class="gm-end" id="gm-end" hidden></div>
-    <p class="foot">历史复盘游戏：用的都是已经发生的行情，不构成投资建议。双方都从 10 万虚拟资金、半仓开始；你每周选空仓、半仓或满仓。AI 按当周委员会的决定调仓：加仓 +50%、减仓 −50%、清仓归零，其余不动。每次调仓按调动部分收 0.1% 成本。AI 的每个决定都只用了当天之前的数据，所用模型的训练数据截止于 2025 年 5 月，没见过 2026 年的行情。</p>
+    <p class="foot">历史复盘游戏：用的都是已经发生的行情，不构成投资建议。双方都从 10 万虚拟资金、半仓开始；你每周选空仓、半仓或满仓。AI 按当周委员会的决定调仓：加仓 +50%、减仓 −50%、清仓归零，其余不动。每次调仓按调动部分收 0.1% 成本。AI 的每个决定都只用了当天之前的数据，所用模型的训练数据截止于 2025 年 5 月，没见过 2026 年的行情。结算表情来自堆糖「永雏塔菲表情包」。</p>
   </section>
 
   <div id="dbt" role="tabpanel" aria-labelledby="tab-dbt" hidden>
@@ -347,9 +348,9 @@ drawInstall(0);
 const POS = [["空仓", 0], ["半仓", 0.5], ["满仓", 1]];
 const ACT = { ACCUMULATE: ["加仓", 0.5], BUY: ["加仓", 0.5], TRIM: ["减仓", -0.5], SELL: ["清仓", -1] };
 const COST = 0.001, START = 100000;
-let gm = null;   // 当前一局
+let gm = null, gameUrl = null;   // 当前一局；gameUrl：数据的绝对地址，表情包按它拼（QMuse 版接口在别的域名）
 const yuan = (v) => "¥" + Math.round(v).toLocaleString("zh-CN");
-const pct = (v) => (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+const pct = (v) => { const x = Math.round(v * 1000) / 10; return (x > 0 ? "+" : "") + x.toFixed(1) + "%"; };   // 先取整再定符号，免得出 "-0.0%"
 const tone = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
 const posName = (p) => POS.find(([, v]) => v === p)[0];
 const px = (v) => v >= 100 ? v.toFixed(0) : v.toFixed(2);
@@ -416,7 +417,9 @@ function endGame() {
   $("gm-play").hidden = true;
   const box = $("gm-end"); box.textContent = ""; box.hidden = false;
   const tie = Math.abs(diff) < 0.05;
-  box.append(el("div", "em", tie ? "🤝" : diff > 0 ? "🎉" : "😭"),
+  const em = el("img", "em"), k = tie ? "tie" : diff > 0 ? "win" : "lose";
+  em.src = new URL(`sticker/${k}.${k === "lose" ? "gif" : "jpg"}`, gameUrl); em.alt = { tie: "🤝", win: "🎉", lose: "😭" }[k];
+  box.append(em,
     el("b", null, tie ? "和 AI 打平" : diff > 0 ? `你赢了 AI ${diff.toFixed(1)} 个百分点` : `AI 赢了你 ${(-diff).toFixed(1)} 个百分点`));
   const res = el("div", "gm-res");
   [["你", you], ["AI", ai], ["一直满仓不动", hold]].forEach(([k, v]) => { res.append(el("span", null, k)); res.append(el("span", tone(v), pct(v))); });
@@ -444,6 +447,7 @@ $("gm-ff").addEventListener("click", () => {
 (async () => {
   try {
     const r = await fetch("/api/game"); if (!r.ok) throw 0;
+    gameUrl = r.url;
     (await r.json()).assets.forEach((a) => {
       const b = el("button", null, a.name); b.type = "button"; b.dataset.key = a.key;
       b.addEventListener("click", () => startGame(a)); $("gm-assets").append(b);

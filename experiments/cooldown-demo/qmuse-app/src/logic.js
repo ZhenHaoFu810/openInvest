@@ -171,9 +171,9 @@ drawInstall(0);
 const POS = [["空仓", 0], ["半仓", 0.5], ["满仓", 1]];
 const ACT = { ACCUMULATE: ["加仓", 0.5], BUY: ["加仓", 0.5], TRIM: ["减仓", -0.5], SELL: ["清仓", -1] };
 const COST = 0.001, START = 100000;
-let gm = null;   // 当前一局
+let gm = null, gameUrl = null;   // 当前一局；gameUrl：数据的绝对地址，表情包按它拼（QMuse 版接口在别的域名）
 const yuan = (v) => "¥" + Math.round(v).toLocaleString("zh-CN");
-const pct = (v) => (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+const pct = (v) => { const x = Math.round(v * 1000) / 10; return (x > 0 ? "+" : "") + x.toFixed(1) + "%"; };   // 先取整再定符号，免得出 "-0.0%"
 const tone = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
 const posName = (p) => POS.find(([, v]) => v === p)[0];
 const px = (v) => v >= 100 ? v.toFixed(0) : v.toFixed(2);
@@ -240,7 +240,9 @@ function endGame() {
   $("gm-play").hidden = true;
   const box = $("gm-end"); box.textContent = ""; box.hidden = false;
   const tie = Math.abs(diff) < 0.05;
-  box.append(el("div", "em", tie ? "🤝" : diff > 0 ? "🎉" : "😭"),
+  const em = el("img", "em"), k = tie ? "tie" : diff > 0 ? "win" : "lose";
+  em.src = new URL(`sticker/${k}.${k === "lose" ? "gif" : "jpg"}`, gameUrl); em.alt = { tie: "🤝", win: "🎉", lose: "😭" }[k];
+  box.append(em,
     el("b", null, tie ? "和 AI 打平" : diff > 0 ? `你赢了 AI ${diff.toFixed(1)} 个百分点` : `AI 赢了你 ${(-diff).toFixed(1)} 个百分点`));
   const res = el("div", "gm-res");
   [["你", you], ["AI", ai], ["一直满仓不动", hold]].forEach(([k, v]) => { res.append(el("span", null, k)); res.append(el("span", tone(v), pct(v))); });
@@ -268,6 +270,7 @@ $("gm-ff").addEventListener("click", () => {
 (async () => {
   try {
     const r = await fetch(API + "/api/game"); if (!r.ok) throw 0;
+    gameUrl = r.url;
     (await r.json()).assets.forEach((a) => {
       const b = el("button", null, a.name); b.type = "button"; b.dataset.key = a.key;
       b.addEventListener("click", () => startGame(a)); $("gm-assets").append(b);

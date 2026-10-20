@@ -47,7 +47,7 @@ def parse_transcript(text: str) -> Tuple[Optional[str], str]:
         # 文本模式的备忘录是 VERDICT:/CONFIDENCE:/... 键值块，没有散文理由——那就不给理由，别把键值行当理由
         prose = list(itertools.takewhile(lambda ln: not _KV_RE.match(ln), lines))
         hit = next((ln for ln in lines if ln.startswith("【结论】")), None) or (prose[0] if prose else "")
-        why = re.sub(r"[*#`>]", "", hit.removeprefix("【结论】")).strip()
+        why = re.sub(r"[*#`>]", "", re.sub(r"^【[^】]*】", "", hit)).strip()   # 【结论】【裁决结论】等标签不要
         if len(why) > WHY_MAX:
             why = why[:WHY_MAX].rstrip("，、；,; ") + "…"
     return verdict, why
