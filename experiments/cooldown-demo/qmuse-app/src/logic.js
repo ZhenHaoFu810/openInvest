@@ -166,6 +166,126 @@ function drawInstall(on) {
   $("it-note").textContent = INSTALL[on].note;
 }
 drawInstall(0);
-window.addEventListener("resize", () => { if (lastFacts) drawChart(lastFacts.chart); });
+
+// ---------- 试玩：你 vs AI。行情和 AI 决定是 build_game.py 生成的静态数据，输赢全在浏览器里算 ----------
+const POS = [["空仓", 0], ["半仓", 0.5], ["满仓", 1]];
+const ACT = { ACCUMULATE: ["加仓", 0.5], BUY: ["加仓", 0.5], TRIM: ["减仓", -0.5], SELL: ["清仓", -1] };
+const COST = 0.001, START = 100000;
+let gm = null;   // 当前一局
+const yuan = (v) => "¥" + Math.round(v).toLocaleString("zh-CN");
+const pct = (v) => (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+const tone = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
+const posName = (p) => POS.find(([, v]) => v === p)[0];
+const px = (v) => v >= 100 ? v.toFixed(0) : v.toFixed(2);
+
+function aiStep(p, v) {
+  const a = ACT[v];
+  if (!a) return ["持有", p];
+  const np = v === "SELL" ? 0 : Math.min(1, Math.max(0, p + a[1]));
+  return [np === p ? `${a[0]}，但仓位已到头，没动` : a[0], np];
+}
+
+// 纵轴只按「到这一周为止」的价格定刻度：按全年定会把之后的最高价、最低价泄露出来。横轴按全年，线随周数往右长
+function drawGame() {
+  const a = gm.a, i = a.turns[gm.k].i, c = a.c.slice(0, i + 1), N = a.c.length;
+  const svg = $("gm-chart"), W = size(svg, 150), PW = W - 48, X = (j) => j * PW / (N - 1);
+  const lo = Math.min(...c), hi = Math.max(...c), Y = (v) => 8 + (hi - v) / (hi - lo || 1) * 120;
+  let s = "";
+  for (let t = 0; t <= 2; t++) { const v = lo + (hi - lo) * t / 2; s += `<line x1="0" x2="${PW}" y1="${Y(v)}" y2="${Y(v)}" stroke="${T.grid}"/><text x="${PW + 6}" y="${Y(v) + 4}" fill="${T.axis}" font-size="11">${px(v)}</text>`; }
+  const g0 = X(a.turns[0].i);
+  s += `<line x1="${g0}" x2="${g0}" y1="0" y2="132" stroke="${T.axis}" stroke-dasharray="2 3"/>`;
+  s += `<path d="${c.map((v, j) => `${j ? "L" : "M"}${X(j).toFixed(1)},${Y(v).toFixed(1)}`).join("")}" fill="none" stroke="${T.nav}" stroke-width="1.5"/>`;
+  s += `<circle cx="${X(i).toFixed(1)}" cy="${Y(c[i]).toFixed(1)}" r="3.5" fill="${T.up}"/>`;
+  s += `<text x="0" y="146" fill="${T.axis}" font-size="11">${a.d[0]}</text><text x="${g0}" y="146" text-anchor="middle" fill="${T.axis}" font-size="11">开局</text>`;
+  svg.innerHTML = s;
+}
+
+function drawScore() {
+  [["you", gm.you], ["ai", gm.ai]].forEach(([k, s]) => {
+    const r = s.eq / START - 1, b = $("gm-" + k); b.textContent = yuan(s.eq); b.className = tone(r);
+    $(`gm-${k}-p`).textContent = `${pct(r)}　${posName(s.p)}`;
+  });
+}
+
+function drawTurn() {
+  const a = gm.a, t = a.turns[gm.k];
+  $("gm-week").textContent = `${a.name}　第 ${gm.k + 1} / ${a.turns.length} 周`;
+  $("gm-date").textContent = `${a.d[t.i]}　收盘 ${px(a.c[t.i])}`;
+  drawScore(); drawGame();
+  $("gm-pick").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.p === gm.you.p)));
+}
+
+// 一周：双方按各自仓位吃下一周涨跌（调仓先扣成本）。返回揭晓用的信息
+function step(p) {
+  const a = gm.a, t = a.turns[gm.k];
+  const i1 = gm.k + 1 < a.turns.length ? a.turns[gm.k + 1].i : a.c.length - 1;
+  const r = a.c[i1] / a.c[t.i] - 1, [act, aiP] = aiStep(gm.ai.p, t.v);
+  [[gm.you, p], [gm.ai, aiP]].forEach(([s, np]) => { s.eq *= (1 - Math.abs(np - s.p) * COST) * (1 + np * r); s.p = np; });
+  gm.k += 1;
+  return { t, act, r };
+}
+
+function play(p) {
+  const { t, act, r } = step(p), last = $("gm-last");
+  last.textContent = ""; last.hidden = false;
+  last.append(el("b", null, `AI 这周：${act}` + (t.v ? "" : "（这周没有记录，按持有算）")));
+  if (t.why) last.append(el("span", null, t.why));   // 模型文本，只走 textContent
+  const res = el("span", null, `这一周 ${gm.a.name} `); res.append(el("b", tone(r), pct(r))); last.append(res);
+  if (gm.k >= gm.a.turns.length) endGame(); else drawTurn();
+}
+
+function endGame() {
+  const a = gm.a, you = gm.you.eq / START - 1, ai = gm.ai.eq / START - 1;
+  const hold = a.c[a.c.length - 1] / a.c[a.turns[0].i] - 1, diff = (you - ai) * 100;
+  $("gm-play").hidden = true;
+  const box = $("gm-end"); box.textContent = ""; box.hidden = false;
+  const tie = Math.abs(diff) < 0.05;
+  box.append(el("div", "em", tie ? "🤝" : diff > 0 ? "🎉" : "😭"),
+    el("b", null, tie ? "和 AI 打平" : diff > 0 ? `你赢了 AI ${diff.toFixed(1)} 个百分点` : `AI 赢了你 ${(-diff).toFixed(1)} 个百分点`));
+  const res = el("div", "gm-res");
+  [["你", you], ["AI", ai], ["一直满仓不动", hold]].forEach(([k, v]) => { res.append(el("span", null, k)); res.append(el("span", tone(v), pct(v))); });
+  box.append(res, el("p", "hint", `${a.d[a.turns[0].i]} 到 ${a.d[a.d.length - 1]}，共 ${a.turns.length} 周`));
+  const row = el("div", "gm-row");
+  const again = el("button", null, "再玩一次"); again.type = "button"; again.addEventListener("click", () => startGame(a));
+  row.append(again); box.append(row);
+}
+
+function startGame(a) {
+  gm = { a, k: 0, you: { eq: START, p: 0.5 }, ai: { eq: START, p: 0.5 } };
+  $("gm-assets").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === a.key)));
+  $("gm-end").hidden = true; $("gm-last").hidden = true; $("gm-play").hidden = false;
+  drawTurn();
+}
+
+POS.forEach(([name, p]) => {
+  const b = el("button", null, name); b.type = "button"; b.dataset.p = p;
+  b.addEventListener("click", () => play(p)); $("gm-pick").append(b);
+});
+$("gm-ff").addEventListener("click", () => {
+  while (gm.k < gm.a.turns.length - 1) step(gm.you.p);
+  play(gm.you.p);
+});
+(async () => {
+  try {
+    const r = await fetch(API + "/api/game"); if (!r.ok) throw 0;
+    (await r.json()).assets.forEach((a) => {
+      const b = el("button", null, a.name); b.type = "button"; b.dataset.key = a.key;
+      b.addEventListener("click", () => startGame(a)); $("gm-assets").append(b);
+    });
+  } catch { $("gm-err").textContent = "游戏数据暂时拿不到，稍后再试"; $("gm-err").hidden = false; }
+})();
+
+function showTab(game) {
+  $("tab-game").setAttribute("aria-selected", String(game)); $("tab-dbt").setAttribute("aria-selected", String(!game));
+  $("game").hidden = !game; $("dbt").hidden = game;
+  if (!game && lastFacts) drawChart(lastFacts.chart);   // 隐藏时画的图宽度不对，切过来重画
+  if (game && gm && gm.k < gm.a.turns.length) drawGame();
+}
+$("tab-game").addEventListener("click", () => showTab(true));
+$("tab-dbt").addEventListener("click", () => showTab(false));
+window.addEventListener("resize", () => {
+  if (lastFacts && !$("dbt").hidden) drawChart(lastFacts.chart);
+  if (gm && !$("gm-play").hidden) drawGame();
+});
 
 }

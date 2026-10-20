@@ -1,5 +1,30 @@
 <main>
-  <div class="brand"><span>多空对照</span><a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openInvest</a></div>
+  <div class="brand"><span>你 vs AI</span><a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openInvest</a></div>
+  <div class="tabs" role="tablist" aria-label="玩法">
+    <button type="button" role="tab" id="tab-game" aria-selected="true" aria-controls="game">试玩：你 vs AI</button>
+    <button type="button" role="tab" id="tab-dbt" aria-selected="false" aria-controls="dbt">多空对照</button>
+  </div>
+
+  <section id="game" role="tabpanel" aria-labelledby="tab-game">
+    <p class="gm-lead">2026 年 1–9 月的真实行情，每周决定一次仓位。对手是 openInvest 委员会：每周同一天，只看当天之前的数据做决定。看谁赚得多。</p>
+    <div class="gm-row" id="gm-assets"><span>选一个标的：</span></div>
+    <p class="err" id="gm-err" role="alert" hidden></p>
+    <div id="gm-play" hidden>
+      <div class="gm-top"><b id="gm-week"></b><span id="gm-date"></span></div>
+      <svg id="gm-chart" role="img" aria-label="到本周为止的价格走势"></svg>
+      <div class="gm-score">
+        <div><small>你</small><b id="gm-you"></b><span id="gm-you-p"></span></div>
+        <div><small>AI</small><b id="gm-ai"></b><span id="gm-ai-p"></span></div>
+      </div>
+      <div class="gm-last" id="gm-last" aria-live="polite" hidden></div>
+      <div class="gm-row" id="gm-pick"><span>这一周你的仓位：</span></div>
+      <button type="button" class="gm-ff" id="gm-ff">保持现在的仓位，直接看结果</button>
+    </div>
+    <div class="gm-end" id="gm-end" hidden></div>
+    <p class="foot">历史复盘游戏：用的都是已经发生的行情，不构成投资建议。双方都从 10 万虚拟资金、半仓开始；你每周选空仓、半仓或满仓。AI 按当周委员会的决定调仓：加仓 +50%、减仓 −50%、清仓归零，其余不动。每次调仓按调动部分收 0.1% 成本。AI 的每个决定都只用了当天之前的数据，所用模型的训练数据截止于 2025 年 5 月，没见过 2026 年的行情。</p>
+  </section>
+
+  <div id="dbt" role="tabpanel" aria-labelledby="tab-dbt" hidden>
   <form id="ask">
     <input id="code" autocomplete="off" autocapitalize="characters" maxlength="10" pattern="[0-9A-Za-z.]{1,10}" placeholder="基金或股票代码，例如 110011、600519" aria-label="基金或股票代码" required>
     <button id="go" type="submit">复核</button>
@@ -32,6 +57,8 @@
       <div class="ax" id="ax"></div>
     </div>
   </section>
+  <p class="foot">不含买卖建议。灰条为历史 10%–90% 区间，竖线为中位，红线为当前价。数据：东方财富、公开行情。方法见《LLM 多智能体投资系统的架构选择与校准优先评估》。openInvest 开源项目：<a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openinvest.involutionhell.com</a></p>
+  </div>
 
   <section class="ins" aria-labelledby="ins-h">
     <div class="sh" id="ins-h">安装到您的 Agent</div>
@@ -42,6 +69,4 @@
       <p class="it-note" id="it-note"></p>
     </div>
   </section>
-
-  <p class="foot">不含买卖建议。灰条为历史 10%–90% 区间，竖线为中位，红线为当前价。数据：东方财富、公开行情。方法见《LLM 多智能体投资系统的架构选择与校准优先评估》。openInvest 开源项目：<a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openinvest.involutionhell.com</a></p>
 </main>
