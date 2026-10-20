@@ -196,3 +196,19 @@ def test_stock_returns_from_prices():
     r = server._returns(c)
     assert round(r["ret_1y"], 1) == round((c.iloc[-1] / 100 - 1) * 100, 1)
     assert round(r["ret_6m"], 1) == round((c.iloc[-1] / c[c.index <= "2025-07-01"].iloc[-1] - 1) * 100, 1)
+
+
+def test_game_data_is_served_as_static_json(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "GAME_DATA", tmp_path / "missing.json")
+    assert client.get("/api/game").status_code == 503
+    f = tmp_path / "game_data.json"
+    f.write_text('{"assets": []}', encoding="utf-8")
+    monkeypatch.setattr(server, "GAME_DATA", f)
+    r = client.get("/api/game")
+    assert r.status_code == 200 and r.json() == {"assets": []}
+
+
+def test_sticker_only_serves_whitelisted_files(client):
+    assert client.get("/api/sticker/win.jpg").headers["content-type"] == "image/jpeg"
+    assert client.get("/api/sticker/server.py").status_code == 404
+    assert client.get("/api/sticker/..%2Fscripts%2Fserver.py").status_code == 404

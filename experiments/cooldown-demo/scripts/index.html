@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>多空对照</title>
+<title>你 vs AI · openInvest</title>
 <style>
   :root { --ink:#2C2C2A; --sub:#5F5E5A; --mute:#888780; --rule:#E5E3DC; --grid:#ECEAE4; --hot:#A32D2D; --hotbg:#FCEBEB; }
   * { box-sizing: border-box; }
@@ -73,12 +73,65 @@
   .it-cmd div { white-space: pre-wrap; overflow-wrap: anywhere; }   /* 手机窄屏折行，不截断；复制按钮仍复制原命令 */
   .it-cmd div::before { content: "$ "; color: var(--mute); }
   .it-note { margin: 0; padding: 9px 14px; font-size: 12px; color: var(--sub); }
+  /* 试玩：你 vs AI */
+  .tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 1px solid var(--rule); }
+  .tabs button { font: 600 14px/1 inherit; padding: 10px 14px; border-radius: 6px 6px 0 0; background: none; color: var(--sub); }
+  .tabs button[aria-selected="true"] { background: var(--ink); color: #fff; }
+  .gm-lead { color: var(--sub); margin: 14px 0 12px; }
+  .gm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .gm-row > span { font-size: 13px; color: var(--sub); }
+  .gm-row button, .gm-end button { font-weight: 500; padding: 10px 14px; background: #fff; color: var(--ink); border: 1px solid #D3D1C7; }
+  .gm-row button[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); font-weight: 600; }
+  .gm-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 20px 0 6px; font-size: 12px; color: var(--sub); }
+  .gm-top b { font-size: 15px; color: var(--ink); }
+  .gm-score { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+  .gm-score > div { border: 1px solid var(--rule); border-radius: 6px; padding: 8px 12px; }
+  .gm-score small { display: block; font-size: 12px; color: var(--sub); }
+  .gm-score b { font-size: 18px; font-weight: 600; }
+  .gm-score span { display: block; font-size: 12px; color: var(--sub); }
+  .up { color: #E24B4A; } .dn { color: #1D9E75; }
+  .gm-last { border-left: 2px solid var(--ink); padding: 4px 12px; margin: 12px 0; }
+  .gm-last > * { display: block; }
+  .gm-last span { font-size: 12px; color: var(--sub); margin-top: 2px; }
+  .gm-ff { margin-top: 12px; padding: 4px 0; background: none; color: var(--sub); font: 400 13px/1.4 inherit; text-decoration: underline; }
+  .gm-end { text-align: center; margin: 24px 0 8px; }
+  .gm-end .em { display: block; height: 120px; margin: 0 auto 6px; font-size: 48px; }
+  .gm-end > b { display: block; font-size: 20px; margin: 4px 0 14px; }
+  .gm-res { display: grid; grid-template-columns: auto auto; justify-content: center; gap: 4px 24px; font-size: 15px; text-align: left; }
+  .gm-res span:nth-child(odd) { color: var(--sub); }
+  .gm-end .gm-row { justify-content: center; margin-top: 16px; }
+  .gm-end .hint { margin: 6px auto 0; }
   @media (prefers-reduced-motion: reduce) { .sk { animation: none; } .wt .bar i { transition: none; } }
 </style>
 </head>
 <body>
 <main>
-  <div class="brand"><span>多空对照</span><a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openInvest</a></div>
+  <div class="brand"><span>你 vs AI</span><a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openInvest</a></div>
+  <div class="tabs" role="tablist" aria-label="玩法">
+    <button type="button" role="tab" id="tab-game" aria-selected="true" aria-controls="game">试玩：你 vs AI</button>
+    <button type="button" role="tab" id="tab-dbt" aria-selected="false" aria-controls="dbt">多空对照</button>
+  </div>
+
+  <section id="game" role="tabpanel" aria-labelledby="tab-game">
+    <p class="gm-lead">2026 年 1–9 月的真实行情，每周决定一次仓位。对手是 openInvest 委员会：每周同一天，只看当天之前的数据做决定。看谁赚得多。</p>
+    <div class="gm-row" id="gm-assets"><span>选一个标的：</span></div>
+    <p class="err" id="gm-err" role="alert" hidden></p>
+    <div id="gm-play" hidden>
+      <div class="gm-top"><b id="gm-week"></b><span id="gm-date"></span></div>
+      <svg id="gm-chart" role="img" aria-label="到本周为止的价格走势"></svg>
+      <div class="gm-score">
+        <div><small>你</small><b id="gm-you"></b><span id="gm-you-p"></span></div>
+        <div><small>AI</small><b id="gm-ai"></b><span id="gm-ai-p"></span></div>
+      </div>
+      <div class="gm-last" id="gm-last" aria-live="polite" hidden></div>
+      <div class="gm-row" id="gm-pick"><span>这一周你的仓位：</span></div>
+      <button type="button" class="gm-ff" id="gm-ff">保持现在的仓位，直接看结果</button>
+    </div>
+    <div class="gm-end" id="gm-end" hidden></div>
+    <p class="foot">历史复盘游戏：用的都是已经发生的行情，不构成投资建议。双方都从 10 万虚拟资金、半仓开始；你每周选空仓、半仓或满仓。AI 按当周委员会的决定调仓：加仓 +50%、减仓 −50%、清仓归零，其余不动。每次调仓按调动部分收 0.1% 成本。AI 的每个决定都只用了当天之前的数据，所用模型的训练数据截止于 2025 年 5 月，没见过 2026 年的行情。结算表情来自堆糖「永雏塔菲表情包」。</p>
+  </section>
+
+  <div id="dbt" role="tabpanel" aria-labelledby="tab-dbt" hidden>
   <form id="ask">
     <input id="code" autocomplete="off" autocapitalize="characters" maxlength="10" pattern="[0-9A-Za-z.]{1,10}" placeholder="基金或股票代码，例如 110011、600519" aria-label="基金或股票代码" required>
     <button id="go" type="submit">复核</button>
@@ -111,6 +164,8 @@
       <div class="ax" id="ax"></div>
     </div>
   </section>
+  <p class="foot">不含买卖建议。灰条为历史 10%–90% 区间，竖线为中位，红线为当前价。数据：东方财富、公开行情。方法见《LLM 多智能体投资系统的架构选择与校准优先评估》。openInvest 开源项目：<a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openinvest.involutionhell.com</a></p>
+  </div>
 
   <section class="ins" aria-labelledby="ins-h">
     <div class="sh" id="ins-h">安装到您的 Agent</div>
@@ -121,8 +176,6 @@
       <p class="it-note" id="it-note"></p>
     </div>
   </section>
-
-  <p class="foot">不含买卖建议。灰条为历史 10%–90% 区间，竖线为中位，红线为当前价。数据：东方财富、公开行情。方法见《LLM 多智能体投资系统的架构选择与校准优先评估》。openInvest 开源项目：<a href="https://openinvest.involutionhell.com" target="_blank" rel="noopener">openinvest.involutionhell.com</a></p>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -290,7 +343,130 @@ function drawInstall(on) {
   $("it-note").textContent = INSTALL[on].note;
 }
 drawInstall(0);
-window.addEventListener("resize", () => { if (lastFacts) drawChart(lastFacts.chart); });
+
+// ---------- 试玩：你 vs AI。行情和 AI 决定是 build_game.py 生成的静态数据，输赢全在浏览器里算 ----------
+const POS = [["空仓", 0], ["半仓", 0.5], ["满仓", 1]];
+const ACT = { ACCUMULATE: ["加仓", 0.5], BUY: ["加仓", 0.5], TRIM: ["减仓", -0.5], SELL: ["清仓", -1] };
+const COST = 0.001, START = 100000;
+let gm = null, gameUrl = null;   // 当前一局；gameUrl：数据的绝对地址，表情包按它拼（QMuse 版接口在别的域名）
+const yuan = (v) => "¥" + Math.round(v).toLocaleString("zh-CN");
+const pct = (v) => { const x = Math.round(v * 1000) / 10; return (x > 0 ? "+" : "") + x.toFixed(1) + "%"; };   // 先取整再定符号，免得出 "-0.0%"
+const tone = (v) => (v > 0 ? "up" : v < 0 ? "dn" : "");
+const posName = (p) => POS.find(([, v]) => v === p)[0];
+const px = (v) => v >= 100 ? v.toFixed(0) : v.toFixed(2);
+
+function aiStep(p, v) {
+  const a = ACT[v];
+  if (!a) return ["持有", p];
+  const np = v === "SELL" ? 0 : Math.min(1, Math.max(0, p + a[1]));
+  return [np === p ? `${a[0]}，但仓位已到头，没动` : a[0], np];
+}
+
+// 纵轴只按「到这一周为止」的价格定刻度：按全年定会把之后的最高价、最低价泄露出来。横轴按全年，线随周数往右长
+function drawGame() {
+  const a = gm.a, i = a.turns[gm.k].i, c = a.c.slice(0, i + 1), N = a.c.length;
+  const svg = $("gm-chart"), W = size(svg, 150), PW = W - 48, X = (j) => j * PW / (N - 1);
+  const lo = Math.min(...c), hi = Math.max(...c), Y = (v) => 8 + (hi - v) / (hi - lo || 1) * 120;
+  let s = "";
+  for (let t = 0; t <= 2; t++) { const v = lo + (hi - lo) * t / 2; s += `<line x1="0" x2="${PW}" y1="${Y(v)}" y2="${Y(v)}" stroke="${T.grid}"/><text x="${PW + 6}" y="${Y(v) + 4}" fill="${T.axis}" font-size="11">${px(v)}</text>`; }
+  const g0 = X(a.turns[0].i);
+  s += `<line x1="${g0}" x2="${g0}" y1="0" y2="132" stroke="${T.axis}" stroke-dasharray="2 3"/>`;
+  s += `<path d="${c.map((v, j) => `${j ? "L" : "M"}${X(j).toFixed(1)},${Y(v).toFixed(1)}`).join("")}" fill="none" stroke="${T.nav}" stroke-width="1.5"/>`;
+  s += `<circle cx="${X(i).toFixed(1)}" cy="${Y(c[i]).toFixed(1)}" r="3.5" fill="${T.up}"/>`;
+  s += `<text x="0" y="146" fill="${T.axis}" font-size="11">${a.d[0]}</text><text x="${g0}" y="146" text-anchor="middle" fill="${T.axis}" font-size="11">开局</text>`;
+  svg.innerHTML = s;
+}
+
+function drawScore() {
+  [["you", gm.you], ["ai", gm.ai]].forEach(([k, s]) => {
+    const r = s.eq / START - 1, b = $("gm-" + k); b.textContent = yuan(s.eq); b.className = tone(r);
+    $(`gm-${k}-p`).textContent = `${pct(r)}　${posName(s.p)}`;
+  });
+}
+
+function drawTurn() {
+  const a = gm.a, t = a.turns[gm.k];
+  $("gm-week").textContent = `${a.name}　第 ${gm.k + 1} / ${a.turns.length} 周`;
+  $("gm-date").textContent = `${a.d[t.i]}　收盘 ${px(a.c[t.i])}`;
+  drawScore(); drawGame();
+  $("gm-pick").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.p === gm.you.p)));
+}
+
+// 一周：双方按各自仓位吃下一周涨跌（调仓先扣成本）。返回揭晓用的信息
+function step(p) {
+  const a = gm.a, t = a.turns[gm.k];
+  const i1 = gm.k + 1 < a.turns.length ? a.turns[gm.k + 1].i : a.c.length - 1;
+  const r = a.c[i1] / a.c[t.i] - 1, [act, aiP] = aiStep(gm.ai.p, t.v);
+  [[gm.you, p], [gm.ai, aiP]].forEach(([s, np]) => { s.eq *= (1 - Math.abs(np - s.p) * COST) * (1 + np * r); s.p = np; });
+  gm.k += 1;
+  return { t, act, r };
+}
+
+function play(p) {
+  const { t, act, r } = step(p), last = $("gm-last");
+  last.textContent = ""; last.hidden = false;
+  last.append(el("b", null, `AI 这周：${act}` + (t.v ? "" : "（这周没有记录，按持有算）")));
+  if (t.why) last.append(el("span", null, t.why));   // 模型文本，只走 textContent
+  const res = el("span", null, `这一周 ${gm.a.name} `); res.append(el("b", tone(r), pct(r))); last.append(res);
+  if (gm.k >= gm.a.turns.length) endGame(); else drawTurn();
+}
+
+function endGame() {
+  const a = gm.a, you = gm.you.eq / START - 1, ai = gm.ai.eq / START - 1;
+  const hold = a.c[a.c.length - 1] / a.c[a.turns[0].i] - 1, diff = (you - ai) * 100;
+  $("gm-play").hidden = true;
+  const box = $("gm-end"); box.textContent = ""; box.hidden = false;
+  const tie = Math.abs(diff) < 0.05;
+  const em = el("img", "em"), k = tie ? "tie" : diff > 0 ? "win" : "lose";
+  em.src = new URL(`sticker/${k}.${k === "lose" ? "gif" : "jpg"}`, gameUrl); em.alt = { tie: "🤝", win: "🎉", lose: "😭" }[k];
+  box.append(em,
+    el("b", null, tie ? "和 AI 打平" : diff > 0 ? `你赢了 AI ${diff.toFixed(1)} 个百分点` : `AI 赢了你 ${(-diff).toFixed(1)} 个百分点`));
+  const res = el("div", "gm-res");
+  [["你", you], ["AI", ai], ["一直满仓不动", hold]].forEach(([k, v]) => { res.append(el("span", null, k)); res.append(el("span", tone(v), pct(v))); });
+  box.append(res, el("p", "hint", `${a.d[a.turns[0].i]} 到 ${a.d[a.d.length - 1]}，共 ${a.turns.length} 周`));
+  const row = el("div", "gm-row");
+  const again = el("button", null, "再玩一次"); again.type = "button"; again.addEventListener("click", () => startGame(a));
+  row.append(again); box.append(row);
+}
+
+function startGame(a) {
+  gm = { a, k: 0, you: { eq: START, p: 0.5 }, ai: { eq: START, p: 0.5 } };
+  $("gm-assets").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === a.key)));
+  $("gm-end").hidden = true; $("gm-last").hidden = true; $("gm-play").hidden = false;
+  drawTurn();
+}
+
+POS.forEach(([name, p]) => {
+  const b = el("button", null, name); b.type = "button"; b.dataset.p = p;
+  b.addEventListener("click", () => play(p)); $("gm-pick").append(b);
+});
+$("gm-ff").addEventListener("click", () => {
+  while (gm.k < gm.a.turns.length - 1) step(gm.you.p);
+  play(gm.you.p);
+});
+(async () => {
+  try {
+    const r = await fetch("/api/game"); if (!r.ok) throw 0;
+    gameUrl = r.url;
+    (await r.json()).assets.forEach((a) => {
+      const b = el("button", null, a.name); b.type = "button"; b.dataset.key = a.key;
+      b.addEventListener("click", () => startGame(a)); $("gm-assets").append(b);
+    });
+  } catch { $("gm-err").textContent = "游戏数据暂时拿不到，稍后再试"; $("gm-err").hidden = false; }
+})();
+
+function showTab(game) {
+  $("tab-game").setAttribute("aria-selected", String(game)); $("tab-dbt").setAttribute("aria-selected", String(!game));
+  $("game").hidden = !game; $("dbt").hidden = game;
+  if (!game && lastFacts) drawChart(lastFacts.chart);   // 隐藏时画的图宽度不对，切过来重画
+  if (game && gm && gm.k < gm.a.turns.length) drawGame();
+}
+$("tab-game").addEventListener("click", () => showTab(true));
+$("tab-dbt").addEventListener("click", () => showTab(false));
+window.addEventListener("resize", () => {
+  if (lastFacts && !$("dbt").hidden) drawChart(lastFacts.chart);
+  if (gm && !$("gm-play").hidden) drawGame();
+});
 </script>
 </body>
 </html>

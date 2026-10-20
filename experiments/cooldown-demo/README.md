@@ -58,6 +58,26 @@ INVEST_HOME=~/openinvest-demo INVEST_ADVISORY_MODE=1 \
 - 页面按行把纪要渲染成纯文本节点（标题 / 列表 / 段落），不解析 Markdown 或 HTML。
 - 一次辩论实测约 20 秒（1 轮 cross-challenge）。
 
+## 试玩：你 vs AI（页面第一个 tab）
+
+2026 年 1–9 月黄金 / 纳指100 / 沪深300 / 腾讯控股的真实行情，玩家每周选空仓、半仓、满仓，
+对手是委员会当周的回测决定（`memory/.backtest/<日>/<标的>.md`，deepseek-v4-flash，训练截止
+2025-05-31，每个决定只喂当天之前的行情）。AI 规则：加仓 +50%、减仓 −50%、清仓归零、其余不动，
+调仓收 0.1%；AI 的决定在玩家选完之后才揭晓。不跑 LLM：`build_game.py` 一次性生成
+`data/game_data.json`，`/api/game` 原样下发，输赢在浏览器里算。
+
+- 停在 9 月底：最近几周的决定离"现在"太近，像当下建议（细则 4.9）；也不展示置信度。
+- 纵轴只按"到这一周为止"的价格定刻度，免得把之后的高低点漏给玩家。
+- 结算页表情包在 `data/stickers/`（堆糖「永雏塔菲表情包」，pillow 重新编码去元数据），`/api/sticker/{name}` 白名单下发。
+- 委员会全年几乎只给 ACCUMULATE / HOLD，所以 AI 基本是第一次加仓后满仓不动——这是真实
+  回测结果，不调。
+
+重新生成（缺回测的日子先用 `scripts.backtest_committee --holdout` / `--allow-lookahead` 补）：
+
+```bash
+INVEST_HOME=<生产 checkout> uv run python experiments/cooldown-demo/scripts/build_game.py
+```
+
 ## 测试
 
 不在 CI 里（CI 只跑 `tests/`），改代码前后手动跑：

@@ -406,6 +406,28 @@ def _sample_job() -> str | None:
         return _sample["job"]
 
 
+GAME_DATA = Path(__file__).resolve().parent.parent / "data" / "game_data.json"
+
+
+@app.get("/api/game", response_model=None)
+def game() -> FileResponse:
+    """试玩「你 vs AI」的静态数据（build_game.py 生成）：历史行情 + 委员会回测决定。不跑 LLM、不占额度。"""
+    if not GAME_DATA.exists():
+        raise HTTPException(503, "游戏数据暂不可用")
+    return FileResponse(GAME_DATA, media_type="application/json")
+
+
+STICKERS = {"win.jpg", "lose.gif", "tie.jpg"}   # 白名单，路径参数不拼进文件系统
+
+
+@app.get("/api/sticker/{name}", response_model=None)
+def sticker(name: str) -> FileResponse:
+    """试玩结算页的表情包（data/stickers/）。"""
+    if name not in STICKERS:
+        raise HTTPException(404)
+    return FileResponse(GAME_DATA.parent / "stickers" / name, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/api/sample")
 def sample() -> Dict[str, Any]:
     """首页默认展示的报告，和 /api/debate 同形状，轮询走同一个接口。"""
